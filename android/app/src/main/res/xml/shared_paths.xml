@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only decrypted originals the user chose to share or hand to another app. -->
+<paths>
+    <cache-path name="originals" path="originals/" />
+</paths>

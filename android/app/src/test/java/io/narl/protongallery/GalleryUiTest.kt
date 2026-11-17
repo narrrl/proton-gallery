@@ -29,6 +29,8 @@ import io.narl.protongallery.bridge.AlbumOrder
 import io.narl.protongallery.bridge.AlbumGrouping
 import io.narl.protongallery.bridge.AccountStatus
 import io.narl.protongallery.bridge.PhoneFolder
+import io.narl.protongallery.bridge.FreeUpSummary
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import io.narl.protongallery.bridge.SignInStage
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Rule
@@ -189,6 +191,82 @@ class GalleryUiTest {
         compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/backup-sheet-dark.png")
     }
 
+    @Test fun selected_photos_can_be_shared() {
+        val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = true) }
+        var shared = emptyList<GalleryItem>()
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true, media = MediaActions(share = { shared = it }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        // Everything is backed up already, so only sharing is offered.
+        compose.onNodeWithText("Back up", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Share").performClick()
+        assertEquals(listOf("Coast 1.jpg"), shared.map { it.name })
+    }
+
+    @Test fun another_app_can_pick_several_photos() {
+        val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = true) }
+        var picked = emptyList<GalleryItem>()
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            pick = PickRequest(multiple = true, mime = "image/*"), onPick = { picked = it })
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Choose photos and videos").assertExists()
+        compose.onNodeWithText("Add").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performClick()
+        compose.onNodeWithContentDescription("Photo: Coast 2.jpg").performClick()
+        compose.onNodeWithText("2 selected").assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/pick-light.png")
+        compose.onNodeWithText("Add").performClick()
+        assertEquals(listOf("Coast 1.jpg", "Coast 2.jpg"), picked.map { it.name })
+    }
+
+    @Test fun one_tap_hides_the_viewer_bars_and_another_brings_them_back() {
+        // Proton items with a small preview: no full-size decode runs, which
+        // the test renderer can't do off the main thread.
+        val preview = Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888)
+        val items = fixtureItems().mapIndexed { index, item -> item.copy(localPath = "", remoteKey = "key-$index") }
+        render(items, ThemeMode.Light, media = MediaActions(largePhoto = { preview }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performClick()
+        compose.onNodeWithContentDescription("Back to gallery").assertExists()
+        compose.onNodeWithText("In Proton Photos").assertExists()
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Coast 0.jpg").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Back to gallery").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText("In Proton Photos").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Coast 0.jpg").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Back to gallery").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun background_work_shows_as_one_line_a_bar_and_the_account_ring() {
+        val progress = BackupProgress(uploading = true, done = 1, total = 5, bytes = 50, size = 100)
+        render(fixtureItems(), ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            backup = BackupState(progress = progress),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)))
+        compose.onNodeWithText("Backing up 2 of 5").assertExists()
+        compose.onNodeWithContentDescription("Account and settings").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Backing up 2 of 5"))
+        // The bar and the ring both show how far the upload is.
+        compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo(0.3f, 0f..1f))).assertCountEquals(2)
+        compose.onRoot().captureRoboImage("build/screenshots/activity-light.png")
+    }
+
+    @Test fun free_up_space_keeps_recent_days_and_asks_before_removing() {
+        val folders = listOf(PhoneFolder("camera", "Camera", 120uL, 0uL, true))
+        var freed = 0
+        val kept = mutableListOf<Int>()
+        render(emptyList(), ThemeMode.Light, initialLocation = GalleryLocation(),
+            backup = BackupState(folders = folders, freeable = FreeUpSummary(40uL, 1_500_000_000uL)),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            actions = BackupActions(setKeepDays = { kept += it }, freeUp = { freed++ }))
+        compose.onNodeWithContentDescription("Account and settings").performClick()
+        compose.onNodeWithText("Backup is on. Everything is backed up.").performClick()
+        compose.onNodeWithText("1 year").performScrollTo().performClick()
+        assertEquals(listOf(365), kept)
+        compose.onNodeWithText("40 items older than that are backed up", substring = true).performScrollTo().assertExists()
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/free-up-light.png")
+        compose.onNode(hasText("Free up 1.", substring = true) and hasClickAction()).performScrollTo().performClick()
+        assertEquals(1, freed)
+    }
+
     @Test fun an_album_shows_its_details_and_edit_options() {
         val options = AlbumOptions(null, "Summer by the sea", null, AlbumGrouping.DAY, AlbumOrder.NEWEST, false, false, listOf("Trip"))
         render(fixtureItems(), ThemeMode.Light, options = options, initialLocation = GalleryLocation())
@@ -207,7 +285,8 @@ class GalleryUiTest {
     }
 
     private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {},
-        backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false) {
+        backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false,
+        media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null) {
         val directory = File("build/test-thumbnails-smart").apply { mkdirs() }
         compose.setContent {
             var location by remember { mutableStateOf(initialLocation) }
@@ -226,11 +305,11 @@ class GalleryUiTest {
             var zoom by remember { mutableFloatStateOf(ZOOM_DEFAULT) }
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 GalleryTheme(theme) {
-                    GalleryApp(LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), photos,
+                    GalleryApp(state ?: LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), photos,
                         remember { ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) }) }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == "coast") options else null,
-                        account = account, backup = backup, backupActions = actions)
+                        account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick)
                 }
             }
         }

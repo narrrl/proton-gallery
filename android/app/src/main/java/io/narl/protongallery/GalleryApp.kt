@@ -28,7 +28,6 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -73,6 +72,22 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import kotlin.math.roundToInt
 
+/** Another app asked for media (GET_CONTENT or PICK). `mime` is the type it accepts, such as images only. */
+data class PickRequest(val multiple: Boolean, val mime: String?) {
+    fun accepts(item: GalleryItem): Boolean {
+        val wanted = mime?.takeIf { it.isNotBlank() && it != "*/*" } ?: return true
+        val type = Originals.mime(item)
+        return if (wanted.endsWith("/*")) type.startsWith(wanted.removeSuffix("*")) else type == wanted
+    }
+}
+
+/** What the viewer and selection can do with media beyond showing it. */
+class MediaActions(
+    val share: (List<GalleryItem>) -> Unit = {},
+    val largePhoto: suspend (GalleryItem) -> android.graphics.Bitmap? = { null },
+    val original: suspend (GalleryItem) -> java.io.File? = { null },
+)
+
 /** Drive folder chooser callbacks. */
 data class ChooserActions(
     val open: () -> Unit = {}, val openFolder: (DriveFolder) -> Unit = {}, val back: () -> Unit = {},
@@ -98,6 +113,8 @@ fun GalleryApp(
     onTestConnection: () -> Unit = {},
     crashReport: String? = null, onDismissCrash: () -> Unit = {},
     backup: BackupState = BackupState(), backupActions: BackupActions = BackupActions(),
+    media: MediaActions = MediaActions(),
+    pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, onCancelPick: () -> Unit = {},
 ) {
     var backupSheet by rememberSaveable { mutableStateOf(false) }
     // Selected timeline items by id, in the order they were chosen.
@@ -115,6 +132,7 @@ fun GalleryApp(
     val drive = location.section == GallerySection.Drive
     val driveRoot = drive && location.album == null
     val refreshing = if (drive) account.driveSync != null else account.syncing
+    val activity = currentActivity(state, account, backup)
     LaunchedEffect(account.generation) { selected = null }
     LaunchedEffect(state.revision, state.ready) { if (state.ready) photos.refresh() }
     LaunchedEffect(state.message) {
@@ -147,7 +165,7 @@ fun GalleryApp(
         val album = location.album
         val gridHeader: (@Composable () -> Unit)? = when {
             album != null -> { { AlbumHeader(album, state.count, albums.size) } }
-            photosRoot && (!backup.access || backup.partial || backup.checking || backup.progress.running) ->
+            photosRoot && (!backup.access || backup.partial) ->
                 { { PhotosHeader(backup, backupActions.allowAccess) } }
             else -> null
         }
@@ -170,8 +188,9 @@ fun GalleryApp(
                     if (!account.connected) "Sign in to Proton" else if (!drive) "Refresh" else if (driveRoot) "Choose a folder" else "", top)
                 else -> SmartMediaGrid(photos, thumbnails, zoom, onZoom, grid, onOpen = { item ->
                     if (pickingCover) { pickingCover = false; onCover(item) }
-                    else if (item.isVideo && item.phoneId == null && item.localPath.isEmpty())
-                        scope.launch { snackbar.showSnackbar("Videos from Proton play here in a later version.") }
+                    else if (pick != null && !pick.accepts(item)) scope.launch { snackbar.showSnackbar("This app can’t take this kind of file") }
+                    else if (pick != null && pick.multiple) selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
+                    else if (pick != null) onPick(listOf(item))
                     else {
                         val window = photos.itemSnapshotList.items.toList()
                         selected = window to window.indexOfFirst { it.id == item.id }.coerceAtLeast(0)
@@ -182,15 +201,18 @@ fun GalleryApp(
                     header = gridHeader,
                     contentPadding = PaddingValues(top = top, bottom = bottom + 24.dp),
                     selection = selection.keys,
-                    onLongPress = if (photosRoot && !pickingCover) { item ->
-                        selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
+                    onLongPress = if (!pickingCover && (pick == null || pick.multiple)) { item ->
+                        if (pick == null || pick.accepts(item))
+                            selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
                     } else null)
             }
         }
         if (account.connected && !device && state.ready) {
             val pull = rememberPullToRefreshState()
+            // Pulling fills a bar under the top bar; the refresh then shows like all other work.
             PullToRefreshBox(refreshing, onRefresh, Modifier.fillMaxSize(), state = pull, indicator = {
-                PullToRefreshDefaults.Indicator(pull, refreshing, Modifier.align(Alignment.TopCenter).padding(top = top))
+                if (!refreshing && pull.distanceFraction > 0f) ActivityBar(Activity("Release to refresh", pull.distanceFraction.coerceAtMost(1f)),
+                    Modifier.align(Alignment.TopCenter).padding(top = top))
             }) { content() }
         } else content()
 
@@ -202,8 +224,10 @@ fun GalleryApp(
         ) {
             Column {
                 when {
-                    selection.isNotEmpty() -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
-                        onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() })
+                    pick != null -> PickBar(pick.multiple, selection.size, onCancelPick) { onPick(selection.values.toList()) }
+                    selection.isNotEmpty() && pick == null -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
+                        onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() },
+                        onShare = { media.share(selection.values.toList()); selection = emptyMap() })
                     pickingCover -> PickingBar { pickingCover = false }
                     location.album != null || device -> Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onNavigate(location.back()) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
@@ -214,13 +238,13 @@ fun GalleryApp(
                     }
                     else -> Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         SectionSwitch(location.section) { onNavigate(GalleryLocation(it)) }
-                        Spacer(Modifier.weight(1f))
+                        Text(activity?.label ?: "", Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (driveRoot && account.connected) IconButton(onClick = chooserActions.open) { Icon(Icons.Outlined.Add, "Add gallery") }
-                        AccountButton(account) { menu = true }
+                        AccountButton(account, activity) { menu = true }
                     }
                 }
-                val busy = state.importing || (drive && account.driveSync != null) || (!drive && !device && account.syncing)
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+                ActivityBar(activity)
             }
         }
         Box(Modifier.fillMaxWidth().height(statusBar).background(MaterialTheme.colorScheme.background))
@@ -228,7 +252,7 @@ fun GalleryApp(
     }
     }
 
-    if (menu) AppMenu(state, account, theme, onTheme, onDismiss = { menu = false },
+    if (menu) AppMenu(state, account, activity, theme, onTheme, onDismiss = { menu = false },
         onAccount = { menu = false; onAccount() }, onRefresh = { menu = false; onRefresh() },
         backup = backup, onBackup = { menu = false; backupSheet = true })
     if (backupSheet) BackupSheet(backup, account.connected, backupActions, onSignIn = { backupSheet = false; onAccount() },
@@ -237,7 +261,7 @@ fun GalleryApp(
         onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
     if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)
-    selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, onClose = { selected = null }) }
+    selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null }) }
     crashReport?.let { CrashReportDialog(it, onDismissCrash) }
 }
 
@@ -265,14 +289,16 @@ private fun SectionSwitch(current: GallerySection, onSelect: (GallerySection) ->
     }
 }
 
-/** The account initial, ringed while Proton is being read. */
+/** The account initial, ringed while the app works; the ring fills when the share done is known. */
 @Composable
-private fun AccountButton(account: AccountState, onClick: () -> Unit) {
-    val syncing = account.syncing || account.driveSync != null
+private fun AccountButton(account: AccountState, activity: Activity?, onClick: () -> Unit) {
     Box(Modifier.size(48.dp).clip(CircleShape).clickable(onClickLabel = "Open account and settings", onClick = onClick)
-        .semantics { contentDescription = "Account and settings"; if (syncing) stateDescription = "Updating" },
+        .semantics { contentDescription = "Account and settings"; if (activity != null) stateDescription = activity.label },
         contentAlignment = Alignment.Center) {
-        if (syncing) CircularProgressIndicator(Modifier.size(40.dp), strokeWidth = 2.dp)
+        val fraction = activity?.fraction
+        if (fraction != null) CircularProgressIndicator({ fraction }, Modifier.size(40.dp), strokeWidth = 2.dp,
+            trackColor = Color.Transparent, gapSize = 0.dp)
+        else if (activity != null) CircularProgressIndicator(Modifier.size(40.dp), strokeWidth = 2.dp)
         Surface(Modifier.size(34.dp), shape = CircleShape,
             color = if (account.connected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh) {
             Box(contentAlignment = Alignment.Center) {
@@ -311,7 +337,7 @@ private fun AlbumHeader(album: FolderAlbum, items: Long, children: Int) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppMenu(
-    state: LibraryState, account: AccountState, theme: ThemeMode, onTheme: (ThemeMode) -> Unit,
+    state: LibraryState, account: AccountState, activity: Activity?, theme: ThemeMode, onTheme: (ThemeMode) -> Unit,
     onDismiss: () -> Unit, onAccount: () -> Unit, onRefresh: () -> Unit,
     backup: BackupState, onBackup: () -> Unit,
 ) {
@@ -319,8 +345,8 @@ private fun AppMenu(
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             ListItem(
                 headlineContent = { Text(if (account.connected) account.status.username else "Not signed in", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                supportingContent = { Text(syncSummary(account)) },
-                leadingContent = { AccountButton(account, onAccount) },
+                supportingContent = { Text(activity?.label ?: syncSummary(account)) },
+                leadingContent = { AccountButton(account, activity, onAccount) },
                 trailingContent = { if (account.connected) TextButton(onClick = onAccount) { Text("Manage") } else Button(onClick = onAccount) { Text("Sign in") } },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             )
@@ -425,7 +451,7 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
 private fun EmptyLibrary(onAction: () -> Unit, loading: Boolean, title: String, description: String, action: String, top: androidx.compose.ui.unit.Dp) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = top).padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        if (loading) CircularProgressIndicator(Modifier.padding(bottom = 24.dp)) else EmptyIllustration()
+        EmptyIllustration()
         Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 24.dp).widthIn(max = 480.dp), textAlign = TextAlign.Center)
         if (description.isNotEmpty()) Text(description, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 12.dp, bottom = 24.dp).widthIn(max = 480.dp), textAlign = TextAlign.Center)

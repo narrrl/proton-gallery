@@ -112,6 +112,13 @@ class ThumbnailLoader(private val directory: File,
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
 
+        fun decodeBytes(bytes: ByteArray, longestEdge: Int): Bitmap =
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { decoder, info, _ ->
+                val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
+                decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+
         fun decodeImage(file: File, longestEdge: Int): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))

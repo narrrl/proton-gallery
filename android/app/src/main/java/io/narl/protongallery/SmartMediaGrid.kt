@@ -239,7 +239,7 @@ fun SmartMediaGrid(
             if (failed) item(key = "layout-error") { PageRetry { retry++ } }
             if (photos.loadState.append is LoadState.Error || photos.loadState.refresh is LoadState.Error) item(key = "append-error") { PageRetry(photos::retry) }
             if ((photos.loadState.refresh is LoadState.Loading && rows.isEmpty() && shownAlbums.isEmpty()) || photos.loadState.append is LoadState.Loading) item(key = "loading") {
-                Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
+                Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) { ActivityBar(Activity("Loading"), Modifier.width(96.dp)) }
             }
         }
     }

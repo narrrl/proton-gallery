@@ -1,7 +1,17 @@
 package io.narl.protongallery
 
 import android.app.Application
+import android.content.ClipData
+import android.content.Intent
+import android.content.IntentSender
+import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.MediaStore
+import android.text.format.Formatter
+import io.narl.protongallery.bridge.FreeUpSummary
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.Pager
@@ -47,7 +57,18 @@ data class LibraryState(
     val message: String? = null,
     val error: Boolean = false,
     val revision: Int = 0,
+    /** Work the user just asked for, such as getting photos ready to share. */
+    val preparing: String? = null,
 )
+
+/** Something only the activity can do: system dialogs and other apps. */
+sealed interface UiRequest {
+    /** Ask the user to let the app delete these phone items. */
+    data class Delete(val sender: IntentSender, val count: Int, val bytes: Long) : UiRequest
+    data class Share(val intent: Intent) : UiRequest
+    /** Return chosen items to the app that asked for them. */
+    data class Picked(val uris: List<Uri>, val mimes: List<String>) : UiRequest
+}
 
 /** The Drive folder chooser: the open folder, its subfolders, and the way back. */
 data class ChooserState(
@@ -68,9 +89,11 @@ data class BackupState(
     val folders: List<PhoneFolder> = emptyList(),
     val wifiOnly: Boolean = true,
     val chargingOnly: Boolean = false,
-    /** Comparing the phone with Proton Photos in the foreground. */
-    val checking: Boolean = false,
     val progress: BackupProgress = BackupProgress(),
+    /** Free up space keeps media taken in this many recent days. */
+    val keepDays: Int = 90,
+    /** What freeing up space would remove; null before it is known. */
+    val freeable: FreeUpSummary? = null,
 ) {
     val automatic get() = folders.any { it.backup }
 }
@@ -489,7 +512,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // the app; compared with Proton Photos while signed in.
     private val settings = BackupSettings(application)
     private val mutableBackup = MutableStateFlow(BackupState(access = PhoneLibrary.hasAccess(application),
-        partial = PhoneLibrary.partialAccess(application), wifiOnly = settings.wifiOnly, chargingOnly = settings.chargingOnly))
+        partial = PhoneLibrary.partialAccess(application), wifiOnly = settings.wifiOnly, chargingOnly = settings.chargingOnly,
+        keepDays = settings.keepDays))
     val backup = mutableBackup.asStateFlow()
     private var phoneJob: Job? = null
     private var phoneAgain = false
@@ -536,14 +560,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 phoneAgain = false
                 try {
                     val app = getApplication<Application>()
-                    if (scan && PhoneLibrary.hasAccess(app)) {
-                        PhoneLibrary.scan(app, repo)
+                    if (scan && PhoneLibrary.hasAccess(app) && PhoneLibrary.scan(app, repo) >= 0) {
                         refreshDetails(repo)
                         mutableState.update { it.copy(revision = it.revision + 1) }
                     }
                     if (mutableAccount.value.connected && PhoneLibrary.hasAccess(app)) {
-                        mutableBackup.update { it.copy(checking = true) }
-                        try { PhoneBackup.check(app, repo) } finally { mutableBackup.update { it.copy(checking = false) } }
+                        PhoneBackup.check(app, repo)
                         refreshDetails(repo)
                         mutableState.update { it.copy(revision = it.revision + 1) }
                     }
@@ -556,9 +578,109 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun refreshFolders(repo: GalleryRepository) {
         val folders = repo.phoneFolders()
-        mutableBackup.update { it.copy(folders = folders) }
+        val freeable = runCatching { repo.freeUpSummary(settings.keepDays) }.getOrNull()
+        mutableBackup.update { it.copy(folders = folders, freeable = freeable) }
         settings.automatic = folders.any { it.backup }
     }
+
+    private val mutableRequests = MutableSharedFlow<UiRequest>(extraBufferCapacity = 4)
+    val requests = mutableRequests.asSharedFlow()
+
+    fun setKeepDays(days: Int) {
+        settings.keepDays = days
+        mutableBackup.update { it.copy(keepDays = days) }
+        repository.value?.let { repo -> viewModelScope.launch(guard) { runCatching { refreshFolders(repo) } } }
+    }
+
+    /**
+     * Free up space: confirm every backed-up item with Proton once more, then
+     * let the system ask the user before anything is deleted.
+     */
+    fun freeUp() {
+        val repo = repository.value ?: return
+        if (mutableState.value.preparing != null) return
+        if (!mutableAccount.value.connected) return showAccount()
+        viewModelScope.launch(guard) {
+            mutableState.update { it.copy(preparing = "Confirming your backups with Proton") }
+            try {
+                val confirmed = repo.freeUpVerified(settings.keepDays).take(FREE_UP_BATCH)
+                if (confirmed.isEmpty()) {
+                    mutableState.update { it.copy(message = "Nothing to remove. Older photos aren’t backed up yet.", error = false) }
+                    return@launch
+                }
+                val app = getApplication<Application>()
+                val uris = confirmed.map { PhoneLibrary.uri(it.id, it.isVideo) }
+                val bytes = withContext(Dispatchers.IO) {
+                    uris.sumOf { uri -> runCatching { app.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L }.getOrDefault(0L) }
+                }
+                val request = MediaStore.createDeleteRequest(app.contentResolver, uris)
+                mutableRequests.emit(UiRequest.Delete(request.intentSender, uris.size, bytes))
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t confirm your backups. Nothing was deleted.", error = true) }
+            } finally { mutableState.update { it.copy(preparing = null) } }
+        }
+    }
+
+    /** The system dialog closed; `bytes` were freed when `deleted`. */
+    fun freedUp(deleted: Boolean, count: Int, bytes: Long) {
+        if (!deleted) return
+        val app = getApplication<Application>()
+        mutableState.update { it.copy(message = "Removed $count from this phone and freed ${Formatter.formatShortFileSize(app, bytes)}. They’re safe in Proton Photos.", error = false) }
+        val repo = repository.value ?: return
+        viewModelScope.launch(guard) {
+            runCatching { PhoneLibrary.scan(app, repo, force = true); refreshDetails(repo); refreshFolders(repo) }
+            mutableState.update { it.copy(revision = it.revision + 1) }
+        }
+    }
+
+    /** Hand items to another app: shared with a chooser, or returned to the app that asked. */
+    fun share(items: List<GalleryItem>) = deliver(items, "share") { uris, mimes ->
+        val mime = mimes.distinct().singleOrNull() ?: mimes.map { it.substringBefore('/') }.distinct().singleOrNull()?.let { "$it/*" } ?: "*/*"
+        val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+            else Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        intent.setType(mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.clipData = ClipData.newUri(getApplication<Application>().contentResolver, "Photos", uris[0]).apply {
+            uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+        }
+        UiRequest.Share(Intent.createChooser(intent, null))
+    }
+
+    fun pick(items: List<GalleryItem>) = deliver(items, "pick") { uris, mimes -> UiRequest.Picked(uris, mimes) }
+
+    private fun deliver(items: List<GalleryItem>, verb: String, request: (List<Uri>, List<String>) -> UiRequest) {
+        val repo = repository.value ?: return
+        if (items.isEmpty() || mutableState.value.preparing != null) return
+        viewModelScope.launch(guard) {
+            val app = getApplication<Application>()
+            val downloads = items.count { PhoneLibrary.uri(it) == null && it.remoteKey != null }
+            mutableState.update { it.copy(preparing = when {
+                downloads == 0 -> null
+                downloads == 1 -> "Downloading 1 original from Proton"
+                else -> "Downloading $downloads originals from Proton"
+            }) }
+            try {
+                val uris = items.map { Originals.uri(app, repo, it) }
+                mutableRequests.emit(request(uris, items.map(Originals::mime)))
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                android.util.Log.w("ProtonGallery", "Couldn't $verb", error)
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t get these ready. Try again.", error = true) }
+            } finally { mutableState.update { it.copy(preparing = null) } }
+        }
+    }
+
+    /** A screen-sized preview of a Proton photo, or its original when there is none. */
+    suspend fun largePhoto(item: GalleryItem): Bitmap? {
+        val repo = repository.value ?: return null
+        if (item.remoteKey == null) return null
+        repo.preview(item)?.let { bytes -> withContext(Dispatchers.Default) { ThumbnailLoader.decodeBytes(bytes, 2560) } }?.let { return it }
+        val file = repo.downloadOriginal(item, Originals.directory(getApplication()))
+        return withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(file, 2560) }
+    }
+
+    /** A playable file for a Proton video. */
+    suspend fun original(item: GalleryItem): File? = repository.value?.let { Originals.file(getApplication(), it, item) }
 
     fun setBackupFolder(folder: PhoneFolder, enabled: Boolean) {
         val repo = repository.value ?: return
@@ -597,6 +719,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
         Backup.upload(getApplication(), refs)
         mutableState.update { it.copy(message = if (refs.size == 1) "Backing up 1 item" else "Backing up ${refs.size} items", error = false) }
+    }
+
+    private companion object {
+        /** The system asks once per request; keep each one a reasonable size. */
+        const val FREE_UP_BATCH = 2_000
     }
 
     // Last, so every property above is initialized before the library opens.

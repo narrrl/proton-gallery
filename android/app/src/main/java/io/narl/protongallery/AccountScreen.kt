@@ -105,8 +105,12 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                         Spacer(Modifier.height(20.dp))
                         Button(onClick = { submit() }, enabled = !state.busy && secret.isNotEmpty() && (!code || secret.length == 6) && (stage != SignInStage.SIGNED_OUT || username.isNotBlank()),
                             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(16.dp)) {
-                            if (state.busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                            else Text(if (stage == SignInStage.SIGNED_OUT) "Sign in" else "Continue")
+                            Text(when {
+                                state.busy && stage == SignInStage.SIGNED_OUT -> "Signing in…"
+                                state.busy -> "Checking…"
+                                stage == SignInStage.SIGNED_OUT -> "Sign in"
+                                else -> "Continue"
+                            })
                         }
                     } else {
                         FilledTonalButton(onClick = onRefresh, enabled = !state.syncing && !state.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(14.dp)) {
@@ -117,7 +121,7 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                     state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium) }
                     if (state.error != null || state.report != null || state.checking) ConnectionCheck(state, onTestConnection)
                     if (state.status.persistenceFailed) Text("Your latest session couldn’t be saved. Free some device storage and refresh before closing the app.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp))
-                    if (state.busy && (stage == SignInStage.VERIFICATION || state.connected)) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 16.dp))
+                    if (state.busy) ActivityBar(Activity("Talking to Proton"), Modifier.padding(top = 16.dp))
                     Spacer(Modifier.height(28.dp))
                     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
                         Text("Your password is never saved. Your session is protected by Android Keystore on this device.",
@@ -137,15 +141,13 @@ private fun ConnectionCheck(state: AccountState, onTest: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onTest, enabled = !state.checking) { Text(if (state.report == null) "Test connection" else "Test again") }
-            if (state.checking) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Text("Checking…", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall)
-            }
+            if (state.checking) Text("Checking…", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.weight(1f))
             state.report?.let { report ->
                 TextButton(onClick = { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Connection report", report))) } }) { Text("Copy") }
             }
         }
+        if (state.checking) ActivityBar(Activity("Checking the connection"), Modifier.padding(bottom = 8.dp))
         state.report?.let { report ->
             Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
                 SelectionContainer {

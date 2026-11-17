@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import io.narl.protongallery.bridge.GalleryEngine
+import io.narl.protongallery.bridge.GalleryException
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.LibraryView
 import io.narl.protongallery.bridge.AlbumOptions
@@ -76,6 +77,7 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun driveProgress() = withContext(Native) { engine.driveProgress() }
     suspend fun syncProgress() = withContext(Native) { engine.syncProgress() }
     suspend fun thumbnail(item: GalleryItem): ByteArray? = withContext(Native) { item.remoteKey?.let(engine::photoThumbnail) }
+    suspend fun preview(item: GalleryItem): ByteArray? = withContext(Native) { item.remoteKey?.let(engine::photoPreview) }
     suspend fun rememberShape(item: GalleryItem, width: Int, height: Int) = withContext(Native) {
         item.remoteKey?.let { engine.rememberPhotoShape(it, width.toUInt(), height.toUInt()) }
     }
@@ -111,9 +113,18 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun setBackupFolder(folder: String, enabled: Boolean) = withContext(Native) { engine.setBackupFolder(folder, enabled) }
     suspend fun backupQueue(limit: Int) = withContext(Native) { engine.backupQueue(limit.toUInt()) }
     suspend fun checkBackup() = withContext(Native) { engine.checkBackup() }
+    suspend fun backupRemaining() = withContext(Native) { engine.backupRemaining().toLong() }
     suspend fun setPhoneHashes(hashes: List<PhoneHash>) = withContext(Native) { engine.setPhoneHashes(hashes) }
     suspend fun uploadPhone(id: String, sha1: String, reader: MediaReader, thumbnail: ByteArray?) =
         withContext(Native) { engine.uploadPhone(id, sha1, reader, thumbnail) }
+
+    suspend fun freeUpSummary(keepDays: Int) = withContext(Native) { engine.freeUpSummary(keepDays.coerceAtLeast(0).toUInt()) }
+    suspend fun freeUpVerified(keepDays: Int) = withContext(Native) { engine.freeUpVerified(keepDays.coerceAtLeast(0).toUInt()) }
+    /** The decrypted original of a Proton item, in the app's cache. */
+    suspend fun downloadOriginal(item: GalleryItem, directory: File): File = withContext(Native) {
+        val key = item.remoteKey ?: throw GalleryException.Operation("This item isn’t in Proton.")
+        File(engine.downloadOriginal(key, item.name, directory.path))
+    }
 
     suspend fun totals() = withContext(Native) { engine.totals() }
     suspend fun count(location: GalleryLocation) = withContext(Native) { location.nativeView()?.let(engine::countAt)?.toLong() ?: 0L }

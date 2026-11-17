@@ -3,6 +3,10 @@ package io.narl.protongallery
 import android.graphics.Bitmap
 import android.net.Uri
 import android.text.format.Formatter
+import android.view.View
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -15,8 +19,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import io.narl.protongallery.icons.*
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -26,17 +32,23 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import io.narl.protongallery.bridge.GalleryItem
@@ -45,44 +57,76 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Viewer keeps a stable snapshot of the bounded, loaded gallery window. */
+/**
+ * Viewer keeps a stable snapshot of the bounded, loaded gallery window. A tap
+ * shows or hides the bars, and with them the system bars, so the photo can
+ * fill the screen.
+ */
 @Composable
-fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoader, onClose: () -> Unit) {
+fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit) {
     val pager = rememberPagerState(initialPage = initial) { items.size }
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
+    var chrome by rememberSaveable { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(false) }
     val current = items[pager.currentPage]
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        SystemBars(chrome)
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(state = pager, key = { items[it].id }, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()) { index ->
                 val item = items[index]
-                if (item.isVideo && index == pager.currentPage) VideoPlayer(item)
-                else ZoomablePhoto(item, thumbnails, index == pager.currentPage) { zoomed = it }
+                val active = index == pager.currentPage
+                if (item.isVideo && active) VideoPlayer(item, media, onLoading = { loading = it }) { chrome = it }
+                else ZoomablePhoto(item, thumbnails, media, active, onZoom = { zoomed = it }, onTap = { chrome = !chrome },
+                    onLoading = { if (active) loading = it })
             }
-            Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).statusBarsPadding().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to gallery", tint = Color.White) }
-                Text("${pager.currentPage + 1} / ${items.size}", color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).padding(start = 8.dp))
-                IconButton(onClick = { info = !info }) { Icon(Icons.Outlined.Info, "Photo details", tint = Color.White) }
-            }
-            if (!current.isVideo || info) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).navigationBarsPadding().padding(24.dp)) {
-                Text(current.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (current.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
-                    Text(when {
-                        current.phoneId != null && current.backedUp -> "On this phone and in Proton Photos"
-                        current.phoneId != null -> "Only on this phone, not backed up yet"
-                        current.localPath.isNotEmpty() -> "Available on this device"
-                        else -> "In Proton Photos"
-                    }, color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
+            AnimatedVisibility(chrome, Modifier.align(Alignment.TopCenter), enter = fadeIn(), exit = fadeOut()) {
+                Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).statusBarsPadding()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to gallery", tint = Color.White) }
+                        Text("${pager.currentPage + 1} / ${items.size}", color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                        IconButton(onClick = { media.share(listOf(current)) }) { Icon(Icons.Outlined.Share, "Share", tint = Color.White) }
+                        IconButton(onClick = { info = !info }) { Icon(Icons.Outlined.Info, "Photo details", tint = Color.White) }
+                    }
+                    // The full-resolution photo replaces the preview when it is ready.
+                    ActivityBar(if (loading) Activity("Loading the full photo") else null, color = Color.White)
                 }
-                if (info) Text("${Formatter.formatFileSize(LocalContext.current, current.sizeBytes.toLong())}\nAdded ${galleryDate(current.sortTime)}", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+            }
+            AnimatedVisibility(chrome && (!current.isVideo || info), Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
+                Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).navigationBarsPadding().padding(24.dp)) {
+                    Text(current.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (current.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
+                        Text(when {
+                            current.phoneId != null && current.backedUp -> "On this phone and in Proton Photos"
+                            current.phoneId != null -> "Only on this phone, not backed up yet"
+                            current.localPath.isNotEmpty() -> "Available on this device"
+                            else -> "In Proton Photos"
+                        }, color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
+                    }
+                    if (info) Text("${Formatter.formatFileSize(LocalContext.current, current.sizeBytes.toLong())}\nAdded ${galleryDate(current.sortTime)}", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                }
             }
         }
     }
 }
 
+/** Hides the status and navigation bars with the viewer's own; a swipe from the edge shows them briefly. */
 @Composable
-private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, active: Boolean, onZoom: (Boolean) -> Unit) {
+private fun SystemBars(visible: Boolean) {
+    val view = LocalView.current
+    val window = (view.parent as? DialogWindowProvider)?.window ?: return
+    DisposableEffect(window, visible) {
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (visible) controller.show(WindowInsetsCompat.Type.systemBars()) else controller.hide(WindowInsetsCompat.Type.systemBars())
+        onDispose { }
+    }
+}
+
+@Composable
+private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, media: MediaActions, active: Boolean, onZoom: (Boolean) -> Unit,
+    onTap: () -> Unit, onLoading: (Boolean) -> Unit) {
     var scale by remember(item.id) { mutableFloatStateOf(1f) }
     var offset by remember(item.id) { mutableStateOf(Offset.Zero) }
     var failed by remember(item.id) { mutableStateOf(false) }
@@ -90,26 +134,30 @@ private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, active: Bo
     val bitmap by produceState<Bitmap?>(null, item.id, active) {
         value = loader.load(item)
         val phone = PhoneLibrary.uri(item)
-        if (active && !item.isVideo && (phone != null || item.localPath.isNotEmpty())) {
+        if (active && !item.isVideo) {
+            onLoading(true)
             try {
-                value = withContext(Dispatchers.IO) {
-                    if (phone != null) ThumbnailLoader.decodeUri(context, phone, 2560)
-                    else ThumbnailLoader.decodeImage(File(item.localPath), 2560)
+                val large = when {
+                    phone != null -> withContext(Dispatchers.IO) { ThumbnailLoader.decodeUri(context, phone, 2560) }
+                    item.localPath.isNotEmpty() -> withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(File(item.localPath), 2560) }
+                    else -> media.largePhoto(item)
                 }
+                if (large != null) value = large
             } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { failed = true }
+            catch (_: Exception) { if (value == null) failed = true }
+            finally { onLoading(false) }
         }
     }
     LaunchedEffect(active) { if (!active) { scale = 1f; offset = Offset.Zero } }
     LaunchedEffect(scale, active) { if (active) onZoom(scale > 1f) }
-    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxSize().pointerInput(item.id) { detectTapGestures(onTap = { onTap() }) }, contentAlignment = Alignment.Center) {
         val maxX = constraints.maxWidth.toFloat()
         val maxY = constraints.maxHeight.toFloat()
         if (bitmap != null) Image(
             bitmap!!.asImageBitmap(), item.name, contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize()
                 .pointerInput(item.id) {
-                    detectTapGestures(onDoubleTap = {
+                    detectTapGestures(onTap = { onTap() }, onDoubleTap = {
                         scale = if (scale > 1f) 1f else 2.5f
                         offset = Offset.Zero
                     })
@@ -123,25 +171,37 @@ private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, active: Bo
                     }, canPan = { scale > 1f },
                 )
                 .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y },
-        ) else if (!failed) CircularProgressIndicator(color = Color.White)
+        )
         if (failed) Text("This photo couldn’t be opened", color = Color.White, modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = 0.7f)).padding(16.dp))
     }
 }
 
 @Composable
-private fun VideoPlayer(item: GalleryItem) {
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun VideoPlayer(item: GalleryItem, media: MediaActions, onLoading: (Boolean) -> Unit, onControls: (Boolean) -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var failed by remember(item.id) { mutableStateOf(false) }
     val player = remember(item.id) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(PhoneLibrary.uri(item) ?: Uri.fromFile(File(item.localPath))))
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) { failed = true }
             })
-            prepare()
             playWhenReady = false
         }
+    }
+    // Proton videos are downloaded and decrypted first; phone videos play in place.
+    LaunchedEffect(player) {
+        val source = PhoneLibrary.uri(item) ?: item.localPath.takeIf { it.isNotEmpty() }?.let { Uri.fromFile(File(it)) } ?: run {
+            onLoading(true)
+            try { media.original(item)?.let(Uri::fromFile) }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { null }
+            finally { onLoading(false) }
+        }
+        if (source == null) { failed = true; return@LaunchedEffect }
+        player.setMediaItem(MediaItem.fromUri(source))
+        player.prepare()
     }
     DisposableEffect(player, lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) player.pause() }
@@ -149,7 +209,13 @@ private fun VideoPlayer(item: GalleryItem) {
         onDispose { lifecycle.removeObserver(observer); player.release() }
     }
     Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
-        AndroidView(factory = { PlayerView(it).apply { this.player = player } }, modifier = Modifier.fillMaxSize())
-        if (failed) Text("This video couldn’t be played on this device", color = Color.White, modifier = Modifier.background(Color.Black).padding(20.dp))
+        // The player's own controls and the viewer's bars come and go together.
+        AndroidView(factory = { context ->
+            PlayerView(context).apply {
+                this.player = player
+                setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { onControls(it == View.VISIBLE) })
+            }
+        }, modifier = Modifier.fillMaxSize())
+        if (failed) Text("This video couldn’t be played", color = Color.White, modifier = Modifier.background(Color.Black).padding(20.dp))
     }
 }

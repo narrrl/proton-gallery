@@ -45,7 +45,7 @@ fun DriveFolderChooser(
                     modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 12.dp))
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
-                        state.loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                        state.loading -> ActivityBar(Activity("Opening folder"), Modifier.align(Alignment.TopCenter))
                         state.error != null -> Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(state.error, style = MaterialTheme.typography.bodyLarge)
                             TextButton(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) { Text("Try again") }

@@ -1,6 +1,7 @@
 package io.narl.protongallery
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -14,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -30,7 +32,9 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.core.view.WindowCompat
 import androidx.core.content.edit
 import java.io.File
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -38,6 +42,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
         enableEdgeToEdge()
+        // Opened by another app to choose photos (GET_CONTENT or PICK).
+        val pick = intent?.takeIf { it.action == Intent.ACTION_GET_CONTENT || it.action == Intent.ACTION_PICK }?.let {
+            PickRequest(it.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false), it.type)
+        }
+        lifecycleScope.launch { Originals.trim(applicationContext) }
         setContent {
             val model: GalleryViewModel = viewModel()
             val state by model.state.collectAsStateWithLifecycle()
@@ -92,9 +101,34 @@ class MainActivity : ComponentActivity() {
                     setWifiOnly = model::setWifiOnly, setChargingOnly = model::setChargingOnly,
                     backUpNow = { askNotifications(); model.backUpNow() },
                     upload = { askNotifications(); model.upload(it) },
+                    setKeepDays = model::setKeepDays, freeUp = model::freeUp,
                 )
             }
             val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(100)) { model.import(it) }
+            // Deleting phone media needs the user's consent in a system dialog.
+            var deleting by remember { mutableStateOf<UiRequest.Delete?>(null) }
+            val delete = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+                deleting?.let { model.freedUp(result.resultCode == RESULT_OK, it.count, it.bytes) }
+                deleting = null
+            }
+            LaunchedEffect(model) {
+                model.requests.collect { request ->
+                    when (request) {
+                        is UiRequest.Delete -> { deleting = request; delete.launch(IntentSenderRequest.Builder(request.sender).build()) }
+                        is UiRequest.Share -> runCatching { startActivity(request.intent) }
+                        is UiRequest.Picked -> {
+                            val result = Intent().addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            result.data = request.uris.first()
+                            result.clipData = ClipData.newUri(contentResolver, "Photos", request.uris.first()).apply {
+                                request.uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+                            }
+                            setResult(RESULT_OK, result)
+                            finish()
+                        }
+                    }
+                }
+            }
+            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original) }
             GalleryTheme(theme) {
                 GalleryApp(
                     state, photos, thumbnails, theme, zoom,
@@ -113,7 +147,8 @@ class MainActivity : ComponentActivity() {
                         model::chooserRetry, model::addGallery, model::closeChooser),
                     onRemoveGallery = model::removeGallery, onTestConnection = model::testConnection,
                     crashReport = crashReport, onDismissCrash = { crashReport = null },
-                    backup = backup, backupActions = backupActions,
+                    backup = backup, backupActions = backupActions, media = media,
+                    pick = pick, onPick = model::pick, onCancelPick = { setResult(RESULT_CANCELED); finish() },
                 )
             }
         }
