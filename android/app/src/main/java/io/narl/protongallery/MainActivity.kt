@@ -28,7 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.core.view.WindowCompat
 import androidx.core.content.edit
 import java.io.File
@@ -57,9 +56,7 @@ class MainActivity : ComponentActivity() {
             val tags by model.tags.collectAsStateWithLifecycle()
             val tagFilter by model.tagFilter.collectAsStateWithLifecycle()
             val chooser by model.chooser.collectAsStateWithLifecycle()
-            val order by model.order.collectAsStateWithLifecycle()
-            val view = location.section to location.nativeView()
-            val photos = remember(view, account.generation, order) { model.photosAt(location, account.generation, order) }.collectAsLazyPagingItems()
+            val outline by model.outline.collectAsStateWithLifecycle()
             val preferences = remember { getSharedPreferences("appearance", MODE_PRIVATE) }
             var theme by remember { mutableStateOf(ThemeMode.entries.firstOrNull { it.name == preferences.getString("theme", null) } ?: ThemeMode.System) }
             var zoom by remember { mutableFloatStateOf(preferences.getFloat("zoom", ZOOM_DEFAULT).coerceIn(ZOOM_MIN, ZOOM_MAX)) }
@@ -75,7 +72,7 @@ class MainActivity : ComponentActivity() {
             }
             val thumbnails = remember(account.generation) {
                 ThumbnailLoader(File(cacheDir, "thumbnails"), model::remoteThumbnail, model::rememberShape) { item ->
-                    PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(384, 384), null) }
+                    PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(ThumbnailLoader.EDGE, ThumbnailLoader.EDGE), null) }
                 }
             }
             val backup by model.backup.collectAsStateWithLifecycle()
@@ -111,6 +108,9 @@ class MainActivity : ComponentActivity() {
                 deleting?.let { model.freedUp(result.resultCode == RESULT_OK, it.count, it.bytes) }
                 deleting = null
             }
+            val favoriting = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+                model.phoneFavorited(result.resultCode == RESULT_OK)
+            }
             var trashing by remember { mutableStateOf<UiRequest.Trash?>(null) }
             val trash = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
                 trashing?.let { model.phoneTrashed(result.resultCode == RESULT_OK, it) }
@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
                         is UiRequest.Delete -> { deleting = request; delete.launch(IntentSenderRequest.Builder(request.sender).build()) }
                         is UiRequest.Trash -> { trashing = request; trash.launch(IntentSenderRequest.Builder(request.sender).build()) }
                         is UiRequest.Share -> runCatching { startActivity(request.intent) }
+                        is UiRequest.Favorite -> favoriting.launch(IntentSenderRequest.Builder(request.sender).build())
                         is UiRequest.Picked -> {
                             val result = Intent().addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             result.data = request.uris.first()
@@ -135,10 +136,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val albumChoices by model.albumChoices.collectAsStateWithLifecycle()
-            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, delete = model::delete) }
+            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, delete = model::delete,
+                favorite = model::favorite, forgetPrivate = model::forgetPrivate) }
             GalleryTheme(theme) {
                 GalleryApp(
-                    state, photos, thumbnails, theme, zoom,
+                    state, outline, thumbnails, theme, zoom,
                     onImport = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
                     onTheme = { theme = it; preferences.edit { putString("theme", it.name) } },
                     onZoom = { zoom = it; preferences.edit { putFloat("zoom", it) } },

@@ -14,10 +14,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.paging.Pager
-import androidx.paging.PagingConfig
-import androidx.paging.PagingData
-import androidx.paging.cachedIn
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
@@ -38,8 +34,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import io.narl.protongallery.bridge.LibraryView
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -70,6 +68,8 @@ sealed interface UiRequest {
     data class Share(val intent: Intent) : UiRequest
     /** Return chosen items to the app that asked for them. */
     data class Picked(val uris: List<Uri>, val mimes: List<String>) : UiRequest
+    /** Ask the user to let the app change favorites in the phone's gallery. */
+    data class Favorite(val sender: IntentSender) : UiRequest
 }
 
 /** The Drive folder chooser: the open folder, its subfolders, and the way back. */
@@ -185,6 +185,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 repo.signOut()
                 photosJob?.join(); driveJob?.join()
+                // Previews and originals of this account must not outlive it.
+                withContext(Dispatchers.IO) {
+                    File(getApplication<Application>().cacheDir, "thumbnails").deleteRecursively()
+                    Originals.directory(getApplication()).deleteRecursively()
+                }
                 mutableAccount.update { AccountState(generation = it.generation + 1) }
                 navigate(GalleryLocation())
                 mutableState.update { it.copy(revision = it.revision + 1) }
@@ -410,7 +415,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun deleteAlbum(album: FolderAlbum) {
         albumWork("Deleting “${album.name}”", "Couldn’t delete the album. Try again.") { repo ->
             repo.deleteAlbum(album)
-            navigate(GalleryLocation())
+            navigate(GalleryLocation(GallerySection.Albums))
             "Deleted “${album.name}”. Its photos are still in your timeline."
         }
     }
@@ -478,33 +483,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val location = mutableLocation.asStateFlow()
     private val mutableAlbums = MutableStateFlow<List<FolderAlbum>>(emptyList())
     val albums = mutableAlbums.asStateFlow()
-    private var pagingGeneration: Int = -1
-    private var pagingOrder: Int = 0
-    private var pagingPlace: GalleryLocation? = null
-    private var pagingFlow: Flow<PagingData<GalleryItem>>? = null
-    private var pagingScope: CoroutineScope? = null
+    private val mutableOutline = MutableStateFlow<GalleryOutline?>(null)
+    /** The open view's items for the grid; null while the first outline of a view loads. */
+    val outline = mutableOutline.asStateFlow()
 
-    // One retained paging session: rotation keeps it, navigation cancels it.
-    // Separate flows prevent old device/album items flashing under a Photos header.
-    // Keyed by the native view, so renaming an album in the trail keeps the session.
-    fun photosAt(place: GalleryLocation, generation: Int = 0, order: Int = 0): Flow<PagingData<GalleryItem>> {
-        if (pagingPlace?.section == place.section && pagingPlace?.nativeView() == place.nativeView() && pagingGeneration == generation && pagingOrder == order) pagingFlow?.let { return it }
-        pagingScope?.cancel()
-        val scope = CoroutineScope(SupervisorJob(viewModelScope.coroutineContext[Job]) + Dispatchers.Main.immediate)
-        pagingScope = scope
-        val flow = repository.flatMapLatest { repo ->
-            val view = place.nativeView()
-            if (repo == null || view == null) flowOf(PagingData.empty<GalleryItem>())
-            else Pager(
-                PagingConfig(pageSize = 90, initialLoadSize = 90, prefetchDistance = 18, maxSize = 360, enablePlaceholders = false),
-                pagingSourceFactory = { repo.pagingSource(view) },
-            ).flow
-        }.cachedIn(scope)
-        pagingGeneration = generation
-        pagingOrder = order
-        pagingPlace = place
-        pagingFlow = flow
-        return flow
+    /** Keep the outline in step with the open view. A different view, account
+     * or order starts over; within the same view a new outline replaces the
+     * old one only when items were added or removed, so the layout holds still
+     * otherwise and only the records are read again. */
+    private fun followOutline() = viewModelScope.launch(guard) {
+        data class Key(val view: Pair<GallerySection, LibraryView?>, val generation: Int, val order: Int)
+        var shown: Key? = null
+        combine(repository, location, account, order, state) { repo, place, account, order, state ->
+            Triple(repo, Key(place.section to place.nativeView(), account.generation, order), state.revision)
+        }.distinctUntilChanged().collectLatest { (repo, key, _) ->
+            val view = key.view.second
+            if (key != shown) { mutableOutline.value = null; shown = key }
+            if (repo == null || view == null) return@collectLatest
+            val next = try { repo.outline(view, viewModelScope) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { return@collectLatest }
+            val current = mutableOutline.value
+            if (current != null && current.ids == next.ids) { current.reload(); return@collectLatest }
+            if (current != null) {
+                // Open the new layout where the old one was.
+                val id = current.ids.getOrNull(current.lastIndex)
+                next.preload(id?.let(next::indexOf)?.takeIf { it >= 0 } ?: current.lastIndex.coerceAtMost(next.count - 1))
+            } else next.preload(0)
+            mutableOutline.value = next
+        }
     }
 
     fun navigate(place: GalleryLocation) {
@@ -751,6 +758,49 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Mark items as favorites, or not. Proton photos change in Proton, which
+     * every Proton app shows; media only on this phone changes in the phone's
+     * gallery, after the system asks.
+     */
+    fun favorite(items: List<GalleryItem>, favorite: Boolean) {
+        val repo = repository.value ?: return
+        val proton = items.filter { it.inProton }
+        val phone = items.filter { !it.inProton }.mapNotNull { PhoneLibrary.uri(it) }
+        viewModelScope.launch(guard) {
+            if (phone.isNotEmpty()) try {
+                val request = MediaStore.createFavoriteRequest(getApplication<Application>().contentResolver, phone, favorite)
+                mutableRequests.emit(UiRequest.Favorite(request.intentSender))
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) { android.util.Log.w("ProtonGallery", "Couldn't ask to change favorites", error) }
+            if (proton.isEmpty()) return@launch
+            if (!mutableAccount.value.connected) return@launch showAccount()
+            try {
+                val outcome = repo.setFavorite(proton, favorite)
+                mutableState.update { it.copy(revision = it.revision + 1, error = outcome.failed > 0uL, message = when {
+                    outcome.failed > 0uL -> "${outcome.failed} couldn’t be changed. Try again."
+                    favorite -> if (proton.size == 1) "Added to favorites" else "Added ${proton.size} to favorites"
+                    else -> if (proton.size == 1) "Removed from favorites" else "Removed ${proton.size} from favorites"
+                }) }
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t change the favorites. Try again.", error = true) }
+            }
+        }
+    }
+
+    /** The system favorites dialog closed: read the phone's gallery again. */
+    fun phoneFavorited(confirmed: Boolean) { if (confirmed) refreshPhone() }
+
+    // Originals of hidden albums decrypted for viewing; deleted when they lock.
+    private val privateFiles = java.util.Collections.synchronizedSet(HashSet<File>())
+
+    /** Hidden albums locked: delete what was decrypted from them. */
+    fun forgetPrivate() {
+        val files = synchronized(privateFiles) { privateFiles.toList().also { privateFiles.clear() } }
+        if (files.isNotEmpty()) viewModelScope.launch(Dispatchers.IO) { files.forEach { it.delete() } }
+    }
+
     /** The system trash dialog closed. */
     fun phoneTrashed(confirmed: Boolean, request: UiRequest.Trash) {
         if (!confirmed) return
@@ -833,7 +883,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** A playable file for a Proton video. */
-    suspend fun original(item: GalleryItem): File? = repository.value?.let { Originals.file(getApplication(), it, item) }
+    suspend fun original(item: GalleryItem, private: Boolean = false): File? =
+        repository.value?.let { Originals.file(getApplication(), it, item) }?.also { if (private && item.localPath.isEmpty()) privateFiles += it }
 
     fun setBackupFolder(folder: PhoneFolder, enabled: Boolean) {
         val repo = repository.value ?: return
@@ -880,5 +931,5 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Last, so every property above is initialized before the library opens.
-    init { open() }
+    init { open(); followOutline() }
 }

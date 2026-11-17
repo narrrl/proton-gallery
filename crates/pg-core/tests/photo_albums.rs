@@ -19,6 +19,7 @@ fn photo(node: &str, time: i64) -> Asset {
         revision: None,
         size_bytes: Some(1),
         sort_time: time,
+        favorite: false,
     }
 }
 

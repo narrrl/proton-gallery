@@ -8,6 +8,7 @@ pub mod indexer;
 pub mod library;
 pub mod local;
 pub mod model;
+pub mod outline;
 pub mod phone;
 pub mod photo_albums;
 pub mod picker;

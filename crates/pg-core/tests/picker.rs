@@ -25,6 +25,7 @@ fn remote(node: &str, name: &str, mime: &str, time: i64) -> Asset {
         revision: None,
         size_bytes: Some(1000),
         sort_time: time,
+        favorite: false,
     }
 }
 

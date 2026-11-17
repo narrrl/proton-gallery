@@ -82,6 +82,7 @@ impl LocalLibrary {
             mime,
             kind,
             sort_time: time,
+            favorite: false,
             size_bytes: Some(bytes),
             revision: None,
         };

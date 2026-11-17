@@ -15,6 +15,7 @@ mod android_tls;
 mod authentication;
 mod diagnostics;
 mod originals;
+mod outline;
 mod phone;
 mod photo_albums;
 mod picker;
@@ -68,6 +69,9 @@ pub struct GalleryItem {
     /// A Proton photo or Drive file, which can be moved to the Proton trash.
     #[uniffi(default = false)]
     pub in_proton: bool,
+    /// A Proton favorite, or a favorite in the phone's own gallery.
+    #[uniffi(default = false)]
+    pub favorite: bool,
 }
 
 #[derive(Clone, uniffi::Enum)]
@@ -266,12 +270,7 @@ impl GalleryEngine {
                 detail: "Invalid asset identity".into(),
             })?;
             items.push(GalleryItem {
-                // Account/volume/node identity, so different sources cannot collide.
-                id: if asset.key.account.as_str() == "local-device" {
-                    asset.key.node.to_string()
-                } else {
-                    asset.key.stable_id()?
-                },
+                id: outline::item_id(&asset.key)?,
                 remote_key: (path.is_none() && !phone).then(|| key.clone()),
                 asset_key: key,
                 revision: asset.revision.map(|revision| revision.to_string()),
@@ -287,6 +286,7 @@ impl GalleryEngine {
                 phone_id: link.phone,
                 backed_up: link.backed_up,
                 in_proton: !phone && asset.key.account.as_str() != "local-device",
+                favorite: asset.favorite,
             });
         }
         Ok(items)
@@ -520,6 +520,16 @@ mod tests {
             std::fs::read(&page.items[0].local_path).unwrap(),
             b"local image fixture"
         );
+        let outline = reopened.outline_at(LibraryView::Device).unwrap();
+        assert_eq!(outline.ids(), vec![page.items[0].id.clone()]);
+        assert_eq!(outline.ratios(), vec![0.0]);
+        let items = reopened.outline_items(outline.clone(), 0, 90).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].as_ref().unwrap().local_path,
+            page.items[0].local_path
+        );
+        assert!(reopened.outline_items(outline, 5, 90).unwrap().is_empty());
     }
 
     #[test]

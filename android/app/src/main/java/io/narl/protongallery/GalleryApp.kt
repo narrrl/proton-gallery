@@ -2,6 +2,7 @@ package io.narl.protongallery
 
 import android.content.ClipData
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
@@ -61,7 +63,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.paging.compose.LazyPagingItems
 import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.AlbumTag
 import io.narl.protongallery.bridge.DriveFolder
@@ -89,9 +90,13 @@ data class PickRequest(val multiple: Boolean, val mime: String?) {
 class MediaActions(
     val share: (List<GalleryItem>) -> Unit = {},
     val largePhoto: suspend (GalleryItem) -> android.graphics.Bitmap? = { null },
-    val original: suspend (GalleryItem) -> java.io.File? = { null },
+    /** The full file; `private` ones are deleted again when hidden albums lock. */
+    val original: suspend (GalleryItem, Boolean) -> java.io.File? = { _, _ -> null },
     /** Move to the trash, after the user confirmed. */
     val delete: (List<GalleryItem>) -> Unit = {},
+    val favorite: (List<GalleryItem>, Boolean) -> Unit = { _, _ -> },
+    /** Hidden albums locked: delete what was decrypted from them. */
+    val forgetPrivate: () -> Unit = {},
 )
 
 /** Only Proton and phone media can be deleted; files saved in the app's own library cannot. */
@@ -113,7 +118,7 @@ data class ChooserActions(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryApp(
-    state: LibraryState, photos: LazyPagingItems<GalleryItem>, thumbnails: ThumbnailLoader,
+    state: LibraryState, outline: GalleryOutline?, thumbnails: ThumbnailLoader,
     theme: ThemeMode, zoom: Float, onImport: () -> Unit, onTheme: (ThemeMode) -> Unit,
     onZoom: (Float) -> Unit, onRetry: () -> Unit, onDismissMessage: () -> Unit,
     location: GalleryLocation = GalleryLocation(), albums: List<FolderAlbum> = emptyList(),
@@ -142,7 +147,8 @@ fun GalleryApp(
     var editing by rememberSaveable { mutableStateOf(false) }
     // While true, tapping a photo makes it the album cover instead of opening it.
     var pickingCover by rememberSaveable(location.section, location.album?.id) { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<Pair<List<GalleryItem>, Int>?>(null) }
+    // The open viewer: the outline it swipes through and where it opened.
+    var selected by remember { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
     // Items waiting for the user to confirm their deletion.
     var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for an album to go into, and the "New album" dialog.
@@ -152,14 +158,24 @@ fun GalleryApp(
     // and lock again whenever the app leaves the screen. Never saved.
     var hiddenUnlocked by remember { mutableStateOf(false) }
     var lockMissing by remember { mutableStateOf(false) }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+    val activityContext = LocalActivity.current
+    // Locking also forgets what hidden albums left in memory and the cache.
+    val lock = {
         hiddenUnlocked = false
-        // Leaving the app inside a hidden album closes it too.
-        if (location.trail.any { it.hidden }) { selected = null; onNavigate(GalleryLocation(location.section)) }
+        thumbnails.forgetPrivate()
+        media.forgetPrivate()
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        // Turning the phone is not leaving the app.
+        if (activityContext?.isChangingConfigurations != true) {
+            lock()
+            // Leaving the app inside a hidden album closes it too.
+            if (location.private) { selected = null; onNavigate(GalleryLocation(location.section)) }
+        }
     }
     val toggleHidden = {
         when {
-            hiddenUnlocked -> hiddenUnlocked = false
+            hiddenUnlocked -> lock()
             !privacy.available() -> lockMissing = true
             else -> privacy.unlock { hiddenUnlocked = it }
         }
@@ -170,10 +186,11 @@ fun GalleryApp(
     val device = location.section == GallerySection.Device
     val drive = location.section == GallerySection.Drive
     val driveRoot = drive && location.album == null
+    val albumsRoot = location.section == GallerySection.Albums && location.album == null
+    val canAddToAlbum = (location.section == GallerySection.Photos || location.section == GallerySection.Albums) && account.connected
     val refreshing = if (drive) account.driveSync != null else account.syncing
     val activity = currentActivity(state, account, backup)
     LaunchedEffect(account.generation) { selected = null }
-    LaunchedEffect(state.revision, state.ready) { if (state.ready) photos.refresh() }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); onDismissMessage() }
     }
@@ -184,11 +201,14 @@ fun GalleryApp(
     val density = LocalDensity.current
     var barHeight by remember { mutableIntStateOf(0) }
     var barOffset by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(location) { barOffset = 0f }
+    // While choosing, the bar holds the actions, so it stays in view.
+    val barPinned = selection.isNotEmpty() || pick != null || pickingCover
+    val currentPinned by rememberUpdatedState(barPinned)
+    LaunchedEffect(location, barPinned) { if (barPinned || barOffset != 0f) barOffset = 0f }
     val hideOnScroll = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                barOffset = (barOffset + available.y).coerceIn(-barHeight.toFloat(), 0f)
+                barOffset = if (currentPinned) 0f else (barOffset + available.y).coerceIn(-barHeight.toFloat(), 0f)
                 return Offset.Zero
             }
         }
@@ -217,7 +237,7 @@ fun GalleryApp(
                 photosRoot && state.count == 0L && !backup.access -> EmptyLibrary(backupActions.allowAccess, false,
                     "Your photos, one timeline", "See the photos on this phone next to Proton Photos, and back them up end-to-end encrypted.",
                     "Show this phone’s photos", top)
-                !device && state.count == 0L && albums.isEmpty() && tagFilter == null -> EmptyLibrary(
+                !device && !albumsRoot && state.count == 0L && albums.isEmpty() && tagFilter == null -> EmptyLibrary(
                     if (!account.connected) onAccount else if (driveRoot) chooserActions.open else onRefresh,
                     if (drive) account.driveSync != null else account.syncing,
                     if (!drive) "Your Proton Photos" else if (location.album == null) "Your Drive galleries" else "This album is empty",
@@ -225,28 +245,25 @@ fun GalleryApp(
                     else if (location.album == null) "Add a Drive folder as a gallery. Folders inside it become albums, with photos and videos together."
                     else "Photos, videos and albums from this folder appear here.",
                     if (!account.connected) "Sign in to Proton" else if (!drive) "Refresh" else if (driveRoot) "Choose a folder" else "", top)
-                else -> SmartMediaGrid(photos, thumbnails, zoom, onZoom, grid, onOpen = { item ->
+                else -> SmartMediaGrid(outline, thumbnails, zoom, onZoom, grid, onOpen = { index, item ->
                     if (pickingCover) { pickingCover = false; onCover(item) }
                     else if (pick != null && !pick.accepts(item)) scope.launch { snackbar.showSnackbar("This app can’t take this kind of file") }
                     else if (pick != null && pick.multiple) selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
                     else if (pick != null) onPick(listOf(item))
-                    else {
-                        val window = photos.itemSnapshotList.items.toList()
-                        selected = window to window.indexOfFirst { it.id == item.id }.coerceAtLeast(0)
-                    }
+                    else outline?.let { selected = it to index }
                 }, albums = albums, onAlbum = { onNavigate(location.child(it)) },
                     tags = if (driveRoot) tags else emptyList(), selectedTag = tagFilter, onTag = onTag,
                     albumsTitle = if (driveRoot) "Galleries" else "Albums",
-                    albumsRow = photosRoot,
                     hiddenUnlocked = hiddenUnlocked, onToggleHidden = toggleHidden,
-                    onNewAlbum = if (photosRoot && account.connected && pick == null) { { naming = true } } else null,
+                    onNewAlbum = if (albumsRoot && account.connected && pick == null) { { naming = true } } else null,
                     header = gridHeader,
                     contentPadding = PaddingValues(top = top, bottom = bottom + 24.dp),
                     selection = selection.keys,
                     onLongPress = if (!pickingCover && (pick == null || pick.multiple)) { item ->
                         if (pick == null || pick.accepts(item))
                             selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
-                    } else null)
+                    } else null,
+                    private = location.private)
             }
         }
         if (account.connected && !device && state.ready) {
@@ -271,7 +288,7 @@ fun GalleryApp(
                         onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() },
                         onShare = { media.share(selection.values.toList()); selection = emptyMap() },
                         onDelete = if (selection.values.any { it.deletable }) { { confirmDelete = selection.values.filter { it.deletable } } } else null,
-                        onAddToAlbum = if (location.section == GallerySection.Photos && account.connected) {
+                        onAddToAlbum = if (canAddToAlbum) {
                             { addingToAlbum = selection.values.toList(); albumActions.loadChoices() }
                         } else null,
                         onRemoveFromAlbum = if (location.protonAlbum) { { albumActions.remove(selection.values.toList()); selection = emptyMap() } } else null)
@@ -327,7 +344,12 @@ fun GalleryApp(
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
     if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)
     selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },
-        onDelete = { confirmDelete = listOf(it) }) }
+        actions = ViewerActions(
+            delete = { confirmDelete = listOf(it) },
+            backUp = { backupActions.upload(listOf(it)) },
+            addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
+            favorite = { item -> media.favorite(listOf(item), !item.favorite) },
+        ), private = location.private) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },
             onDismiss = { confirmDelete = null })
@@ -362,24 +384,30 @@ fun DeleteDialog(items: List<GalleryItem>, onConfirm: () -> Unit, onDismiss: () 
     )
 }
 
-/** Photos and Drive: the screen title and the way between them in one control. */
+/** Photos, Albums and Drive: the screen title and the way between them in one
+ * control. The open one is named; the others show their icon. */
 @Composable
 private fun SectionSwitch(current: GallerySection, onSelect: (GallerySection) -> Unit) {
+    val sections = listOf(
+        Triple(GallerySection.Photos, "Photos", Icons.Outlined.Image),
+        Triple(GallerySection.Albums, "Albums", Icons.Outlined.PhotoLibrary),
+        Triple(GallerySection.Drive, "Drive", Icons.Outlined.FolderOpen),
+    )
     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(Modifier.padding(4.dp).selectableGroup()) {
-            for ((section, label) in listOf(GallerySection.Photos to "Photos", GallerySection.Drive to "Drive")) {
+            for ((section, label, icon) in sections) {
                 val chosen = current == section
                 Row(
                     Modifier.clip(CircleShape)
                         .background(if (chosen) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .selectable(chosen, role = Role.Tab) { onSelect(section) }
-                        .heightIn(min = 40.dp).padding(horizontal = 16.dp),
+                        .semantics { contentDescription = label }
+                        .heightIn(min = 40.dp).padding(horizontal = if (chosen) 16.dp else 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val tint = if (chosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    Icon(if (section == GallerySection.Photos) Icons.Outlined.PhotoLibrary else Icons.Outlined.FolderOpen, null,
-                        Modifier.size(18.dp), tint = tint)
-                    Text(label, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelLarge, color = tint)
+                    Icon(icon, null, Modifier.size(18.dp), tint = tint)
+                    if (chosen) Text(label, Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelLarge, color = tint)
                 }
             }
         }
@@ -517,13 +545,14 @@ private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
 /** `selected` is null outside selection mode. */
 @Composable
 fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier,
-    selected: Boolean? = null, onLongClick: (() -> Unit)? = null) {
-    val bitmap by produceState<android.graphics.Bitmap?>(null, item.id, item.revision, loader) { value = loader.load(item) }
+    selected: Boolean? = null, onLongClick: (() -> Unit)? = null, private: Boolean = false) {
+    // A thumbnail already in memory shows in the first frame, without a placeholder.
+    val bitmap by produceState(loader.peek(item), item.id, item.revision, loader) { if (value == null) value = loader.load(item, private) }
     val phoneOnly = item.phoneId != null && !item.backedUp
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
         .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)
         .semantics {
-            contentDescription = "${if (item.isVideo) "Video" else "Photo"}: ${item.name}" + if (phoneOnly) ", not backed up" else ""
+            contentDescription = "${if (item.isVideo) "Video" else "Photo"}: ${item.name}" + (if (item.favorite) ", favorite" else "") + if (phoneOnly) ", not backed up" else ""
             stateDescription = when (selected) { true -> "Selected"; false -> "Not selected"; null -> if (bitmap != null) "Preview ready" else "Preview unavailable" }
         }) {
         val inset = if (selected == true) 10.dp else 0.dp
@@ -532,6 +561,8 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
         if (item.isVideo) Icon(Icons.Outlined.PlayArrow, null, tint = Color.White,
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp))
+        if (item.favorite) Icon(Icons.Filled.Favorite, null, tint = Color.White,
+            modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).size(16.dp))
         // Like other phone galleries: a crossed-out cloud marks what isn't backed up.
         if (phoneOnly) Icon(Icons.Outlined.CloudOff, null, tint = Color.White,
             modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape).padding(3.dp).size(14.dp))

@@ -19,8 +19,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.graphics.luminance
-import androidx.paging.PagingData
-import androidx.paging.compose.collectAsLazyPagingItems
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.FolderAlbum
@@ -32,7 +30,6 @@ import io.narl.protongallery.bridge.PhoneFolder
 import io.narl.protongallery.bridge.FreeUpSummary
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import io.narl.protongallery.bridge.SignInStage
-import kotlinx.coroutines.flow.flowOf
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
@@ -112,7 +109,7 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Back to gallery").performClick()
         compose.onNodeWithText("On this device").assertExists()
         compose.onNodeWithContentDescription("Back").performClick()
-        compose.onNodeWithText("Drive").performClick()
+        compose.onNodeWithContentDescription("Drive").performClick()
         compose.onNodeWithText("Trips").assertExists()
         compose.onRoot().captureRoboImage("build/screenshots/collections-light.png")
     }
@@ -136,7 +133,7 @@ class GalleryUiTest {
 
     @Test fun drive_folders_open_as_nested_albums_and_back_returns_to_the_parent() {
         render(fixtureItems(), ThemeMode.Light, initialLocation = GalleryLocation())
-        compose.onNodeWithText("Drive").performClick()
+        compose.onNodeWithContentDescription("Drive").performClick()
         compose.onNodeWithText("Trips").performClick()
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithText("Coast").performClick()
@@ -241,11 +238,14 @@ class GalleryUiTest {
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
             albumActions = AlbumActions(choices = listOf(summer), add = { album, chosen -> added += "${album.name}:${chosen.size}" }))
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Albums").assertExists()
+        // Albums have their own tab; the timeline is only photos.
+        compose.onNodeWithText("New album").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Albums").performClick()
         compose.onNodeWithText("New album").assertExists()
         compose.onNodeWithContentDescription("Album Summer, 3 items").assertExists()
-        waitForThumbnails()
         compose.onRoot().captureRoboImage("build/screenshots/photo-albums-light.png")
+        compose.onNodeWithContentDescription("Photos").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
         compose.onNodeWithContentDescription("Add to album").performClick()
@@ -256,9 +256,9 @@ class GalleryUiTest {
         compose.onNodeWithText("1 selected").assertDoesNotExist()
     }
 
-    @Test fun a_new_album_can_be_named_from_the_photos_tab() {
+    @Test fun a_new_album_can_be_named_from_the_albums_tab() {
         val created = mutableListOf<String>()
-        render(fixtureItems().map { it.copy(inProton = true) }, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+        render(fixtureItems().map { it.copy(inProton = true) }, ThemeMode.Light, initialLocation = GalleryLocation(GallerySection.Albums), photosTab = true,
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
             albumActions = AlbumActions(create = { name, chosen -> created += "$name:${chosen.size}" }))
         compose.waitUntil(10_000) { compose.onAllNodesWithText("New album").fetchSemanticsNodes().isNotEmpty() }
@@ -339,6 +339,51 @@ class GalleryUiTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Back to gallery").fetchSemanticsNodes().isNotEmpty() }
     }
 
+    @Test fun the_viewer_backs_up_favorites_and_adds_to_albums() {
+        val preview = Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888)
+        // One photo only on this phone, then Proton photos.
+        val items = fixtureItems().mapIndexed { index, item ->
+            if (index == 0) item.copy(localPath = "", phoneId = "0", backedUp = false)
+            else item.copy(localPath = "", remoteKey = "key-$index", inProton = true)
+        }
+        val uploaded = mutableListOf<String>()
+        val favorites = mutableListOf<String>()
+        val summer = FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)
+        render(items, ThemeMode.Dark, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            media = MediaActions(largePhoto = { preview }, favorite = { chosen, on -> favorites += "${chosen.single().name}:$on" }),
+            actions = BackupActions(upload = { chosen -> uploaded += chosen.map { it.name } }),
+            albumActions = AlbumActions(choices = listOf(summer)))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: Coast 0.jpg", substring = true).performClick()
+        compose.onNodeWithContentDescription("Add to album").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Back up").performClick()
+        assertEquals(listOf("Coast 0.jpg"), uploaded)
+        compose.onNodeWithContentDescription("Add to favorites").performClick()
+        assertEquals(listOf("Coast 0.jpg:true"), favorites)
+        compose.onNodeWithContentDescription("Back to gallery").performClick()
+
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performClick()
+        compose.onNodeWithContentDescription("Back up").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add to album").performClick()
+        compose.onNodeWithText("Add to album").assertExists()
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/viewer-add-to-album-dark.png")
+    }
+
+    @Test fun the_selection_bar_shows_without_scrolling_back_up() {
+        val base = fixtureItems()
+        val items = (0 until 6).flatMap { copy -> base.map { it.copy(id = "${it.id}-$copy", name = "${it.name.removeSuffix(".jpg")}-$copy.jpg") } }
+        render(items, ThemeMode.Light)
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0-0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onRoot().performTouchInput { swipeUp(startY = bottom * 0.9f, endY = top + 10f) }
+        compose.waitForIdle()
+        compose.onNodeWithText("On this device").assertIsNotDisplayed()
+        val shown = compose.onAllNodes(hasContentDescription("Photo:", substring = true) and hasClickAction()).fetchSemanticsNodes()
+            .first { node -> node.boundsInRoot.top > 400f }
+        compose.onNode(hasContentDescription(shown.config[SemanticsProperties.ContentDescription].first())).performTouchInput { longClick() }
+        compose.onNodeWithText("1 selected").assertIsDisplayed()
+    }
+
     @Test fun background_work_shows_as_one_line_a_bar_and_the_account_ring() {
         val progress = BackupProgress(uploading = true, done = 1, total = 5, bytes = 50, size = 100)
         render(fixtureItems(), ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
@@ -372,7 +417,7 @@ class GalleryUiTest {
     @Test fun an_album_shows_its_details_and_edit_options() {
         val options = AlbumOptions(null, "Summer by the sea", null, AlbumGrouping.DAY, AlbumOrder.NEWEST, false, false, listOf("Trip"))
         render(fixtureItems(), ThemeMode.Light, options = options, initialLocation = GalleryLocation())
-        compose.onNodeWithText("Drive").performClick()
+        compose.onNodeWithContentDescription("Drive").performClick()
         compose.onNodeWithText("Trips").performClick()
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithText("Coast").performClick()
@@ -398,18 +443,18 @@ class GalleryUiTest {
             val year = remember { FolderAlbum("gallery", "year", "root", "2026", 0uL, 1uL) }
             val coast = remember { FolderAlbum("gallery", "coast", "year", "Coast", items.size.toULong(), 0uL, description = options?.description, tags = options?.tags ?: emptyList()) }
             val albums = when (location.album?.id) {
-                null -> if (location.section == GallerySection.Drive) listOf(root) + driveRoots else if (photosTab) photoAlbums else emptyList()
+                null -> if (location.section == GallerySection.Drive) listOf(root) + driveRoots else if (location.section == GallerySection.Albums) photoAlbums else emptyList()
                 "root" -> listOf(year)
                 "year" -> listOf(coast)
                 else -> emptyList()
             }
             val visible = if (location.section == GallerySection.Device || location.album?.id == "coast" || (photosTab && location == GalleryLocation())) items else emptyList()
-            val photos = remember(visible) { flowOf(PagingData.from(visible)) }.collectAsLazyPagingItems()
+            val outline = remember(visible) { GalleryOutline.of(visible) }
             var theme by remember { mutableStateOf(mode) }
             var zoom by remember { mutableFloatStateOf(ZOOM_DEFAULT) }
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 GalleryTheme(theme) {
-                    GalleryApp(state ?: LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), photos,
+                    GalleryApp(state ?: LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), outline,
                         remember { ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) }) }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == "coast") options else null,

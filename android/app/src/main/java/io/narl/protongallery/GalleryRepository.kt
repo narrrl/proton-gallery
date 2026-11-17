@@ -3,8 +3,6 @@ package io.narl.protongallery
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import androidx.paging.PagingSource
-import androidx.paging.PagingState
 import io.narl.protongallery.bridge.GalleryEngine
 import io.narl.protongallery.bridge.GalleryException
 import io.narl.protongallery.bridge.FolderAlbum
@@ -14,6 +12,7 @@ import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.MediaReader
 import io.narl.protongallery.bridge.PhoneHash
 import io.narl.protongallery.bridge.PhoneMedia
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import android.media.MediaMetadataRetriever
@@ -36,8 +35,6 @@ private val Native = run {
         Thread(null, task, "pg-native-${count.incrementAndGet()}", 8L shl 20).apply { isDaemon = true }
     }.asCoroutineDispatcher()
 }
-
-data class PageKey(val cursor: String?, val backwards: Boolean, val refreshCursor: String? = null, val refreshBackwards: Boolean = false)
 
 /** Byte streams stay on disk; typed metadata is the only FFI payload. */
 class GalleryRepository private constructor(private val context: Context) {
@@ -83,29 +80,16 @@ class GalleryRepository private constructor(private val context: Context) {
         item.remoteKey?.let { engine.rememberPhotoShape(it, width.toUInt(), height.toUInt()) }
     }
 
-    fun pagingSource(view: LibraryView) = object : PagingSource<PageKey, GalleryItem>() {
-        override suspend fun load(params: LoadParams<PageKey>): LoadResult<PageKey, GalleryItem> =
-            withContext(Native) {
-                try {
-                    val page = engine.pageAt(view, params.key?.cursor, params.key?.backwards ?: false, params.loadSize.coerceAtMost(250).toUInt())
-                    LoadResult.Page(page.items,
-                        page.previous?.let { PageKey(it, true, params.key?.cursor, params.key?.backwards ?: false) },
-                        page.next?.let { PageKey(it, false, params.key?.cursor, params.key?.backwards ?: false) })
-                } catch (cancel: CancellationException) {
-                    throw cancel
-                } catch (error: Exception) {
-                    LoadResult.Error(error)
-                }
-            }
-
-        // The loaded page's preceding seek returns the same neighborhood after
-        // refresh, including after older pages were dropped from memory.
-        override fun getRefreshKey(state: PagingState<PageKey, GalleryItem>): PageKey? {
-            val anchor = state.anchorPosition ?: return null
-            val page = state.closestPageToPosition(anchor) ?: return null
-            val key = page.prevKey ?: page.nextKey ?: return null
-            return PageKey(key.refreshCursor, key.refreshBackwards)
+    /** The whole of `view` for the grid; records load through it page by page. */
+    suspend fun outline(view: LibraryView, scope: CoroutineScope): GalleryOutline = withContext(Native) {
+        val native = engine.outlineAt(view)
+        GalleryOutline(native.ids(), native.times().toLongArray(), native.ratios().toFloatArray(), scope) { start, count ->
+            withContext(Native) { engine.outlineItems(native, start.toUInt(), count.toUInt()) }
         }
+    }
+
+    suspend fun setFavorite(items: List<GalleryItem>, favorite: Boolean) = withContext(Native) {
+        engine.setFavorite(items.map { it.assetKey }, favorite)
     }
 
     suspend fun phoneIndex(scan: Long, items: List<PhoneMedia>) = withContext(Native) { engine.phoneIndex(scan, items) }
@@ -138,7 +122,7 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun count(location: GalleryLocation) = withContext(Native) { location.nativeView()?.let(engine::countAt)?.toLong() ?: 0L }
     suspend fun albums(location: GalleryLocation) = withContext(Native) {
         when {
-            location.section == GallerySection.Photos && location.album == null -> engine.photoAlbums()
+            location.section == GallerySection.Albums && location.album == null -> engine.photoAlbums()
             location.section != GallerySection.Drive -> emptyList()
             else -> engine.albums(location.album?.gallery, location.album?.id)
         }

@@ -205,6 +205,10 @@ pub(crate) fn to_asset(account: &AccountId, node: Node) -> Result<Option<Asset>>
     if node.trashed {
         return Ok(None);
     }
+    let favorite = node
+        .photo
+        .as_ref()
+        .is_some_and(|photo| photo.tags.contains(&proton_drive_rs::PhotoTag::Favorite));
     let NodeKind::File {
         media_type,
         claimed_size,
@@ -229,6 +233,7 @@ pub(crate) fn to_asset(account: &AccountId, node: Node) -> Result<Option<Asset>>
         revision: active_revision_id.map(RevisionId::new).transpose()?,
         size_bytes: claimed_size.and_then(|size| u64::try_from(size).ok()),
         sort_time: node.modification_time,
+        favorite,
     }))
 }
 

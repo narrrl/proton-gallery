@@ -130,6 +130,7 @@ async fn an_album_can_contain_media_and_child_albums_without_flattening_them() {
         revision: None,
         size_bytes: Some(100),
         sort_time: 1,
+        favorite: false,
     };
     let checkpoint = c.begin_scan(root.id.clone(), false).await.unwrap();
     c.apply_page(
@@ -229,6 +230,7 @@ fn media(source: &SourceSpec, node: &str, time: i64) -> Asset {
         revision: None,
         size_bytes: Some(1),
         sort_time: time,
+        favorite: false,
     }
 }
 

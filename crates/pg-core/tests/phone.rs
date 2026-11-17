@@ -35,6 +35,7 @@ fn remote(node: &str, name: &str, time: i64) -> Asset {
         revision: None,
         size_bytes: Some(1000),
         sort_time: time,
+        favorite: false,
     }
 }
 
@@ -546,4 +547,85 @@ async fn files_the_phone_could_not_read_do_not_hold_up_the_check() {
         .await
         .unwrap();
     assert_eq!(rest, [("1".to_owned(), false)]);
+}
+
+#[tokio::test]
+async fn the_outline_lists_the_timeline_in_page_order_with_known_shapes() {
+    let (catalog, photos) = setup().await;
+    for i in 0..30 {
+        catalog
+            .add_to_source(
+                photos.clone(),
+                remote(&format!("r{i}"), &format!("p{i}.jpg"), i * 2),
+            )
+            .await
+            .unwrap();
+    }
+    catalog
+        .phone_upsert(
+            1,
+            (0..30)
+                .map(|i| media(&i.to_string(), &format!("m{i}.jpg"), i * 2 + 1))
+                .collect(),
+        )
+        .await
+        .unwrap();
+    let remembered = remote("r7", "p7.jpg", 14).key;
+    catalog
+        .remember_shape(remembered.clone(), 300, 200)
+        .await
+        .unwrap();
+
+    let mut paged = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = catalog
+            .timeline_window(
+                Some(photos.clone()),
+                Some(account()),
+                cursor,
+                false,
+                PageSize::new(16).unwrap(),
+            )
+            .await
+            .unwrap();
+        paged.extend(page.items.into_iter().map(|a| (a.key, a.sort_time)));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let outline = catalog
+        .timeline_outline(Some(photos.clone()), Some(account()))
+        .await
+        .unwrap();
+    assert_eq!(
+        outline
+            .iter()
+            .map(|e| (e.key.clone(), e.sort_time))
+            .collect::<Vec<_>>(),
+        paged
+    );
+    let shape = |key: &AssetKey| {
+        let entry = outline.iter().find(|e| &e.key == key).unwrap();
+        (entry.width, entry.height)
+    };
+    assert_eq!(shape(&remembered), (300, 200));
+    assert_eq!(shape(&remote("r8", "p8.jpg", 16).key), (0, 0));
+    // Phone media brings its own size from the scan.
+    assert_eq!(shape(&phone_key("3").unwrap()), (4, 3));
+
+    let by_name = catalog
+        .source_outline(photos.clone(), SortOrder::Name)
+        .await
+        .unwrap();
+    let names: Vec<_> = by_name
+        .iter()
+        .map(|e| e.key.node.as_str().to_owned())
+        .collect();
+    assert_eq!(names.len(), 30);
+    let mut sorted = names.clone();
+    sorted.sort_by_key(|node| format!("p{}.jpg", &node[1..]));
+    assert_eq!(names, sorted);
+    assert_eq!(names[2], "r10", "name order, not time order");
 }

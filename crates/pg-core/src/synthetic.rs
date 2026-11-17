@@ -68,6 +68,7 @@ impl SyntheticSource {
             size_bytes: None,
             // Repeated timestamps exercise complete-key pagination.
             sort_time: 1_700_000_000 - (index / 8) as i64,
+            favorite: false,
         })
     }
 }

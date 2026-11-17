@@ -515,6 +515,45 @@ impl Catalog {
         }).await
     }
 
+    /// Mark media as a favorite or not, after Proton accepted the change.
+    pub async fn set_favorite(&self, keys: Vec<AssetKey>, favorite: bool) -> Result<()> {
+        if keys.len() > 5_000 {
+            return Err(Error::Invalid("too many items to change at once".into()));
+        }
+        self.run(move |conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut read = tx.prepare_cached(
+                    "SELECT payload FROM assets WHERE (account,volume,node)=(?1,?2,?3)",
+                )?;
+                let mut write = tx.prepare_cached(
+                    "UPDATE assets SET payload=?4 WHERE (account,volume,node)=(?1,?2,?3)",
+                )?;
+                for key in &keys {
+                    let id = params![key.account.as_str(), key.volume.as_str(), key.node.as_str()];
+                    let Some(payload) = read.query_row(id, |r| r.get::<_, String>(0)).optional()?
+                    else {
+                        continue;
+                    };
+                    let mut asset: Asset = serde_json::from_str(&payload)?;
+                    if asset.favorite == favorite {
+                        continue;
+                    }
+                    asset.favorite = favorite;
+                    write.execute(params![
+                        key.account.as_str(),
+                        key.volume.as_str(),
+                        key.node.as_str(),
+                        serde_json::to_string(&asset)?
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn aspect_ratios(&self, keys: Vec<AssetKey>) -> Result<Vec<Option<f64>>> {
         if keys.len() > PageSize::MAX {
             return Err(Error::Invalid("too many media shapes requested".into()));

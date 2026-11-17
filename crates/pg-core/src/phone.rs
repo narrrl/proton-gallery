@@ -115,7 +115,7 @@ pub struct PhoneEntry {
 /// Proton copy is in the timeline, and while a same-named Proton photo is
 /// there and the contents have not been compared, so a backed-up library
 /// never shows every photo twice during the first check.
-const VISIBLE: &str = "(m.source=?1 OR (m.source='phone' AND NOT EXISTS(
+pub(crate) const VISIBLE: &str = "(m.source=?1 OR (m.source='phone' AND NOT EXISTS(
     SELECT 1 FROM phone_backup b WHERE b.account=?2 AND b.node=m.node AND (
         (b.state='backed_up' AND EXISTS(SELECT 1 FROM memberships r
             WHERE r.source=?1 AND r.account=?2 AND r.volume=b.remote_volume AND r.node=b.remote_node))
@@ -193,6 +193,7 @@ impl Catalog {
                 revision: None,
                 size_bytes: Some(item.size_bytes),
                 sort_time: item.taken,
+                favorite: item.favorite,
             };
             accepted.push((item, serde_json::to_string(&asset)?));
         }

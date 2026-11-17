@@ -120,6 +120,10 @@ pub struct Asset {
     pub size_bytes: Option<u64>,
     /// Current sorting fallback (remote mtime for Drive); not an EXIF claim.
     pub sort_time: i64,
+    /// Marked as a favorite: the Proton `Favorite` photo tag, or the phone's own
+    /// favorite flag. Left out of the stored record when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

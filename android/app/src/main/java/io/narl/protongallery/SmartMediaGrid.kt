@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,8 +33,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.paging.LoadState
-import androidx.paging.compose.LazyPagingItems
 import io.narl.protongallery.bridge.AlbumGrouping
 import io.narl.protongallery.bridge.AlbumTag
 import io.narl.protongallery.bridge.FolderAlbum
@@ -46,6 +43,8 @@ import io.narl.protongallery.icons.PhotoLibrary
 import io.narl.protongallery.icons.VisibilityOff
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
@@ -70,8 +69,29 @@ private const val GAP_DP = 2
 private sealed interface GalleryRow {
     val key: String
     data class Heading(override val key: String, val label: String) : GalleryRow
-    data class Media(override val key: String, val tiles: List<Tile>, val height: Int) : GalleryRow
-    data class Tile(val index: Int, val item: GalleryItem, val width: Int)
+    /** Items `start` until `end` of the outline. */
+    data class Media(override val key: String, val start: Int, val widths: IntArray, val height: Int) : GalleryRow {
+        val end get() = start + widths.size
+    }
+}
+
+/** Rows planned for one outline at one size. */
+private class GridLayout(val outline: GalleryOutline, val rows: List<GalleryRow>) {
+    // Row starts in order, for finding an item's row.
+    private val media = rows.withIndex().filter { it.value is GalleryRow.Media }
+    fun rowOf(item: Int): Int {
+        var low = 0; var high = media.size - 1
+        while (low <= high) {
+            val mid = (low + high) / 2
+            val row = media[mid].value as GalleryRow.Media
+            when {
+                item < row.start -> high = mid - 1
+                item >= row.end -> low = mid + 1
+                else -> return media[mid].index
+            }
+        }
+        return -1
+    }
 }
 
 /** Section heading for a capture time, or `null` when the grid is ungrouped. */
@@ -83,19 +103,58 @@ fun groupLabel(time: Long, grouping: AlbumGrouping): String? {
     else date.format(DateTimeFormatter.ofPattern("LLLL yyyy", Locale.getDefault()))
 }
 
-/** Rust plans only the bounded loaded window. Compose virtualizes whole rows,
- * and item access still drives Paging's prefetch and bidirectional eviction.
+/** Plan every row of `outline`: a heading where the group changes, then its
+ * photos justified to the width. Unknown shapes are square, so the rows only
+ * change with the outline. */
+private fun planRows(outline: GalleryOutline, grouping: AlbumGrouping, width: Int, target: Int, gap: Int): List<GalleryRow> {
+    val zone = ZoneId.systemDefault()
+    // Group of each item, formatted only where it changes.
+    fun group(time: Long): Long = if (grouping == AlbumGrouping.NONE) 0L else {
+        val date = Instant.ofEpochSecond(time).atZone(zone).toLocalDate()
+        when (grouping) {
+            AlbumGrouping.YEAR -> date.year.toLong()
+            AlbumGrouping.MONTH -> date.year * 12L + date.monthValue
+            else -> date.toEpochDay()
+        }
+    }
+    val rows = ArrayList<GalleryRow>()
+    var start = 0
+    while (start < outline.count) {
+        val section = group(outline.times[start])
+        var end = start + 1
+        while (end < outline.count && group(outline.times[end]) == section) end++
+        groupLabel(outline.times[start], grouping)?.let { rows += GalleryRow.Heading("group-${outline.ids[start]}", it) }
+        // The planner takes a bounded number of items. Its rows only look
+        // ahead, so planning in pieces and keeping all but each piece's last
+        // row gives the same rows as planning the whole section at once.
+        var from = start
+        while (from < end) {
+            val until = minOf(end, from + 1024)
+            val planned = planSmartGrid((from until until).map(outline::ratio), width.toUInt(), target.toUInt(), gap.toUInt())
+            val keep = if (until == end) planned else planned.dropLast(1).ifEmpty { planned }
+            for (row in keep) {
+                val first = from + row.start.toInt()
+                rows += GalleryRow.Media("row-${outline.ids[first]}", first, IntArray(row.tiles.size) { row.tiles[it].width.toInt() }, row.tiles.first().height.toInt())
+            }
+            from = keep.last().let { from + it.start.toInt() + it.tiles.size }
+        }
+        start = end
+    }
+    return rows
+}
+
+/** Every row is planned from the outline at once, so the grid only moves when
+ * media is added or removed. Records and thumbnails load as rows come into
+ * view, and the next screens in the scroll direction are read ahead.
  * Two fingers zoom: tiles grow or shrink and headings follow the size.
  */
 @Composable
 fun SmartMediaGrid(
-    photos: LazyPagingItems<GalleryItem>, thumbnails: ThumbnailLoader,
-    zoom: Float, onZoom: (Float) -> Unit, scroll: LazyListState, onOpen: (GalleryItem) -> Unit,
+    outline: GalleryOutline?, thumbnails: ThumbnailLoader,
+    zoom: Float, onZoom: (Float) -> Unit, scroll: LazyListState, onOpen: (Int, GalleryItem) -> Unit,
     albums: List<FolderAlbum> = emptyList(), onAlbum: (FolderAlbum) -> Unit = {},
     tags: List<AlbumTag> = emptyList(), selectedTag: String? = null, onTag: (String?) -> Unit = {},
     albumsTitle: String = "Albums",
-    // One scrolling row of albums above the photos, as on the Photos tab.
-    albumsRow: Boolean = false,
     onNewAlbum: (() -> Unit)? = null,
     // Hidden albums show only while unlocked with the phone's lock.
     hiddenUnlocked: Boolean = false,
@@ -105,13 +164,14 @@ fun SmartMediaGrid(
     // Long-press selects; while anything is selected, a tap adds or removes.
     selection: Set<String> = emptySet(),
     onLongPress: ((GalleryItem) -> Unit)? = null,
+    // Inside a hidden album: thumbnails stay out of the disk cache.
+    private: Boolean = false,
 ) {
     val density = LocalDensity.current
-    val snapshot = photos.itemSnapshotList.items
     val hiddenCount = albums.count { it.hidden }
     val shownAlbums = if (hiddenUnlocked) albums else albums.filterNot { it.hidden }
     val grouping = groupingFor(zoom)
-    // The photo kept in view while pinching; cleared once a layout settles on it.
+    // The photo kept in view while pinching.
     var anchor by remember { mutableStateOf<String?>(null) }
     var pinching by remember { mutableStateOf(false) }
     val currentZoom by rememberUpdatedState(zoom)
@@ -121,54 +181,62 @@ fun SmartMediaGrid(
         val widthPx = constraints.maxWidth.coerceIn(1, 32768)
         val targetPx = with(density) { zoom.dp.roundToPx() }.coerceIn(1, 8192)
         val albumColumns = (maxWidth / 172.dp).toInt().coerceIn(2, 6)
+        // The new-album card leads the album cards.
+        val cards: List<FolderAlbum?> = (if (onNewAlbum != null) listOf(null) else emptyList<FolderAlbum?>()) + shownAlbums
+        val albumRows = cards.chunked(albumColumns)
+        // Items listed before the photo rows; keep in step with the LazyColumn below.
+        val leading = (if (tags.isNotEmpty()) 1 else 0) + (if (header != null) 1 else 0) +
+            (if (shownAlbums.isNotEmpty()) 1 else 0) + albumRows.size + (if (hiddenCount > 0) 1 else 0)
+        val currentLeading by rememberUpdatedState(leading)
+        var layout by remember { mutableStateOf<GridLayout?>(null) }
         var failed by remember { mutableStateOf(false) }
         var retry by remember { mutableIntStateOf(0) }
-        val rows by produceState<List<GalleryRow>>(emptyList(), snapshot, widthPx, targetPx, gapPx, retry, grouping) {
+        LaunchedEffect(outline, widthPx, targetPx, gapPx, grouping, retry) {
+            if (outline == null) { layout = null; return@LaunchedEffect }
+            // The photo at the top stays at the top through the new layout.
+            val before = layout
+            val topRow = scroll.firstVisibleItemIndex - currentLeading
+            val kept = anchor ?: (before?.rows?.getOrNull(topRow) as? GalleryRow.Media)?.let { before.outline.ids[it.start] }
+            val offset = if (anchor != null) 0 else scroll.firstVisibleItemScrollOffset
             try {
-                value = withContext(Dispatchers.Default) {
-                    val labels = snapshot.map { groupLabel(it.sortTime, grouping) }
-                    buildList {
-                        var start = 0
-                        while (start < snapshot.size) {
-                            val label = labels[start]
-                            var end = start + 1
-                            // Preserve row breaks when Paging drops/prepends a
-                            // complete page. Its final row may stay short.
-                            val pageEnd = minOf(snapshot.size, (start / 90 + 1) * 90)
-                            while (end < pageEnd && labels[end] == label) end++
-                            if (label != null && (start == 0 || labels[start - 1] != label)) {
-                                add(GalleryRow.Heading("group-${snapshot[start].id}", label))
-                            }
-                            val section = snapshot.subList(start, end)
-                            val planned = planSmartGrid(section.map { it.aspectRatio ?: 1.0 }, widthPx.toUInt(), targetPx.toUInt(), gapPx.toUInt())
-                            for (row in planned) {
-                                val first = start + row.start.toInt()
-                                add(GalleryRow.Media("row-${snapshot[first].id}", row.tiles.mapIndexed { offset, size ->
-                                    GalleryRow.Tile(first + offset, snapshot[first + offset], size.width.toInt())
-                                }, row.tiles.first().height.toInt()))
-                            }
-                            start = end
-                        }
-                    }
-                }
+                val rows = withContext(Dispatchers.Default) { planRows(outline, grouping, widthPx, targetPx, gapPx) }
+                val next = GridLayout(outline, rows)
+                layout = next
                 failed = false
+                val item = kept?.let(outline::indexOf) ?: -1
+                if (item >= 0 && (anchor != null || topRow >= 0)) {
+                    val row = next.rowOf(item)
+                    if (row >= 0) scroll.scrollToItem(currentLeading + row, offset)
+                }
+                if (!pinching) anchor = null
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { failed = true }
         }
-        val albumRows = if (albumsRow) emptyList() else shownAlbums.chunked(albumColumns)
-        val showRow = albumsRow && (shownAlbums.isNotEmpty() || onNewAlbum != null)
-        val pageError = photos.loadState.prepend is LoadState.Error
-        // Items listed before the photo rows; keep in step with the LazyColumn below.
-        val leading = (if (tags.isNotEmpty()) 1 else 0) + (if (header != null) 1 else 0) +
-            (if (shownAlbums.isNotEmpty() && !albumsRow) 1 else 0) + albumRows.size + (if (showRow) 1 else 0) +
-            (if (hiddenCount > 0) 1 else 0) + (if (pageError) 1 else 0)
-        val currentRows by rememberUpdatedState(rows)
-        val currentLeading by rememberUpdatedState(leading)
-        LaunchedEffect(rows) {
-            val id = anchor ?: return@LaunchedEffect
-            val index = rows.indexOfFirst { it is GalleryRow.Media && it.tiles.any { tile -> tile.item.id == id } }
-            if (index >= 0) scroll.scrollToItem(leading + index)
-            if (!pinching) anchor = null
+        val currentLayout by rememberUpdatedState(layout)
+        // Read ahead: the records and thumbnails of the next rows in the
+        // direction of travel, once scrolling slows down.
+        LaunchedEffect(layout, private) {
+            val shown = layout ?: return@LaunchedEffect
+            var previous = 0
+            snapshotFlow { scroll.firstVisibleItemIndex to (scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) }
+                .collectLatest { (first, last) ->
+                    val down = first >= previous
+                    previous = first
+                    val rows = shown.rows
+                    val firstRow = (first - currentLeading).coerceIn(0, maxOf(0, rows.size - 1))
+                    val lastRow = (last - currentLeading).coerceIn(0, maxOf(0, rows.size - 1))
+                    if (rows.isEmpty()) return@collectLatest
+                    val ahead = if (down) (lastRow + 1)..minOf(rows.size - 1, lastRow + AHEAD_ROWS)
+                        else maxOf(0, firstRow - AHEAD_ROWS) until firstRow
+                    val items = ahead.flatMap { (rows[it] as? GalleryRow.Media)?.let { row -> row.start until row.end } ?: emptyList() }
+                    if (items.isEmpty()) return@collectLatest
+                    shown.outline.prefetch(items.min() - GalleryOutline.PAGE..items.max() + GalleryOutline.PAGE)
+                    delay(120)
+                    val records = (if (down) items else items.reversed()).mapNotNull {
+                        try { shown.outline.fetchItem(it) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
+                    }
+                    thumbnails.prefetch(records, private)
+                }
         }
         val pinch = Modifier.pointerInput(Unit) {
             awaitEachGesture {
@@ -180,9 +248,10 @@ fun SmartMediaGrid(
                     if (event.changes.count { it.pressed } >= 2) {
                         if (!pinching) {
                             pinching = true; start = currentZoom; scale = 1f
-                            val first = currentRows.getOrNull(scroll.firstVisibleItemIndex - currentLeading)
-                                ?: currentRows.firstOrNull { it is GalleryRow.Media }
-                            anchor = (first as? GalleryRow.Media)?.tiles?.firstOrNull()?.item?.id
+                            val shown = currentLayout
+                            val first = shown?.rows?.getOrNull(scroll.firstVisibleItemIndex - currentLeading)
+                                ?: shown?.rows?.firstOrNull { it is GalleryRow.Media }
+                            anchor = (first as? GalleryRow.Media)?.let { row -> shown?.outline?.ids?.getOrNull(row.start) }
                         }
                         scale *= event.calculateZoom()
                         val next = (start * scale).coerceIn(ZOOM_MIN, ZOOM_MAX)
@@ -204,69 +273,59 @@ fun SmartMediaGrid(
                 }
             }
             if (header != null) item(key = "header", contentType = "header") { header() }
-            if (showRow) item(key = "albums-row", contentType = "albums-row") {
-                Column(Modifier.padding(bottom = 8.dp)) {
-                    Text(albumsTitle, style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 8.dp))
-                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (onNewAlbum != null) item(key = "new-album") { NewAlbumCard(onNewAlbum, Modifier.width(128.dp)) }
-                        items(shownAlbums.size, key = { "album-${shownAlbums[it].id}" }) { index ->
-                            val album = shownAlbums[index]
-                            AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.width(128.dp))
-                        }
-                    }
-                }
-            }
-            if (shownAlbums.isNotEmpty() && !albumsRow) item(key = "albums-heading", contentType = "heading") {
+            if (shownAlbums.isNotEmpty()) item(key = "albums-heading", contentType = "heading") {
                 Text(if (selectedTag != null) "Tagged “$selectedTag”" else albumsTitle, style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp))
             }
-            items(albumRows.size, key = { "albums-${albumRows[it].first().gallery}-${albumRows[it].first().id}" }, contentType = { "albums" }) { index ->
+            items(albumRows.size, key = { index -> albumRows[index].first()?.let { "albums-${it.gallery}-${it.id}" } ?: "albums-new" }, contentType = { "albums" }) { index ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    for (album in albumRows[index]) AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.weight(1f))
+                    for (album in albumRows[index]) {
+                        if (album == null) NewAlbumCard(onNewAlbum ?: {}, Modifier.weight(1f))
+                        else AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.weight(1f))
+                    }
                     repeat(albumColumns - albumRows[index].size) { Spacer(Modifier.weight(1f)) }
                 }
             }
             if (hiddenCount > 0) item(key = "hidden-albums", contentType = "hidden-albums") {
                 HiddenAlbumsRow(hiddenCount, hiddenUnlocked, onToggleHidden)
             }
-            if (pageError) item(key = "prepend-error") { PageRetry(photos::retry) }
-            // One snapshot of the layout for count, keys and content: reading the
-            // state in each lambda let a newer, shorter layout meet an older count
-            // during measurement and crash with IndexOutOfBoundsException.
-            val laidOut = rows
-            items(count = laidOut.size, key = { laidOut[it].key }, contentType = { if (laidOut[it] is GalleryRow.Heading) "date" else "media" }) { index ->
-                when (val row = laidOut[index]) {
+            // One snapshot of the layout for count, keys and content, so a newer
+            // layout never meets an older count during measurement.
+            val shown = layout
+            if (shown != null) items(count = shown.rows.size, key = { shown.rows[it].key }, contentType = { if (shown.rows[it] is GalleryRow.Heading) "date" else "media" }) { index ->
+                when (val row = shown.rows[index]) {
                     is GalleryRow.Heading -> Text(row.label, style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = if (index == 0) 8.dp else 20.dp, bottom = 8.dp))
                     is GalleryRow.Media -> Row(
                         Modifier.fillMaxWidth().height(with(density) { row.height.toDp() }),
                         horizontalArrangement = Arrangement.spacedBy(with(density) { gapPx.toDp() }),
                     ) {
-                        for (tile in row.tiles) {
-                            // Touch the current Paging index only while this row is visible.
-                            // Snapshot replacement can briefly outrun the background layout.
-                            val current = if (tile.index < photos.itemCount) photos[tile.index] else null
-                            key(tile.item.id) {
-                                val shown = current?.takeIf { it.id == tile.item.id } ?: tile.item
-                                MediaTile(shown, thumbnails,
-                                    onClick = { if (selection.isNotEmpty() && onLongPress != null) onLongPress(shown) else onOpen(shown) },
-                                    modifier = Modifier.width(with(density) { tile.width.toDp() }).fillMaxHeight(),
-                                    selected = if (selection.isEmpty()) null else shown.id in selection,
-                                    onLongClick = onLongPress?.let { { it(shown) } })
+                        for (offset in row.widths.indices) {
+                            val position = row.start + offset
+                            key(shown.outline.ids[position]) {
+                                val tile = Modifier.width(with(density) { row.widths[offset].toDp() }).fillMaxHeight()
+                                val item = shown.outline.item(position)
+                                if (item == null) Box(tile.background(MaterialTheme.colorScheme.surfaceContainerHigh))
+                                else MediaTile(item, thumbnails,
+                                    onClick = { if (selection.isNotEmpty() && onLongPress != null) onLongPress(item) else onOpen(position, item) },
+                                    modifier = tile,
+                                    selected = if (selection.isEmpty()) null else item.id in selection,
+                                    onLongClick = onLongPress?.let { { it(item) } }, private = private)
                             }
                         }
                     }
                 }
             }
             if (failed) item(key = "layout-error") { PageRetry { retry++ } }
-            if (photos.loadState.append is LoadState.Error || photos.loadState.refresh is LoadState.Error) item(key = "append-error") { PageRetry(photos::retry) }
-            if ((photos.loadState.refresh is LoadState.Loading && rows.isEmpty() && shownAlbums.isEmpty()) || photos.loadState.append is LoadState.Loading) item(key = "loading") {
+            if (outline == null || (layout == null && outline.count > 0)) item(key = "loading") {
                 Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) { ActivityBar(Activity("Loading"), Modifier.width(96.dp)) }
             }
         }
     }
 }
+
+/** Rows read ahead of the scroll: about two screens at the default size. */
+private const val AHEAD_ROWS = 12
 
 fun albumCaption(album: FolderAlbum): String = buildList {
     if (album.directItems > 0uL || album.childAlbums == 0uL) add(if (album.directItems == 1uL) "1 item" else "${album.directItems} items")
@@ -276,7 +335,7 @@ fun albumCaption(album: FolderAlbum): String = buildList {
 @Composable
 private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cover = album.cover
-    val bitmap by produceState<android.graphics.Bitmap?>(null, cover?.id, cover?.revision, loader) { value = cover?.let { loader.load(it) } }
+    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, loader) { if (value == null) value = cover?.let { loader.load(it, album.hidden) } }
     Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
         .semantics(mergeDescendants = true) { contentDescription = "Album ${album.name}, ${albumCaption(album)}" }) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {

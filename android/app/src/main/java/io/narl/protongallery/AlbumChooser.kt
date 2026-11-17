@@ -87,7 +87,7 @@ fun AlbumChooserSheet(
 @Composable
 fun AlbumThumb(album: FolderAlbum, loader: ThumbnailLoader, modifier: Modifier = Modifier) {
     val cover = album.cover
-    val bitmap by produceState<android.graphics.Bitmap?>(null, cover?.id, cover?.revision, loader) { value = cover?.let { loader.load(it) } }
+    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, loader) { if (value == null) value = cover?.let { loader.load(it, album.hidden) } }
     Box(modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
         val shown = bitmap
         if (shown != null) Image(shown.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

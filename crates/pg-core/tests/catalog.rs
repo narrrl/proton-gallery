@@ -199,6 +199,7 @@ async fn version_six_catalog_lists_existing_photos_for_the_picker() {
             revision: None,
             size_bytes: Some(1),
             sort_time: index as i64,
+            favorite: false,
         };
         conn.execute(
             "INSERT INTO assets(account,volume,node,sort_time,payload) VALUES (?1,?2,?3,?4,?5)",

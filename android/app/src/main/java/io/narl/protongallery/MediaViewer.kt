@@ -21,6 +21,9 @@ import io.narl.protongallery.icons.*
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -58,56 +61,90 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** What the viewer offers for the photo on screen; `null` hides an action. */
+class ViewerActions(
+    val delete: ((GalleryItem) -> Unit)? = null,
+    val backUp: ((GalleryItem) -> Unit)? = null,
+    val addToAlbum: ((GalleryItem) -> Unit)? = null,
+    val favorite: ((GalleryItem) -> Unit)? = null,
+)
+
 /**
- * Viewer keeps a stable snapshot of the bounded, loaded gallery window. A tap
- * shows or hides the bars, and with them the system bars, so the photo can
- * fill the screen.
+ * Swipes through the whole view: the outline the photo was opened from, with
+ * records loading as pages come up. A tap shows or hides the bars, and with
+ * them the system bars, so the photo can fill the screen.
  */
 @Composable
-fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit,
-    onDelete: (GalleryItem) -> Unit = {}) {
-    val pager = rememberPagerState(initialPage = initial) { items.size }
+fun MediaViewer(outline: GalleryOutline, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit,
+    actions: ViewerActions = ViewerActions(), private: Boolean = false) {
+    val pager = rememberPagerState(initialPage = initial.coerceIn(0, maxOf(0, outline.count - 1))) { outline.count }
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
+    var more by remember { mutableStateOf(false) }
     var chrome by rememberSaveable { mutableStateOf(true) }
     var loading by remember { mutableStateOf(false) }
-    val current = items[pager.currentPage]
+    val current = outline.item(pager.currentPage)
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         SystemBars(chrome)
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            HorizontalPager(state = pager, key = { items[it].id }, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()) { index ->
-                val item = items[index]
+            HorizontalPager(state = pager, key = { outline.ids[it] }, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()) { index ->
+                val item = outline.item(index) ?: return@HorizontalPager
                 val active = index == pager.currentPage
-                if (item.isVideo && active) VideoPlayer(item, media, onLoading = { loading = it }) { chrome = it }
-                else ZoomablePhoto(item, thumbnails, media, active, onZoom = { zoomed = it }, onTap = { chrome = !chrome },
+                if (item.isVideo && active) VideoPlayer(item, media, private, onLoading = { loading = it }) { chrome = it }
+                else ZoomablePhoto(item, thumbnails, media, active, private, onZoom = { zoomed = it }, onTap = { chrome = !chrome },
                     onLoading = { if (active) loading = it })
             }
             AnimatedVisibility(chrome, Modifier.align(Alignment.TopCenter), enter = fadeIn(), exit = fadeOut()) {
                 Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).statusBarsPadding()) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to gallery", tint = Color.White) }
-                        Text("${pager.currentPage + 1} / ${items.size}", color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).padding(start = 8.dp))
-                        IconButton(onClick = { media.share(listOf(current)) }) { Icon(Icons.Outlined.Share, "Share", tint = Color.White) }
-                        IconButton(onClick = { info = !info }) { Icon(Icons.Outlined.Info, "Photo details", tint = Color.White) }
-                        if (current.deletable) IconButton(onClick = { onDelete(current) }) { Icon(Icons.Outlined.Delete, "Delete", tint = Color.White) }
+                        Text("${pager.currentPage + 1} / ${outline.count}", color = Color.White, style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                        if (current != null) {
+                            actions.favorite?.let { favorite ->
+                                IconButton(onClick = { favorite(current) }) {
+                                    Icon(if (current.favorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                        if (current.favorite) "Remove from favorites" else "Add to favorites", tint = Color.White)
+                                }
+                            }
+                            IconButton(onClick = { media.share(listOf(current)) }) { Icon(Icons.Outlined.Share, "Share", tint = Color.White) }
+                            val backUp = actions.backUp
+                            val addToAlbum = actions.addToAlbum
+                            if (backUp != null && current.phoneId != null && !current.backedUp) IconButton(onClick = { backUp(current) }) {
+                                Icon(Icons.Outlined.CloudUpload, "Back up", tint = Color.White)
+                            } else if (addToAlbum != null && current.inProton) IconButton(onClick = { addToAlbum(current) }) {
+                                Icon(Icons.Outlined.LibraryAdd, "Add to album", tint = Color.White)
+                            }
+                            Box {
+                                IconButton(onClick = { more = true }) { Icon(Icons.Outlined.MoreVert, "More options", tint = Color.White) }
+                                DropdownMenu(more, onDismissRequest = { more = false }) {
+                                    DropdownMenuItem(text = { Text(if (info) "Hide details" else "Details") }, leadingIcon = { Icon(Icons.Outlined.Info, null) },
+                                        onClick = { more = false; info = !info })
+                                    val delete = actions.delete
+                                    if (delete != null && current.deletable) DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                        onClick = { more = false; delete(current) })
+                                }
+                            }
+                        }
                     }
                     // The full-resolution photo replaces the preview when it is ready.
                     ActivityBar(if (loading) Activity("Loading the full photo") else null, color = Color.White)
                 }
             }
-            AnimatedVisibility(chrome && (!current.isVideo || info), Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(current != null && chrome && (!current.isVideo || info), Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
+                val shown = current ?: return@AnimatedVisibility
                 Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).navigationBarsPadding().padding(24.dp)) {
-                    Text(current.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(shown.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (current.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
+                        Icon(if (shown.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
                         Text(when {
-                            current.phoneId != null && current.backedUp -> "On this phone and in Proton Photos"
-                            current.phoneId != null -> "Only on this phone, not backed up yet"
-                            current.localPath.isNotEmpty() -> "Available on this device"
+                            shown.phoneId != null && shown.backedUp -> "On this phone and in Proton Photos"
+                            shown.phoneId != null -> "Only on this phone, not backed up yet"
+                            shown.localPath.isNotEmpty() -> "Available on this device"
                             else -> "In Proton Photos"
                         }, color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
                     }
-                    if (info) Text("${Formatter.formatFileSize(LocalContext.current, current.sizeBytes.toLong())}\nAdded ${galleryDate(current.sortTime)}", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                    if (info) Text("${Formatter.formatFileSize(LocalContext.current, shown.sizeBytes.toLong())}\nAdded ${galleryDate(shown.sortTime)}", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
                 }
             }
         }
@@ -128,14 +165,14 @@ private fun SystemBars(visible: Boolean) {
 }
 
 @Composable
-private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, media: MediaActions, active: Boolean, onZoom: (Boolean) -> Unit,
+private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, media: MediaActions, active: Boolean, private: Boolean, onZoom: (Boolean) -> Unit,
     onTap: () -> Unit, onLoading: (Boolean) -> Unit) {
     var scale by remember(item.id) { mutableFloatStateOf(1f) }
     var offset by remember(item.id) { mutableStateOf(Offset.Zero) }
     var failed by remember(item.id) { mutableStateOf(false) }
     val context = LocalContext.current
-    val bitmap by produceState<Bitmap?>(null, item.id, active) {
-        value = loader.load(item)
+    val bitmap by produceState(loader.peek(item), item.id, active) {
+        if (value == null) value = loader.load(item, private)
         val phone = PhoneLibrary.uri(item)
         if (active && !item.isVideo) {
             onLoading(true)
@@ -181,7 +218,7 @@ private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, media: Med
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
-private fun VideoPlayer(item: GalleryItem, media: MediaActions, onLoading: (Boolean) -> Unit, onControls: (Boolean) -> Unit) {
+private fun VideoPlayer(item: GalleryItem, media: MediaActions, private: Boolean, onLoading: (Boolean) -> Unit, onControls: (Boolean) -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var failed by remember(item.id) { mutableStateOf(false) }
@@ -197,7 +234,7 @@ private fun VideoPlayer(item: GalleryItem, media: MediaActions, onLoading: (Bool
     LaunchedEffect(player) {
         val source = PhoneLibrary.uri(item) ?: item.localPath.takeIf { it.isNotEmpty() }?.let { Uri.fromFile(File(it)) } ?: run {
             onLoading(true)
-            try { media.original(item)?.let(Uri::fromFile) }
+            try { media.original(item, private)?.let(Uri::fromFile) }
             catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { null }
             finally { onLoading(false) }
