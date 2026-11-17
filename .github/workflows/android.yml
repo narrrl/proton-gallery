@@ -1,0 +1,100 @@
+# Checks every push and pull request. A version tag (v1.2.3) also builds the
+# release APK, signed with the release key from repository secrets, and
+# attaches it to a GitHub release.
+#
+# Secrets for releases (Settings > Secrets and variables > Actions):
+#   RELEASE_KEYSTORE_BASE64  base64 of release.p12 (base64 -w0 release.p12)
+#   RELEASE_STORE_PASSWORD   store_password from release.json
+#   RELEASE_KEY_PASSWORD     key_password from release.json
+#   RELEASE_KEY_ALIAS        alias from release.json
+name: Android
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  NDK_VERSION: 30.0.16248370
+  BUILD_TOOLS: 37.0.0
+  CARGO_NDK_VERSION: 4.1.2
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust checks
+        run: bash scripts/check.sh
+
+  android:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: android-actions/setup-android@v3
+      - name: Android SDK packages
+        run: sdkmanager --install "ndk;${NDK_VERSION}" "build-tools;${BUILD_TOOLS}" "platforms;android-36"
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --version "${CARGO_NDK_VERSION}" --locked
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests and lint
+        run: android/gradlew -p android --no-daemon testDebugUnitTest lintDebug
+      - name: Release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          PG_ANDROID_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          PG_ANDROID_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          PG_ANDROID_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          keystore="$RUNNER_TEMP/release.p12"
+          (umask 077 && printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$keystore")
+          unset RELEASE_KEYSTORE_BASE64
+          PG_ANDROID_KEYSTORE="$keystore" android/gradlew -p android --no-daemon --no-configuration-cache \
+            assembleRelease lintRelease
+          rm -f "$keystore"
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner" verify --print-certs "$apk" | grep -v -i "password"
+          cp "$apk" "proton-gallery-${GITHUB_REF_NAME}.apk"
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: proton-gallery-apk
+          path: proton-gallery-*.apk
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: proton-gallery-apk
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

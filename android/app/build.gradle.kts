@@ -29,8 +29,10 @@ android {
         java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
         jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
     }
+    // Keys stay outside the checkout: scripts/build-signed-android.py and CI
+    // pass them in the environment. Without them, these builds are unsigned.
     signingConfigs {
-        create("deviceTesting") {
+        create("fromEnvironment") {
             providers.environmentVariable("PG_ANDROID_KEYSTORE").orNull?.let { storeFile = file(it) }
             storePassword = providers.environmentVariable("PG_ANDROID_STORE_PASSWORD").orNull
             keyAlias = providers.environmentVariable("PG_ANDROID_KEY_ALIAS").orNull
@@ -44,10 +46,11 @@ android {
             applicationIdSuffix = ".testing"
             versionNameSuffix = "-testing"
             resValue("string", "app_name", "Proton Gallery Testing")
-            signingConfig = signingConfigs.getByName("deviceTesting")
+            signingConfig = signingConfigs.getByName("fromEnvironment")
             matchingFallbacks += listOf("debug")
         }
         release {
+            if (providers.environmentVariable("PG_ANDROID_KEYSTORE").isPresent) signingConfig = signingConfigs.getByName("fromEnvironment")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
