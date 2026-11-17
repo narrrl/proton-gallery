@@ -87,6 +87,16 @@ pub struct PhoneLink {
     pub backed_up: bool,
 }
 
+/// A phone item whose Proton copy is known, see [`Catalog::freeable`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FreeableMedia {
+    pub id: String,
+    pub is_video: bool,
+    pub name: String,
+    pub sha1: String,
+    pub size_bytes: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhoneEntry {
     pub id: String,
@@ -109,12 +119,12 @@ const VISIBLE: &str = "(m.source=?1 OR (m.source='phone' AND NOT EXISTS(
     SELECT 1 FROM phone_backup b WHERE b.account=?2 AND b.node=m.node AND (
         (b.state='backed_up' AND EXISTS(SELECT 1 FROM memberships r
             WHERE r.source=?1 AND r.account=?2 AND r.volume=b.remote_volume AND r.node=b.remote_node))
-        OR (b.state='maybe' AND EXISTS(SELECT 1 FROM assets x JOIN memberships r USING(account,volume,node)
-            WHERE x.sort_name=a.sort_name AND r.source=?1))))
+        OR (b.state='maybe' AND EXISTS(SELECT 1 FROM memberships r
+            WHERE r.source=?1 AND r.sort_name=m.sort_name))))
     AND NOT (?2 IS NOT NULL
         AND NOT EXISTS(SELECT 1 FROM phone_backup b WHERE b.account=?2 AND b.node=m.node)
-        AND EXISTS(SELECT 1 FROM assets x JOIN memberships r USING(account,volume,node)
-            WHERE x.sort_name=a.sort_name AND r.source=?1))))";
+        AND EXISTS(SELECT 1 FROM memberships r
+            WHERE r.source=?1 AND r.sort_name=m.sort_name))))";
 
 fn state(row: Option<(String, Option<String>, Option<String>)>) -> Result<BackupState> {
     Ok(match row {
@@ -175,11 +185,11 @@ impl Catalog {
             let tx = conn.transaction()?;
             {
                 let mut known = tx.prepare_cached("SELECT modified,size_bytes FROM phone_media WHERE node=?1")?;
-                let mut keep = tx.prepare_cached("UPDATE phone_media SET folder=?2,folder_name=?3,favorite=?4,scan=?5 WHERE node=?1")?;
+                let mut keep = tx.prepare_cached("UPDATE phone_media SET folder=?2,folder_name=?3,favorite=?4,scan=max(scan,?5) WHERE node=?1")?;
                 let mut replace = tx.prepare_cached(
                     "INSERT INTO phone_media(node,folder,folder_name,modified,size_bytes,favorite,sha1,scan) VALUES (?1,?2,?3,?4,?5,?6,NULL,?7)
                      ON CONFLICT(node) DO UPDATE SET folder=excluded.folder,folder_name=excluded.folder_name,modified=excluded.modified,
-                     size_bytes=excluded.size_bytes,favorite=excluded.favorite,sha1=NULL,scan=excluded.scan")?;
+                     size_bytes=excluded.size_bytes,favorite=excluded.favorite,sha1=NULL,scan=max(scan,excluded.scan)")?;
                 let mut forget = tx.prepare_cached("DELETE FROM phone_backup WHERE node=?1")?;
                 let mut assets = tx.prepare_cached(
                     "INSERT INTO assets(account,volume,node,sort_time,payload) VALUES (?1,?2,?3,?4,?5)
@@ -211,11 +221,13 @@ impl Catalog {
     }
 
     /// End a complete scan: forget files it did not see. Returns how many.
+    /// Only older scans count: a later scan that overlapped this one has
+    /// seen its files already, and their comparison results must survive.
     pub async fn phone_finish(&self, scan: i64) -> Result<u64> {
         self.run(move |conn| {
             let tx = conn.transaction()?;
             let gone: Vec<String> = {
-                let mut query = tx.prepare("SELECT node FROM phone_media WHERE scan<>?1")?;
+                let mut query = tx.prepare("SELECT node FROM phone_media WHERE scan<?1")?;
                 query
                     .query_map([scan], |r| r.get(0))?
                     .collect::<rusqlite::Result<_>>()?
@@ -276,6 +288,42 @@ impl Catalog {
                 conn.execute("DELETE FROM backup_folders WHERE folder=?1", [folder])?;
             }
             Ok(())
+        })
+        .await
+    }
+
+    /// How many phone items still need comparing with `account`: never
+    /// compared, or same-named and waiting for their contents.
+    pub async fn phone_remaining(&self, account: AccountId) -> Result<u64> {
+        self.run(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT count(*) FROM phone_media p LEFT JOIN phone_backup b ON b.account=?1 AND b.node=p.node
+                 WHERE b.node IS NULL OR b.state='maybe'",
+                [account.as_str()],
+                |r| r.get(0),
+            )?;
+            Ok(count as u64)
+        })
+        .await
+    }
+
+    /// Items found missing by name alone whose name has since appeared in
+    /// `source` (another app may have uploaded them): compare them again.
+    /// Items whose contents were compared keep their result. Returns how many.
+    pub async fn phone_recheck_new_names(
+        &self,
+        account: AccountId,
+        source: SourceId,
+    ) -> Result<u64> {
+        self.run(move |conn| {
+            let changed = conn.execute(
+                "DELETE FROM phone_backup WHERE account=?1 AND state='missing' AND node IN (
+                    SELECT p.node FROM phone_media p
+                    JOIN assets a ON a.account='phone' AND a.volume='media' AND a.node=p.node
+                    WHERE p.sha1 IS NULL AND EXISTS(SELECT 1 FROM memberships r WHERE r.source=?2 AND r.sort_name=a.sort_name))",
+                params![account.as_str(), source.as_str()],
+            )?;
+            Ok(changed as u64)
         })
         .await
     }
@@ -491,6 +539,41 @@ impl Catalog {
                  ORDER BY a.sort_time DESC LIMIT ?2",
             )?;
             let rows = query.query_map(params![account.as_str(), limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    /// Backed-up phone items that may leave the phone: their Proton copy is
+    /// in the synced Photos `source`, their contents hash is known, and they
+    /// were taken before `before` (seconds). Oldest first:
+    /// `(id, is_video, name, sha1, size_bytes)`.
+    pub async fn freeable(
+        &self,
+        account: AccountId,
+        source: SourceId,
+        before: i64,
+    ) -> Result<Vec<FreeableMedia>> {
+        self.run(move |conn| {
+            let mut query = conn.prepare_cached(
+                "SELECT p.node,json_extract(a.payload,'$.kind')='video',json_extract(a.payload,'$.name'),p.sha1,p.size_bytes
+                 FROM phone_media p
+                 JOIN phone_backup b ON b.account=?1 AND b.node=p.node AND b.state='backed_up'
+                 JOIN assets a ON a.account='phone' AND a.volume='media' AND a.node=p.node
+                 WHERE p.sha1 IS NOT NULL AND a.sort_time<?3
+                   AND EXISTS(SELECT 1 FROM memberships r WHERE r.source=?2 AND r.account=?1
+                       AND r.volume=b.remote_volume AND r.node=b.remote_node)
+                 ORDER BY a.sort_time",
+            )?;
+            let rows = query.query_map(params![account.as_str(), source.as_str(), before], |r| {
+                Ok(FreeableMedia {
+                    id: r.get(0)?,
+                    is_video: r.get(1)?,
+                    name: r.get(2)?,
+                    sha1: r.get(3)?,
+                    size_bytes: r.get::<_, i64>(4)? as u64,
+                })
+            })?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
         .await

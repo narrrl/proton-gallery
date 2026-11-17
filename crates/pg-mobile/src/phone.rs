@@ -59,6 +59,13 @@ fn refs(items: Vec<(String, bool)>) -> Vec<PhoneRef> {
         .collect()
 }
 
+/// What freeing up space would remove from the phone.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct FreeUpSummary {
+    pub count: u64,
+    pub bytes: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum UploadOutcome {
     Uploaded,
@@ -190,6 +197,71 @@ impl GalleryEngine {
             .block_on(self.catalog.phone_set_hashes(hashes))?)
     }
 
+    /// How many phone items still need comparing with Proton Photos.
+    pub fn backup_remaining(&self) -> Result<u64, GalleryError> {
+        let Some(account) = self.auth.account_id() else {
+            return Ok(0);
+        };
+        Ok(self
+            .runtime
+            .block_on(self.catalog.phone_remaining(account))?)
+    }
+
+    /// Phone items older than `keep_days` whose Proton copy is known.
+    /// Nothing is checked with Proton here; see [`Self::free_up_verified`].
+    pub fn free_up_summary(&self, keep_days: u32) -> Result<FreeUpSummary, GalleryError> {
+        self.runtime.block_on(async {
+            let items = self.freeable(keep_days).await?;
+            Ok(FreeUpSummary {
+                count: items.len() as u64,
+                bytes: items.iter().map(|i| i.size_bytes).sum(),
+            })
+        })
+    }
+
+    /// The phone items that may be deleted now: each one's exact contents
+    /// (name and SHA-1) are confirmed in Proton Photos again, right before
+    /// the host asks the user to delete them.
+    pub fn free_up_verified(&self, keep_days: u32) -> Result<Vec<PhoneRef>, GalleryError> {
+        self.runtime.block_on(async {
+            let account = self.auth.account().await?;
+            let photos = ProtonPhotosClient::from_drive_client(account.drive.clone());
+            let items = self.freeable(keep_days).await?;
+            let work = async {
+                let mut confirmed = Vec::with_capacity(items.len());
+                for batch in items.chunks(150) {
+                    let query: Vec<(String, String)> = batch
+                        .iter()
+                        .map(|i| (i.name.clone(), i.sha1.clone()))
+                        .collect();
+                    let found = photos
+                        .find_duplicates_many(&query)
+                        .await
+                        .map_err(remote_failure("confirm your backups with Proton Photos"))?;
+                    if found.len() != batch.len() {
+                        return Err(GalleryError::Operation {
+                            detail: "Proton Photos gave an incomplete answer. Nothing was deleted."
+                                .into(),
+                        });
+                    }
+                    for (item, matches) in batch.iter().zip(found) {
+                        if !matches.is_empty() {
+                            confirmed.push(PhoneRef {
+                                id: item.id.clone(),
+                                is_video: item.is_video,
+                            });
+                        }
+                    }
+                }
+                Ok(confirmed)
+            };
+            tokio::select! { biased;
+                _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+                result = work => result,
+            }
+        })
+    }
+
     /// One round of comparing phone media with Proton Photos. Names are
     /// compared first; only same-named files need their contents hashed.
     /// Returns the phone items to hash before the next round; empty when done.
@@ -200,6 +272,11 @@ impl GalleryEngine {
             let photos = ProtonPhotosClient::from_drive_client(account.drive.clone());
             let id = account.id.clone();
             let work = async {
+                if let Some(source) = self.photo_source().await? {
+                    self.catalog
+                        .phone_recheck_new_names(id.clone(), source)
+                        .await?;
+                }
                 loop {
                     let unchecked = self
                         .catalog
@@ -388,6 +465,18 @@ impl GalleryEngine {
 }
 
 impl GalleryEngine {
+    async fn freeable(&self, keep_days: u32) -> Result<Vec<core::FreeableMedia>, GalleryError> {
+        let (Some(account), Some(source)) = (self.auth.account_id(), self.photo_source().await?)
+        else {
+            return Ok(vec![]);
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let before = now - i64::from(keep_days.min(36_500)) * 86_400;
+        Ok(self.catalog.freeable(account, source, before).await?)
+    }
+
     /// Remember the Proton copy, and show it in the timeline right away.
     async fn after_upload(
         &self,

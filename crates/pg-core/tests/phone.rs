@@ -335,3 +335,147 @@ async fn the_merged_timeline_pages_both_ways_without_gaps() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn overlapping_scans_keep_what_was_already_compared() {
+    let (catalog, _) = setup().await;
+    catalog
+        .phone_upsert(1, vec![media("1", "a.jpg", 10), media("2", "b.jpg", 20)])
+        .await
+        .unwrap();
+    catalog.phone_finish(1).await.unwrap();
+    catalog
+        .phone_mark(
+            account(),
+            vec![
+                ("1".into(), BackupState::Missing),
+                ("2".into(), BackupState::Missing),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog.phone_remaining(account()).await.unwrap(), 0);
+
+    // Scan 3 starts while scan 2 is still running and finishes first.
+    catalog
+        .phone_upsert(3, vec![media("1", "a.jpg", 10), media("2", "b.jpg", 20)])
+        .await
+        .unwrap();
+    catalog
+        .phone_upsert(2, vec![media("1", "a.jpg", 10)])
+        .await
+        .unwrap();
+    assert_eq!(catalog.phone_finish(3).await.unwrap(), 0);
+    catalog
+        .phone_upsert(2, vec![media("2", "b.jpg", 20)])
+        .await
+        .unwrap();
+    assert_eq!(catalog.phone_finish(2).await.unwrap(), 0);
+    assert_eq!(catalog.phone_remaining(account()).await.unwrap(), 0);
+    assert_eq!(
+        catalog.phone_unchecked(account(), 10).await.unwrap(),
+        vec![]
+    );
+}
+
+#[tokio::test]
+async fn a_name_that_appears_in_proton_later_is_compared_again() {
+    let (catalog, photos) = setup().await;
+    catalog
+        .phone_upsert(1, vec![media("1", "a.jpg", 10), media("2", "b.jpg", 20)])
+        .await
+        .unwrap();
+    catalog.phone_finish(1).await.unwrap();
+    catalog
+        .phone_mark(
+            account(),
+            vec![
+                ("1".into(), BackupState::Missing),
+                ("2".into(), BackupState::Missing),
+            ],
+        )
+        .await
+        .unwrap();
+    // Item 2's contents were compared: a different photo had its name.
+    catalog
+        .phone_set_hashes(vec![("2".into(), "b".repeat(40))])
+        .await
+        .unwrap();
+    catalog
+        .add_to_source(photos.clone(), remote("r1", "A.JPG", 10))
+        .await
+        .unwrap();
+    catalog
+        .add_to_source(photos.clone(), remote("r2", "b.jpg", 20))
+        .await
+        .unwrap();
+    assert_eq!(
+        catalog
+            .phone_recheck_new_names(account(), photos)
+            .await
+            .unwrap(),
+        1
+    );
+    let unchecked = catalog.phone_unchecked(account(), 10).await.unwrap();
+    assert_eq!(unchecked, vec![("1".to_string(), "a.jpg".to_string())]);
+    assert_eq!(catalog.phone_remaining(account()).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn only_verified_older_backups_may_leave_the_phone() {
+    let (catalog, photos) = setup().await;
+    catalog
+        .phone_upsert(
+            1,
+            vec![
+                media("1", "old.jpg", 10),
+                media("2", "new.jpg", 500),
+                media("3", "unhashed.jpg", 20),
+                media("4", "gone.jpg", 30),
+            ],
+        )
+        .await
+        .unwrap();
+    catalog.phone_finish(1).await.unwrap();
+    let hash = "a".repeat(40);
+    catalog
+        .phone_set_hashes(vec![
+            ("1".into(), hash.clone()),
+            ("2".into(), hash.clone()),
+            ("4".into(), hash.clone()),
+        ])
+        .await
+        .unwrap();
+    let copy = |node: &str| BackupState::BackedUp {
+        volume: VolumeId::new("photos-volume").unwrap(),
+        node: NodeId::new(node).unwrap(),
+    };
+    catalog
+        .phone_mark(
+            account(),
+            vec![
+                ("1".into(), copy("r1")),
+                ("2".into(), copy("r2")),
+                ("3".into(), copy("r3")),
+                ("4".into(), copy("r4")),
+            ],
+        )
+        .await
+        .unwrap();
+    for (node, name, time) in [
+        ("r1", "old.jpg", 10),
+        ("r2", "new.jpg", 500),
+        ("r3", "unhashed.jpg", 20),
+    ] {
+        catalog
+            .add_to_source(photos.clone(), remote(node, name, time))
+            .await
+            .unwrap();
+    }
+    // r4 is not in the synced Photos library, so its phone copy stays.
+    let freeable = catalog.freeable(account(), photos, 100).await.unwrap();
+    let ids: Vec<_> = freeable.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, ["1"]);
+    assert_eq!(freeable[0].sha1, hash);
+    assert_eq!(freeable[0].size_bytes, 1000);
+}

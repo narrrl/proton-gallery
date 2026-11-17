@@ -14,6 +14,7 @@ mod albums;
 mod android_tls;
 mod authentication;
 mod diagnostics;
+mod originals;
 mod phone;
 
 use pg_core::catalog::Catalog;
