@@ -5,11 +5,11 @@ Kotlin/Compose calls `pg-mobile` through generated UniFFI bindings. Rust owns th
 ## Implemented experience
 
 - One slim top bar holds a **Photos | Drive** switch (the screen title and the navigation in one control) and the account button. It slides away while scrolling down and returns on the way up. Inside an album or the device library it shows back, the title, and that place's action (edit album, add photos).
-- **Photos** is the default and queries only the normal Proton Photos source.
+- **Photos** is the default: one timeline of Proton Photos and the photos and videos on this phone. A photo that is in both shows once (the Proton copy, previewed from the phone file). Media only on the phone carries a crossed-out cloud. Long-press selects; **Back up** uploads the selected phone-only items.
 - **Drive** reads selected gallery roots and nested folder albums from the Rust catalog. An album shows its item and album counts, description and tags above its albums and media.
 - A shared Rust smart grid lays out portraits and landscapes in justified, edge-to-edge rows with 2dp gaps and square corners. Pinch with two fingers to zoom (target row height 48–240dp, default 120dp, saved). Headings follow the zoom like the Linux app: days for large tiles, months below 104dp, years below 64dp. The first visible photo stays in view while zooming.
 - Pull down to refresh Photos, or the Drive gallery on screen. The account button shows a ring while anything is being read.
-- The account button opens one sheet: account, refresh, **On this device**, and theme (device, light, dark). On this device keeps its system picker, private copies, local photo zoom/swipe, and Media3 playback.
+- The account button opens one sheet: account, refresh, **Backup**, and theme (device, light, dark). Backup chooses phone folders to upload automatically, with Wi‑Fi-only (default) and charging-only conditions.
 - Native adaptive and monochrome launcher icons accompany the SVG/PNG mark.
 
 Native sign-in supports SRP passwords, authenticator codes, separate mailbox passwords, and Proton-hosted CAPTCHA. Sessions resume without a network round trip; Photos sync starts separately. Android Keystore protects the token/derived-key blob with AES-256-GCM and atomic writes under `noBackupFilesDir`. Login/mailbox passwords are not persisted. Sign-out cancels work, clears the saved session, hides that account’s catalog, drops remote preview caches, and attempts server revocation with a short timeout. Imported device media remains available.
@@ -17,6 +17,16 @@ Native sign-in supports SRP passwords, authenticator codes, separate mailbox pas
 Android can sync normal Proton Photos and load small server thumbnails without originals. The SDK still enumerates timeline IDs before returning metadata pages; each committed page becomes queryable while later pages decrypt. A persistent encrypted remote preview cache, original viewing, and range-backed remote video playback remain unfinished. Remote items are not marked available offline. The app requests Internet access with cleartext traffic disabled.
 
 The sign-in dialog blocks screenshots and keeps password/code input out of saved instance state. Proton CAPTCHA runs separately from credential input, with origin-scoped WebView messaging limited to `https://verify.proton.me`. Security-key-only accounts and email/SMS verification are reported as unsupported. An invalid authenticator attempt restarts sign-in because Proton may consume its pending session.
+
+### Phone library and backup
+
+The app reads the system media index (`READ_MEDIA_IMAGES`/`READ_MEDIA_VIDEO`, or Android 14's selected-photos access) and passes metadata in batches of 500 to the Rust catalog (schema v6: `phone_media`, `phone_backup`, `backup_folders`). Files are never copied; thumbnails come from `ContentResolver.loadThumbnail`, originals and videos from content URIs. A complete scan forgets media the phone no longer has; an interrupted scan removes nothing. Rescans run on start, on return to the app, and two seconds after the media store reports a change.
+
+Matching with Proton Photos uses the SDK's duplicate check, like the Proton Drive Linux takeout import: one name-collision request per batch of names, then the plaintext SHA-1 of only the same-named files (`find_duplicates_many`). Until a same-named file is compared it stays hidden behind the Proton photo of that name, so a backed-up library never shows every photo twice during the first check. A changed file is compared again.
+
+Uploads (`upload_phone`) hash the file, skip it when Proton already holds the same photo, and pick a free name such as `IMG_1 (1).jpg` when a different photo has the same name. They send a 512 px, at most 60 KB JPEG thumbnail, the capture date, video and screenshot tags and the favorite mark. The file streams to Rust in 256 KB chunks. Uploaded photos appear in the timeline immediately. WorkManager runs backups: every six hours, shortly after new media appears, on **Back up now**, and for selections (any network). A notification shows progress and can pause. One backup runs at a time per process; the screens and the worker share one engine.
+
+Nothing is deleted from the phone yet. Freeing up space comes next and will only remove photos verified as backed up.
 
 Device dates mean **added to this app**. Photos chronology uses the server's capture date; ordinary Drive currently uses remote modification time. Identical device bytes deduplicate, and reimport repairs the stored copy while preserving its original title/date. Unsupported images can import but fail to decode; viewing reports that failure.
 
@@ -153,7 +163,9 @@ The helper also accepts `--signing-config /path/to/private/profile.json`. Its pr
 
 Output: `android/app/build/outputs/apk/device/app-device.apk`. The launcher label is **Proton Gallery Testing**, package `io.narl.protongallery.testing`, so it can coexist with the ordinary development package. This is a debug-based development build, not an optimized production release. The default includes arm64-v8a and x86_64; `--abis arm64-v8a` produces a smaller phone-only update. Android 12/API 31 or later is required.
 
-Keep the keystore and profile together to sign future updates with the same certificate. For local viewing tests, open the account button → On this device → Choose photos. The main Photos/Drive structure remains separate. Use Photos → Sign in to Proton to connect your account.
+Keep the keystore and profile together to sign future updates with the same certificate. Use Photos → Allow access to see the phone's photos, and Sign in to Proton to connect your account.
+
+A separate release key, `~/Keys/proton-gallery/release.p12` with profile `release.json` (alias `proton-gallery-release`, RSA 4096, valid until 2054, both mode 600), is meant for the CI release pipeline. Never use it for testing builds, and keep a backup: an app signed with it can only be updated with the same key. For CI, store the base64 of the keystore and the two passwords as repository secrets.
 
 ## Isolated device checks
 

@@ -13,6 +13,11 @@ import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.AlbumTag
 import io.narl.protongallery.bridge.DriveFolder
+import io.narl.protongallery.bridge.PhoneFolder
+import io.narl.protongallery.bridge.PhoneRef
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.SupervisorJob
@@ -53,6 +58,22 @@ data class ChooserState(
     val loading: Boolean = false,
     val error: String? = null,
 )
+
+/** The phone library and its backup, as the screens show them. */
+data class BackupState(
+    /** The app may read the phone's photos. */
+    val access: Boolean = true,
+    /** Only photos the user picked are shared with the app. */
+    val partial: Boolean = false,
+    val folders: List<PhoneFolder> = emptyList(),
+    val wifiOnly: Boolean = true,
+    val chargingOnly: Boolean = false,
+    /** Comparing the phone with Proton Photos in the foreground. */
+    val checking: Boolean = false,
+    val progress: BackupProgress = BackupProgress(),
+) {
+    val automatic get() = folders.any { it.backup }
+}
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
@@ -112,6 +133,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     navigate(GalleryLocation())
                     mutableState.update { it.copy(revision = it.revision + 1) }
                     syncPhotos()
+                    refreshPhone(scan = false)
                 }
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
@@ -155,6 +177,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 repo.syncPhotos()
                 refreshDetails(repo)
+                refreshPhone(scan = false)
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
                 report(error, "Couldn’t refresh Proton Photos. Your cached library is available. Check your connection or sign in again.")
@@ -397,25 +420,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    init { open() }
-
     fun open() {
         if (repository.value != null || opening) return
         opening = true
         mutableState.update { it.copy(error = false, message = null) }
         viewModelScope.launch(guard) {
             try {
-                val repo = withContext(Dispatchers.IO) { GalleryRepository(getApplication()) }
+                val repo = GalleryRepository.get(getApplication())
                 val totals = repo.totals()
                 repository.value = repo
                 mutableState.update { it.copy(ready = true, bytes = totals.bytes.toLong(), message = null, error = false) }
                 try {
-                    repo.restoreSession()
+                    repo.ensureSession()
                     mutableAccount.update { it.copy(status = repo.accountStatus(), generation = it.generation + 1) }
                 } catch (error: Exception) {
                     mutableAccount.update { it.copy(error = authMessage(error), visible = true) }
                 }
                 refreshDetails(repo)
+                refreshPhone()
+                Backup.schedule(getApplication())
                 if (mutableAccount.value.connected) syncPhotos()
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) {
@@ -461,4 +484,121 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun dismissMessage() { mutableState.update { it.copy(message = null) } }
+
+    // The phone's own library: scanned on start, on change and on return to
+    // the app; compared with Proton Photos while signed in.
+    private val settings = BackupSettings(application)
+    private val mutableBackup = MutableStateFlow(BackupState(access = PhoneLibrary.hasAccess(application),
+        partial = PhoneLibrary.partialAccess(application), wifiOnly = settings.wifiOnly, chargingOnly = settings.chargingOnly))
+    val backup = mutableBackup.asStateFlow()
+    private var phoneJob: Job? = null
+    private var phoneAgain = false
+    private val mediaChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { refreshPhone(delayMillis = 2_000) }
+    }
+
+    init {
+        runCatching { application.contentResolver.registerContentObserver(PhoneLibrary.observed, true, mediaChanged) }
+        viewModelScope.launch(guard) {
+            var uploaded = 0
+            PhoneBackup.progress.collect { progress ->
+                mutableBackup.update { it.copy(progress = progress) }
+                // Uploaded photos move from "only on this phone" to Proton.
+                if (progress.done != uploaded || !progress.running) {
+                    uploaded = progress.done
+                    repository.value?.let { repo -> runCatching { refreshDetails(repo); refreshFolders(repo) } }
+                    mutableState.update { it.copy(revision = it.revision + 1) }
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        runCatching { getApplication<Application>().contentResolver.unregisterContentObserver(mediaChanged) }
+    }
+
+    /** Called on return to the app: access may have changed in system settings. */
+    fun phoneAccessChanged() {
+        val app = getApplication<Application>()
+        val access = PhoneLibrary.hasAccess(app)
+        val before = mutableBackup.value
+        mutableBackup.update { it.copy(access = access, partial = PhoneLibrary.partialAccess(app)) }
+        if (access != before.access || access) refreshPhone()
+    }
+
+    /** Re-read the phone library, then compare it with Proton Photos. */
+    fun refreshPhone(scan: Boolean = true, delayMillis: Long = 0) {
+        val repo = repository.value ?: return
+        if (phoneJob?.isActive == true) { phoneAgain = true; return }
+        phoneJob = viewModelScope.launch(guard) {
+            delay(delayMillis)
+            do {
+                phoneAgain = false
+                try {
+                    val app = getApplication<Application>()
+                    if (scan && PhoneLibrary.hasAccess(app)) {
+                        PhoneLibrary.scan(app, repo)
+                        refreshDetails(repo)
+                        mutableState.update { it.copy(revision = it.revision + 1) }
+                    }
+                    if (mutableAccount.value.connected && PhoneLibrary.hasAccess(app)) {
+                        mutableBackup.update { it.copy(checking = true) }
+                        try { PhoneBackup.check(app, repo) } finally { mutableBackup.update { it.copy(checking = false) } }
+                        refreshDetails(repo)
+                        mutableState.update { it.copy(revision = it.revision + 1) }
+                    }
+                    refreshFolders(repo)
+                } catch (cancel: CancellationException) { throw cancel }
+                catch (error: Exception) { android.util.Log.w("ProtonGallery", "Phone library update failed", error) }
+            } while (phoneAgain)
+        }
+    }
+
+    private suspend fun refreshFolders(repo: GalleryRepository) {
+        val folders = repo.phoneFolders()
+        mutableBackup.update { it.copy(folders = folders) }
+        settings.automatic = folders.any { it.backup }
+    }
+
+    fun setBackupFolder(folder: PhoneFolder, enabled: Boolean) {
+        val repo = repository.value ?: return
+        viewModelScope.launch(guard) {
+            repo.setBackupFolder(folder.id, enabled)
+            refreshFolders(repo)
+            Backup.schedule(getApplication())
+        }
+    }
+
+    fun setWifiOnly(value: Boolean) {
+        settings.wifiOnly = value
+        mutableBackup.update { it.copy(wifiOnly = value) }
+        Backup.schedule(getApplication())
+    }
+
+    fun setChargingOnly(value: Boolean) {
+        settings.chargingOnly = value
+        mutableBackup.update { it.copy(chargingOnly = value) }
+        Backup.schedule(getApplication())
+    }
+
+    fun backUpNow() {
+        if (!mutableAccount.value.connected) return showAccount()
+        Backup.now(getApplication())
+        mutableState.update { it.copy(message = if (settings.wifiOnly) "Backup starts when you’re on Wi‑Fi" else "Backup started", error = false) }
+    }
+
+    /** Upload chosen phone items now, on any network. */
+    fun upload(items: List<GalleryItem>) {
+        if (!mutableAccount.value.connected) return showAccount()
+        val refs = items.filter { it.phoneId != null && !it.backedUp }.map { PhoneRef(it.phoneId!!, it.isVideo) }
+        if (refs.isEmpty()) {
+            mutableState.update { it.copy(message = "These are already in Proton Photos", error = false) }
+            return
+        }
+        Backup.upload(getApplication(), refs)
+        mutableState.update { it.copy(message = if (refs.size == 1) "Backing up 1 item" else "Backing up ${refs.size} items", error = false) }
+    }
+
+    // Last, so every property above is initialized before the library opens.
+    init { open() }
 }

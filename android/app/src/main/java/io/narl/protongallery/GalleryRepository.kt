@@ -9,6 +9,11 @@ import io.narl.protongallery.bridge.GalleryEngine
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.LibraryView
 import io.narl.protongallery.bridge.AlbumOptions
+import io.narl.protongallery.bridge.MediaReader
+import io.narl.protongallery.bridge.PhoneHash
+import io.narl.protongallery.bridge.PhoneMedia
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import android.media.MediaMetadataRetriever
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -33,7 +38,25 @@ private val Native = run {
 data class PageKey(val cursor: String?, val backwards: Boolean, val refreshCursor: String? = null, val refreshBackwards: Boolean = false)
 
 /** Byte streams stay on disk; typed metadata is the only FFI payload. */
-class GalleryRepository(private val context: Context) {
+class GalleryRepository private constructor(private val context: Context) {
+    companion object {
+        @Volatile private var shared: GalleryRepository? = null
+        private val creating = Mutex()
+
+        /** One engine per process: the screens and background backup share it. */
+        suspend fun get(context: Context): GalleryRepository = shared ?: creating.withLock {
+            shared ?: withContext(Dispatchers.IO) { GalleryRepository(context.applicationContext) }.also { shared = it }
+        }
+    }
+
+    private val session = Mutex()
+    private var restored = false
+
+    /** Restore the saved sign-in once per process. */
+    suspend fun ensureSession() = session.withLock {
+        if (!restored) { restoreSession(); restored = true }
+    }
+
     // Constructed on IO, never while composing or on the Android main thread.
     private val engine: GalleryEngine
     init {
@@ -81,6 +104,16 @@ class GalleryRepository(private val context: Context) {
             return PageKey(key.refreshCursor, key.refreshBackwards)
         }
     }
+
+    suspend fun phoneIndex(scan: Long, items: List<PhoneMedia>) = withContext(Native) { engine.phoneIndex(scan, items) }
+    suspend fun phoneFinish(scan: Long) = withContext(Native) { engine.phoneFinish(scan) }
+    suspend fun phoneFolders() = withContext(Native) { engine.phoneFolders() }
+    suspend fun setBackupFolder(folder: String, enabled: Boolean) = withContext(Native) { engine.setBackupFolder(folder, enabled) }
+    suspend fun backupQueue(limit: Int) = withContext(Native) { engine.backupQueue(limit.toUInt()) }
+    suspend fun checkBackup() = withContext(Native) { engine.checkBackup() }
+    suspend fun setPhoneHashes(hashes: List<PhoneHash>) = withContext(Native) { engine.setPhoneHashes(hashes) }
+    suspend fun uploadPhone(id: String, sha1: String, reader: MediaReader, thumbnail: ByteArray?) =
+        withContext(Native) { engine.uploadPhone(id, sha1, reader, thumbnail) }
 
     suspend fun totals() = withContext(Native) { engine.totals() }
     suspend fun count(location: GalleryLocation) = withContext(Native) { location.nativeView()?.let(engine::countAt)?.toLong() ?: 0L }

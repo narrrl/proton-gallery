@@ -181,7 +181,10 @@ async fn the_timeline_shows_each_photo_once_whether_on_the_phone_in_proton_or_bo
         .set_backup_folder("camera".into(), true)
         .await
         .unwrap();
-    assert_eq!(catalog.backup_queue(account(), 10).await.unwrap(), ["2"]);
+    assert_eq!(
+        catalog.backup_queue(account(), 10).await.unwrap(),
+        [("2".to_string(), false)]
+    );
     let folders = catalog.phone_folders(signed_in).await.unwrap();
     assert_eq!(
         (

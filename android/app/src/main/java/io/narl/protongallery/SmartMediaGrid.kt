@@ -91,6 +91,9 @@ fun SmartMediaGrid(
     albumsTitle: String = "Albums",
     header: (@Composable () -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(),
+    // Long-press selects; while anything is selected, a tap adds or removes.
+    selection: Set<String> = emptySet(),
+    onLongPress: ((GalleryItem) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     val snapshot = photos.itemSnapshotList.items
@@ -222,8 +225,12 @@ fun SmartMediaGrid(
                             // Snapshot replacement can briefly outrun the background layout.
                             val current = if (tile.index < photos.itemCount) photos[tile.index] else null
                             key(tile.item.id) {
-                                MediaTile(current?.takeIf { it.id == tile.item.id } ?: tile.item, thumbnails,
-                                    onClick = { onOpen(tile.item) }, modifier = Modifier.width(with(density) { tile.width.toDp() }).fillMaxHeight())
+                                val shown = current?.takeIf { it.id == tile.item.id } ?: tile.item
+                                MediaTile(shown, thumbnails,
+                                    onClick = { if (selection.isNotEmpty() && onLongPress != null) onLongPress(shown) else onOpen(shown) },
+                                    modifier = Modifier.width(with(density) { tile.width.toDp() }).fillMaxHeight(),
+                                    selected = if (selection.isEmpty()) null else shown.id in selection,
+                                    onLongClick = onLongPress?.let { { it(shown) } })
                             }
                         }
                     }

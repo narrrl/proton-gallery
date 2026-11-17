@@ -1,6 +1,15 @@
 package io.narl.protongallery
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.util.Size
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -55,7 +64,36 @@ class MainActivity : ComponentActivity() {
                     isAppearanceLightNavigationBars = !dark
                 }
             }
-            val thumbnails = remember(account.generation) { ThumbnailLoader(File(cacheDir, "thumbnails"), model::remoteThumbnail, model::rememberShape) }
+            val thumbnails = remember(account.generation) {
+                ThumbnailLoader(File(cacheDir, "thumbnails"), model::remoteThumbnail, model::rememberShape) { item ->
+                    PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(384, 384), null) }
+                }
+            }
+            val backup by model.backup.collectAsStateWithLifecycle()
+            val access = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.phoneAccessChanged() }
+            // Backup progress is shown as a notification; asked for when backup is first used.
+            val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+            val askNotifications = {
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                    notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.phoneAccessChanged() }
+            val backupActions = remember {
+                BackupActions(
+                    allowAccess = {
+                        // Once refused for good, only system settings can grant access.
+                        if (PhoneLibrary.hasAccess(this) || PhoneLibrary.permissions.none { shouldShowRequestPermissionRationale(it) } &&
+                            getSharedPreferences("backup", MODE_PRIVATE).getBoolean("asked-access", false))
+                            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+                        else access.launch(PhoneLibrary.permissions)
+                        getSharedPreferences("backup", MODE_PRIVATE).edit { putBoolean("asked-access", true) }
+                    },
+                    setFolder = { folder, on -> if (on) askNotifications(); model.setBackupFolder(folder, on) },
+                    setWifiOnly = model::setWifiOnly, setChargingOnly = model::setChargingOnly,
+                    backUpNow = { askNotifications(); model.backUpNow() },
+                    upload = { askNotifications(); model.upload(it) },
+                )
+            }
             val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(100)) { model.import(it) }
             GalleryTheme(theme) {
                 GalleryApp(
@@ -75,6 +113,7 @@ class MainActivity : ComponentActivity() {
                         model::chooserRetry, model::addGallery, model::closeChooser),
                     onRemoveGallery = model::removeGallery, onTestConnection = model::testConnection,
                     crashReport = crashReport, onDismissCrash = { crashReport = null },
+                    backup = backup, backupActions = backupActions,
                 )
             }
         }

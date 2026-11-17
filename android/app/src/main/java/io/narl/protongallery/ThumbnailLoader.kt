@@ -22,6 +22,8 @@ import java.io.File
 class ThumbnailLoader(private val directory: File,
     private val remote: suspend (GalleryItem) -> ByteArray? = { null },
     private val rememberShape: suspend (GalleryItem, Int, Int) -> Unit = { _, _, _ -> },
+    // The system's own thumbnail of a file on this phone; fast and offline.
+    private val phone: (GalleryItem) -> Bitmap? = { null },
 ) {
     private val dispatcher = Dispatchers.IO.limitedParallelism(2)
     private val locks = Array(32) { Mutex() }
@@ -36,6 +38,14 @@ class ThumbnailLoader(private val directory: File,
             memory.get(cacheKey)?.let { return@withLock it }
             currentCoroutineContext().ensureActive()
             try {
+                if (item.phoneId != null) {
+                    val bitmap = runCatching { phone(item) }.getOrNull()
+                    if (bitmap != null) {
+                        memory.put(cacheKey, bitmap)
+                        return@withLock bitmap
+                    }
+                    if (item.remoteKey == null) return@withLock null
+                }
                 if (item.remoteKey != null) {
                     val bytes = remote(item) ?: return@withLock null
                     try {
@@ -95,6 +105,13 @@ class ThumbnailLoader(private val directory: File,
     }
 
     companion object {
+        fun decodeUri(context: android.content.Context, uri: android.net.Uri, longestEdge: Int): Bitmap =
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
+                val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
+                decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+
         fun decodeImage(file: File, longestEdge: Int): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))

@@ -67,8 +67,13 @@ fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoa
             if (!current.isVideo || info) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).navigationBarsPadding().padding(24.dp)) {
                 Text(current.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.OfflinePin, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
-                    Text("Available on this device", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
+                    Icon(if (current.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
+                    Text(when {
+                        current.phoneId != null && current.backedUp -> "On this phone and in Proton Photos"
+                        current.phoneId != null -> "Only on this phone, not backed up yet"
+                        current.localPath.isNotEmpty() -> "Available on this device"
+                        else -> "In Proton Photos"
+                    }, color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
                 }
                 if (info) Text("${Formatter.formatFileSize(LocalContext.current, current.sizeBytes.toLong())}\nAdded ${galleryDate(current.sortTime)}", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
             }
@@ -81,11 +86,16 @@ private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, active: Bo
     var scale by remember(item.id) { mutableFloatStateOf(1f) }
     var offset by remember(item.id) { mutableStateOf(Offset.Zero) }
     var failed by remember(item.id) { mutableStateOf(false) }
+    val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, item.id, active) {
         value = loader.load(item)
-        if (active && !item.isVideo) {
+        val phone = PhoneLibrary.uri(item)
+        if (active && !item.isVideo && (phone != null || item.localPath.isNotEmpty())) {
             try {
-                value = withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(File(item.localPath), 2560) }
+                value = withContext(Dispatchers.IO) {
+                    if (phone != null) ThumbnailLoader.decodeUri(context, phone, 2560)
+                    else ThumbnailLoader.decodeImage(File(item.localPath), 2560)
+                }
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { failed = true }
         }
@@ -125,7 +135,7 @@ private fun VideoPlayer(item: GalleryItem) {
     var failed by remember(item.id) { mutableStateOf(false) }
     val player = remember(item.id) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(File(item.localPath))))
+            setMediaItem(MediaItem.fromUri(PhoneLibrary.uri(item) ?: Uri.fromFile(File(item.localPath))))
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) { failed = true }
             })

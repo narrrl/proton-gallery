@@ -5,7 +5,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -17,6 +19,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
@@ -94,7 +97,12 @@ fun GalleryApp(
     onRemoveGallery: (FolderAlbum) -> Unit = {},
     onTestConnection: () -> Unit = {},
     crashReport: String? = null, onDismissCrash: () -> Unit = {},
+    backup: BackupState = BackupState(), backupActions: BackupActions = BackupActions(),
 ) {
+    var backupSheet by rememberSaveable { mutableStateOf(false) }
+    // Selected timeline items by id, in the order they were chosen.
+    var selection by remember(location) { mutableStateOf<Map<String, GalleryItem>>(emptyMap()) }
+    val photosRoot = location == GalleryLocation()
     var menu by rememberSaveable { mutableStateOf(false) }
     var editing by rememberSaveable { mutableStateOf(false) }
     // While true, tapping a photo makes it the album cover instead of opening it.
@@ -112,7 +120,8 @@ fun GalleryApp(
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); onDismissMessage() }
     }
-    BackHandler(location != GalleryLocation()) { onNavigate(location.back()) }
+    BackHandler(selection.isNotEmpty()) { selection = emptyMap() }
+    BackHandler(location != GalleryLocation() && selection.isEmpty()) { onNavigate(location.back()) }
 
     // The bar slides away while scrolling down the grid and returns on the way up.
     val density = LocalDensity.current
@@ -135,12 +144,22 @@ fun GalleryApp(
     // back to black, unreadable in dark mode. The Surface provides onBackground.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
     Box(Modifier.fillMaxSize().nestedScroll(hideOnScroll)) {
+        val album = location.album
+        val gridHeader: (@Composable () -> Unit)? = when {
+            album != null -> { { AlbumHeader(album, state.count, albums.size) } }
+            photosRoot && (!backup.access || backup.partial || backup.checking || backup.progress.running) ->
+                { { PhotosHeader(backup, backupActions.allowAccess) } }
+            else -> null
+        }
         val content: @Composable () -> Unit = {
             when {
                 !state.ready -> EmptyLibrary(onRetry, !state.error, if (state.error) "Your library is unavailable" else "Opening your library",
                     if (state.error) "Your cached library is still stored on this device. Try again." else "", "Try again", top)
                 device && state.count == 0L && !state.importing -> EmptyLibrary(onImport, false, "A place for every moment",
                     "Add photos and videos from your device. They stay here and are kept separate from Proton Photos.", "Choose photos", top)
+                photosRoot && state.count == 0L && !backup.access -> EmptyLibrary(backupActions.allowAccess, false,
+                    "Your photos, one timeline", "See the photos on this phone next to Proton Photos, and back them up end-to-end encrypted.",
+                    "Show this phone’s photos", top)
                 !device && state.count == 0L && albums.isEmpty() && tagFilter == null -> EmptyLibrary(
                     if (!account.connected) onAccount else if (driveRoot) chooserActions.open else onRefresh,
                     if (drive) account.driveSync != null else account.syncing,
@@ -151,7 +170,8 @@ fun GalleryApp(
                     if (!account.connected) "Sign in to Proton" else if (!drive) "Refresh" else if (driveRoot) "Choose a folder" else "", top)
                 else -> SmartMediaGrid(photos, thumbnails, zoom, onZoom, grid, onOpen = { item ->
                     if (pickingCover) { pickingCover = false; onCover(item) }
-                    else if (item.localPath.isEmpty()) scope.launch { snackbar.showSnackbar("This item isn’t available on this device yet.") }
+                    else if (item.isVideo && item.phoneId == null && item.localPath.isEmpty())
+                        scope.launch { snackbar.showSnackbar("Videos from Proton play here in a later version.") }
                     else {
                         val window = photos.itemSnapshotList.items.toList()
                         selected = window to window.indexOfFirst { it.id == item.id }.coerceAtLeast(0)
@@ -159,8 +179,12 @@ fun GalleryApp(
                 }, albums = albums, onAlbum = { onNavigate(location.child(it)) },
                     tags = if (driveRoot) tags else emptyList(), selectedTag = tagFilter, onTag = onTag,
                     albumsTitle = if (driveRoot) "Galleries" else "Albums",
-                    header = location.album?.let { album -> @Composable { AlbumHeader(album, state.count, albums.size) } },
-                    contentPadding = PaddingValues(top = top, bottom = bottom + 24.dp))
+                    header = gridHeader,
+                    contentPadding = PaddingValues(top = top, bottom = bottom + 24.dp),
+                    selection = selection.keys,
+                    onLongPress = if (photosRoot && !pickingCover) { item ->
+                        selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
+                    } else null)
             }
         }
         if (account.connected && !device && state.ready) {
@@ -178,6 +202,8 @@ fun GalleryApp(
         ) {
             Column {
                 when {
+                    selection.isNotEmpty() -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
+                        onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() })
                     pickingCover -> PickingBar { pickingCover = false }
                     location.album != null || device -> Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onNavigate(location.back()) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
@@ -204,7 +230,9 @@ fun GalleryApp(
 
     if (menu) AppMenu(state, account, theme, onTheme, onDismiss = { menu = false },
         onAccount = { menu = false; onAccount() }, onRefresh = { menu = false; onRefresh() },
-        onDevice = { menu = false; onNavigate(GalleryLocation(GallerySection.Device)) })
+        backup = backup, onBackup = { menu = false; backupSheet = true })
+    if (backupSheet) BackupSheet(backup, account.connected, backupActions, onSignIn = { backupSheet = false; onAccount() },
+        onDismiss = { backupSheet = false })
     if (editing && options != null) AlbumOptionsSheet(options, location.album, tags, onSaveOptions,
         onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
@@ -279,12 +307,13 @@ private fun AlbumHeader(album: FolderAlbum, items: Long, children: Int) {
     }
 }
 
-/** Account, appearance and the device library, in one place. */
+/** Account, backup and appearance, in one place. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppMenu(
     state: LibraryState, account: AccountState, theme: ThemeMode, onTheme: (ThemeMode) -> Unit,
-    onDismiss: () -> Unit, onAccount: () -> Unit, onRefresh: () -> Unit, onDevice: () -> Unit,
+    onDismiss: () -> Unit, onAccount: () -> Unit, onRefresh: () -> Unit,
+    backup: BackupState, onBackup: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -297,8 +326,7 @@ private fun AppMenu(
             )
             if (account.connected) MenuRow(Icons.Outlined.Refresh, "Refresh Proton Photos",
                 if (account.syncing) "Updating now" else null, enabled = !account.syncing, onClick = onRefresh)
-            MenuRow(Icons.Outlined.PhoneAndroid, "On this device",
-                "Photos you add here stay on this phone", onClick = onDevice)
+            MenuRow(Icons.Outlined.CloudUpload, "Backup", backupSummary(backup), onClick = onBackup)
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
             Text("Theme", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -363,19 +391,33 @@ private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
     )
 }
 
+/** `selected` is null outside selection mode. */
 @Composable
-fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier,
+    selected: Boolean? = null, onLongClick: (() -> Unit)? = null) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, item.id, item.revision, loader) { value = loader.load(item) }
-    Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick)
+    val phoneOnly = item.phoneId != null && !item.backedUp
+    Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)
         .semantics {
-            contentDescription = "${if (item.isVideo) "Video" else "Photo"}: ${item.name}"
-            stateDescription = if (bitmap != null) "Preview ready" else "Preview unavailable"
+            contentDescription = "${if (item.isVideo) "Video" else "Photo"}: ${item.name}" + if (phoneOnly) ", not backed up" else ""
+            stateDescription = when (selected) { true -> "Selected"; false -> "Not selected"; null -> if (bitmap != null) "Preview ready" else "Preview unavailable" }
         }) {
-        if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        val inset = if (selected == true) 10.dp else 0.dp
+        if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize().padding(inset), contentScale = ContentScale.Crop)
         else Icon(if (item.isVideo) Icons.Outlined.Videocam else Icons.Outlined.Image, null, Modifier.align(Alignment.Center).size(24.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
         if (item.isVideo) Icon(Icons.Outlined.PlayArrow, null, tint = Color.White,
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp))
+        // Like other phone galleries: a crossed-out cloud marks what isn't backed up.
+        if (phoneOnly) Icon(Icons.Outlined.CloudOff, null, tint = Color.White,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape).padding(3.dp).size(14.dp))
+        if (selected != null) Box(Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp).clip(CircleShape)
+            .background(if (selected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.25f))
+            .border(2.dp, if (selected) MaterialTheme.colorScheme.primary else Color.White, CircleShape),
+            contentAlignment = Alignment.Center) {
+            if (selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary)
+        }
     }
 }
 

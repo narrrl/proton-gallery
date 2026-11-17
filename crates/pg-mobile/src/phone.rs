@@ -45,6 +45,20 @@ pub struct PhoneHash {
     pub sha1: String,
 }
 
+/// A phone item to read: its identifier, and whether it is a video.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct PhoneRef {
+    pub id: String,
+    pub is_video: bool,
+}
+
+fn refs(items: Vec<(String, bool)>) -> Vec<PhoneRef> {
+    items
+        .into_iter()
+        .map(|(id, is_video)| PhoneRef { id, is_video })
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum UploadOutcome {
     Uploaded,
@@ -157,14 +171,16 @@ impl GalleryEngine {
     }
 
     /// Media in backup folders that Proton does not hold yet, newest first.
-    pub fn backup_queue(&self, limit: u32) -> Result<Vec<String>, GalleryError> {
+    pub fn backup_queue(&self, limit: u32) -> Result<Vec<PhoneRef>, GalleryError> {
         let Some(account) = self.auth.account_id() else {
             return Ok(vec![]);
         };
-        Ok(self.runtime.block_on(
-            self.catalog
-                .backup_queue(account, limit.min(10_000) as usize),
-        )?)
+        Ok(refs(
+            self.runtime.block_on(
+                self.catalog
+                    .backup_queue(account, limit.min(10_000) as usize),
+            )?,
+        ))
     }
 
     pub fn set_phone_hashes(&self, hashes: Vec<PhoneHash>) -> Result<(), GalleryError> {
@@ -177,7 +193,7 @@ impl GalleryEngine {
     /// One round of comparing phone media with Proton Photos. Names are
     /// compared first; only same-named files need their contents hashed.
     /// Returns the phone items to hash before the next round; empty when done.
-    pub fn check_backup(&self) -> Result<Vec<String>, GalleryError> {
+    pub fn check_backup(&self) -> Result<Vec<PhoneRef>, GalleryError> {
         self.runtime.block_on(async {
             let _guard = self.backup_check.lock().await;
             let account = self.auth.account().await?;
@@ -242,7 +258,7 @@ impl GalleryEngine {
                     }
                     self.catalog.phone_mark(id.clone(), marks).await?;
                 }
-                Ok::<_, GalleryError>(self.catalog.phone_unhashed(id.clone(), 200).await?)
+                Ok::<_, GalleryError>(refs(self.catalog.phone_unhashed(id.clone(), 200).await?))
             };
             tokio::select! { biased;
                 _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),

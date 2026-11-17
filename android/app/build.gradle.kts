@@ -98,6 +98,7 @@ dependencies {
     implementation("androidx.compose.material3:material3:1.4.0")
     implementation("androidx.compose.material:material-icons-core:1.7.8")
     implementation("androidx.paging:paging-compose:3.4.2")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("androidx.media3:media3-exoplayer:1.10.0")
     implementation("androidx.media3:media3-ui:1.10.0")
     implementation("net.java.dev.jna:jna:5.17.0@aar")

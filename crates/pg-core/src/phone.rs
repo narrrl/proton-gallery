@@ -301,14 +301,23 @@ impl Catalog {
         .await
     }
 
-    /// Same-named items whose contents still need hashing (`sha1` NULL).
-    pub async fn phone_unhashed(&self, account: AccountId, limit: usize) -> Result<Vec<String>> {
+    /// Same-named items whose contents still need hashing (`sha1` NULL):
+    /// `(id, is_video)`.
+    pub async fn phone_unhashed(
+        &self,
+        account: AccountId,
+        limit: usize,
+    ) -> Result<Vec<(String, bool)>> {
         self.run(move |conn| {
             let mut query = conn.prepare_cached(
-                "SELECT p.node FROM phone_media p JOIN phone_backup b ON b.node=p.node AND b.account=?1
+                "SELECT p.node,json_extract(a.payload,'$.kind')='video' FROM phone_media p
+                 JOIN phone_backup b ON b.node=p.node AND b.account=?1
+                 JOIN assets a ON a.account='phone' AND a.volume='media' AND a.node=p.node
                  WHERE b.state='maybe' AND p.sha1 IS NULL LIMIT ?2",
             )?;
-            let rows = query.query_map(params![account.as_str(), limit as i64], |r| r.get(0))?;
+            let rows = query.query_map(params![account.as_str(), limit as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
         .await
@@ -467,16 +476,21 @@ impl Catalog {
         .await
     }
 
-    /// Items in backup folders that `account` does not hold yet, newest first.
-    pub async fn backup_queue(&self, account: AccountId, limit: usize) -> Result<Vec<String>> {
+    /// Items in backup folders that `account` does not hold yet, newest
+    /// first: `(id, is_video)`.
+    pub async fn backup_queue(
+        &self,
+        account: AccountId,
+        limit: usize,
+    ) -> Result<Vec<(String, bool)>> {
         self.run(move |conn| {
             let mut query = conn.prepare_cached(
-                "SELECT p.node FROM phone_media p JOIN backup_folders f ON f.folder=p.folder
+                "SELECT p.node,json_extract(a.payload,'$.kind')='video' FROM phone_media p JOIN backup_folders f ON f.folder=p.folder
                  JOIN assets a ON a.account='phone' AND a.volume='media' AND a.node=p.node
                  WHERE NOT EXISTS(SELECT 1 FROM phone_backup b WHERE b.account=?1 AND b.node=p.node AND b.state='backed_up')
                  ORDER BY a.sort_time DESC LIMIT ?2",
             )?;
-            let rows = query.query_map(params![account.as_str(), limit as i64], |r| r.get(0))?;
+            let rows = query.query_map(params![account.as_str(), limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
         .await

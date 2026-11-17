@@ -27,6 +27,9 @@ import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.AlbumOrder
 import io.narl.protongallery.bridge.AlbumGrouping
+import io.narl.protongallery.bridge.AccountStatus
+import io.narl.protongallery.bridge.PhoneFolder
+import io.narl.protongallery.bridge.SignInStage
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Rule
 import org.junit.Test
@@ -141,15 +144,49 @@ class GalleryUiTest {
         compose.onNodeWithText("Coast").assertExists()
     }
 
-    @Test fun the_default_photos_view_never_falls_back_to_device_imports() {
-        render(fixtureItems(), ThemeMode.Light, initialLocation = GalleryLocation())
-        compose.onNodeWithText("Your Proton Photos").assertExists()
+    @Test fun the_photos_tab_asks_to_show_this_phones_photos() {
+        var asked = 0
+        render(fixtureItems(), ThemeMode.Light, initialLocation = GalleryLocation(), backup = BackupState(access = false),
+            actions = BackupActions(allowAccess = { asked++ }))
         compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").assertCountEquals(0)
-        compose.onNodeWithText("Choose photos").assertDoesNotExist()
+        compose.onNodeWithText("Show this phone’s photos").performClick()
+        assertEquals(1, asked)
         compose.onRoot().captureRoboImage("build/screenshots/main-photos-empty.png")
+    }
+
+    @Test fun phone_photos_show_what_is_not_backed_up_and_back_up_a_selection() {
+        val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = index % 2 == 0) }
+        var uploaded = emptyList<GalleryItem>()
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            actions = BackupActions(upload = { uploaded = it }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg, not backed up").fetchSemanticsNodes().isNotEmpty() }
+        waitForThumbnails()
+        compose.onRoot().captureRoboImage("build/screenshots/phone-timeline-light.png")
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg, not backed up").performTouchInput { longClick() }
+        compose.onNodeWithText("1 selected").assertExists()
+        compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performClick()
+        compose.onNodeWithText("2 selected").assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/phone-selection-light.png")
+        compose.onNodeWithText("Back up 1").performClick()
+        assertEquals(listOf("Coast 1.jpg", "Coast 0.jpg"), uploaded.map { it.name })
+        compose.onNodeWithText("2 selected").assertDoesNotExist()
+    }
+
+    @Test fun the_backup_sheet_chooses_folders_and_conditions() {
+        val folders = listOf(PhoneFolder("camera", "Camera", 120uL, 7uL, false), PhoneFolder("shots", "Screenshots", 30uL, 0uL, true))
+        val changes = mutableListOf<String>()
+        render(emptyList(), ThemeMode.Dark, initialLocation = GalleryLocation(), backup = BackupState(folders = folders),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            actions = BackupActions(setFolder = { folder, on -> changes += "${folder.id}=$on" }, setWifiOnly = { changes += "wifi=$it" }))
         compose.onNodeWithContentDescription("Account and settings").performClick()
-        compose.onNodeWithText("On this device").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Backup is on. Everything is backed up.").performClick()
+        compose.onNodeWithText("Back up this phone").assertExists()
+        compose.onNodeWithText("120 items · 7 not backed up").assertExists()
+        val switches = compose.onAllNodes(isToggleable())
+        switches[0].performClick()
+        switches[2].performClick()
+        assertEquals(listOf("camera=true", "wifi=false"), changes)
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/backup-sheet-dark.png")
     }
 
     @Test fun an_album_shows_its_details_and_edit_options() {
@@ -169,7 +206,8 @@ class GalleryUiTest {
         compose.onRoot().captureRoboImage("build/screenshots/album-options-light.png")
     }
 
-    private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {}) {
+    private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {},
+        backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false) {
         val directory = File("build/test-thumbnails-smart").apply { mkdirs() }
         compose.setContent {
             var location by remember { mutableStateOf(initialLocation) }
@@ -182,16 +220,17 @@ class GalleryUiTest {
                 "year" -> listOf(coast)
                 else -> emptyList()
             }
-            val visible = if (location.section == GallerySection.Device || location.album?.id == "coast") items else emptyList()
+            val visible = if (location.section == GallerySection.Device || location.album?.id == "coast" || (photosTab && location == GalleryLocation())) items else emptyList()
             val photos = remember(visible) { flowOf(PagingData.from(visible)) }.collectAsLazyPagingItems()
             var theme by remember { mutableStateOf(mode) }
             var zoom by remember { mutableFloatStateOf(ZOOM_DEFAULT) }
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 GalleryTheme(theme) {
                     GalleryApp(LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), photos,
-                        remember { ThumbnailLoader(directory) }, theme, zoom, onImport, { theme = it },
+                        remember { ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) }) }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
-                        options = if (location.album?.id == "coast") options else null)
+                        options = if (location.album?.id == "coast") options else null,
+                        account = account, backup = backup, backupActions = actions)
                 }
             }
         }
