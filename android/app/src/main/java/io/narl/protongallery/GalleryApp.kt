@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
@@ -31,6 +32,8 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +97,13 @@ class MediaActions(
 /** Only Proton and phone media can be deleted; files saved in the app's own library cannot. */
 val GalleryItem.deletable: Boolean get() = inProton || phoneId != null
 
+/** The phone's lock, which guards hidden albums. Tests replace it. */
+class PrivacyLock(
+    val available: () -> Boolean = { false },
+    val unlock: (onResult: (Boolean) -> Unit) -> Unit = { it(false) },
+    val setUp: () -> Unit = {},
+)
+
 /** Drive folder chooser callbacks. */
 data class ChooserActions(
     val open: () -> Unit = {}, val openFolder: (DriveFolder) -> Unit = {}, val back: () -> Unit = {},
@@ -122,6 +132,7 @@ fun GalleryApp(
     media: MediaActions = MediaActions(),
     pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, onCancelPick: () -> Unit = {},
     albumActions: AlbumActions = AlbumActions(),
+    privacy: PrivacyLock = PrivacyLock(),
 ) {
     var backupSheet by rememberSaveable { mutableStateOf(false) }
     // Selected timeline items by id, in the order they were chosen.
@@ -137,6 +148,22 @@ fun GalleryApp(
     // Items waiting for an album to go into, and the "New album" dialog.
     var addingToAlbum by remember { mutableStateOf<List<GalleryItem>?>(null) }
     var naming by rememberSaveable { mutableStateOf(false) }
+    // Hidden albums are shown only after the phone's lock confirms the user,
+    // and lock again whenever the app leaves the screen. Never saved.
+    var hiddenUnlocked by remember { mutableStateOf(false) }
+    var lockMissing by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        hiddenUnlocked = false
+        // Leaving the app inside a hidden album closes it too.
+        if (location.trail.any { it.hidden }) { selected = null; onNavigate(GalleryLocation(location.section)) }
+    }
+    val toggleHidden = {
+        when {
+            hiddenUnlocked -> hiddenUnlocked = false
+            !privacy.available() -> lockMissing = true
+            else -> privacy.unlock { hiddenUnlocked = it }
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val grid = key(location.section, location.nativeView()) { rememberLazyListState() }
@@ -211,6 +238,7 @@ fun GalleryApp(
                     tags = if (driveRoot) tags else emptyList(), selectedTag = tagFilter, onTag = onTag,
                     albumsTitle = if (driveRoot) "Galleries" else "Albums",
                     albumsRow = photosRoot,
+                    hiddenUnlocked = hiddenUnlocked, onToggleHidden = toggleHidden,
                     onNewAlbum = if (photosRoot && account.connected && pick == null) { { naming = true } } else null,
                     header = gridHeader,
                     contentPadding = PaddingValues(top = top, bottom = bottom + 24.dp),
@@ -287,6 +315,14 @@ fun GalleryApp(
             onCreate = { name -> albumActions.create(name, items); addingToAlbum = null; selection = emptyMap() },
             onDismiss = { addingToAlbum = null })
     }
+    if (lockMissing) AlertDialog(
+        onDismissRequest = { lockMissing = false },
+        icon = { Icon(Icons.Outlined.Lock, null) },
+        title = { Text("Set up a screen lock") },
+        text = { Text("Hidden albums open with your fingerprint, face or screen lock. This phone has none yet.") },
+        confirmButton = { TextButton(onClick = { lockMissing = false; privacy.setUp() }) { Text("Set up") } },
+        dismissButton = { TextButton(onClick = { lockMissing = false }) { Text("Not now") } },
+    )
     if (naming) NewAlbumDialog(onCreate = { albumActions.create(it, emptyList()); naming = false }, onDismiss = { naming = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
     if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)

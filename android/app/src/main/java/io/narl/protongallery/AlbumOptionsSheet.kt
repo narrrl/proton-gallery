@@ -104,7 +104,7 @@ fun AlbumOptionsSheet(
 
                 HorizontalDivider(Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 ToggleRow("Pin to top", "Show before other albums", pinned) { pinned = it }
-                ToggleRow("Hide from album list", "Still reachable with “Show hidden albums”", hidden) { hidden = it }
+                ToggleRow("Hide this album", "It opens only after your fingerprint, face or screen lock", hidden) { hidden = it }
                 if (album.parent == null) TextButton(onClick = { confirmRemove = true }, modifier = Modifier.padding(top = 8.dp),
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
                     Text(if (proton) "Delete album" else "Remove gallery from this app")

@@ -156,6 +156,12 @@ class MainActivity : ComponentActivity() {
                     crashReport = crashReport, onDismissCrash = { crashReport = null },
                     backup = backup, backupActions = backupActions, media = media,
                     pick = pick, onPick = model::pick, onCancelPick = { setResult(RESULT_CANCELED); finish() },
+                    privacy = remember {
+                        PrivacyLock(available = { DeviceLock.available(this) },
+                            unlock = { done -> DeviceLock.unlock(this, "Show hidden albums", "Confirm it’s you", done) },
+                            setUp = { runCatching { startActivity(DeviceLock.setupIntent()) }.onFailure {
+                                startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } })
+                    },
                     albumActions = AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
                         model::removeFromAlbum, model::deleteAlbum),
                 )

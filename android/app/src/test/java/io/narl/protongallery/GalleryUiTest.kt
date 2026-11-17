@@ -269,6 +269,42 @@ class GalleryUiTest {
         assertEquals(listOf("Hiking:0"), created)
     }
 
+    @Test fun hidden_albums_open_only_with_the_phones_lock() {
+        val secret = FolderAlbum("gallery-2", "gallery-2", null, "Private", 4uL, 0uL, hidden = true)
+        var asked = 0
+        var confirm = false
+        var setUp = 0
+        var lock = true
+        render(emptyList(), ThemeMode.Dark, initialLocation = GalleryLocation(GallerySection.Drive), driveRoots = listOf(secret),
+            privacy = PrivacyLock(available = { lock }, unlock = { asked++; it(confirm) }, setUp = { setUp++ }))
+        compose.onNodeWithText("Trips").assertExists()
+        compose.onNodeWithText("Private").assertDoesNotExist()
+        compose.onNodeWithText("1 album · Unlock with your screen lock").assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/hidden-locked-dark.png")
+
+        // Cancelled or failed: still locked.
+        compose.onNodeWithText("Hidden albums").performClick()
+        assertEquals(1, asked)
+        compose.onNodeWithText("Private").assertDoesNotExist()
+
+        confirm = true
+        compose.onNodeWithText("Hidden albums").performClick()
+        compose.onNodeWithText("Private").assertExists()
+        compose.onNodeWithContentDescription("Hidden", useUnmergedTree = true).assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/hidden-unlocked-dark.png")
+        compose.onNodeWithText("Lock hidden albums").performClick()
+        compose.onNodeWithText("Private").assertDoesNotExist()
+        assertEquals(2, asked)
+
+        // Without a screen lock there is nothing to unlock with.
+        lock = false
+        compose.onNodeWithText("Hidden albums").performClick()
+        compose.onNodeWithText("Set up a screen lock").assertExists()
+        compose.onNodeWithText("Set up").performClick()
+        assertEquals(1, setUp)
+        assertEquals(2, asked)
+    }
+
     @Test fun another_app_can_pick_several_photos() {
         val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = true) }
         var picked = emptyList<GalleryItem>()
@@ -353,7 +389,8 @@ class GalleryUiTest {
     private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {},
         backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false,
         media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
-        photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions()) {
+        photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions(),
+        driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock()) {
         val directory = File("build/test-thumbnails-smart").apply { mkdirs() }
         compose.setContent {
             var location by remember { mutableStateOf(initialLocation) }
@@ -361,7 +398,7 @@ class GalleryUiTest {
             val year = remember { FolderAlbum("gallery", "year", "root", "2026", 0uL, 1uL) }
             val coast = remember { FolderAlbum("gallery", "coast", "year", "Coast", items.size.toULong(), 0uL, description = options?.description, tags = options?.tags ?: emptyList()) }
             val albums = when (location.album?.id) {
-                null -> if (location.section == GallerySection.Drive) listOf(root) else if (photosTab) photoAlbums else emptyList()
+                null -> if (location.section == GallerySection.Drive) listOf(root) + driveRoots else if (photosTab) photoAlbums else emptyList()
                 "root" -> listOf(year)
                 "year" -> listOf(coast)
                 else -> emptyList()
@@ -377,7 +414,7 @@ class GalleryUiTest {
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == "coast") options else null,
                         account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick,
-                        albumActions = albumActions)
+                        albumActions = albumActions, privacy = privacy)
                 }
             }
         }

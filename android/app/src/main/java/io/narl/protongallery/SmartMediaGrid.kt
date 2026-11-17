@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +42,8 @@ import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.planSmartGrid
 import io.narl.protongallery.icons.FolderOpen
+import io.narl.protongallery.icons.PhotoLibrary
+import io.narl.protongallery.icons.VisibilityOff
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -94,6 +97,9 @@ fun SmartMediaGrid(
     // One scrolling row of albums above the photos, as on the Photos tab.
     albumsRow: Boolean = false,
     onNewAlbum: (() -> Unit)? = null,
+    // Hidden albums show only while unlocked with the phone's lock.
+    hiddenUnlocked: Boolean = false,
+    onToggleHidden: () -> Unit = {},
     header: (@Composable () -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(),
     // Long-press selects; while anything is selected, a tap adds or removes.
@@ -102,9 +108,8 @@ fun SmartMediaGrid(
 ) {
     val density = LocalDensity.current
     val snapshot = photos.itemSnapshotList.items
-    var showHidden by rememberSaveable { mutableStateOf(false) }
     val hiddenCount = albums.count { it.hidden }
-    val shownAlbums = if (showHidden) albums else albums.filterNot { it.hidden }
+    val shownAlbums = if (hiddenUnlocked) albums else albums.filterNot { it.hidden }
     val grouping = groupingFor(zoom)
     // The photo kept in view while pinching; cleared once a layout settles on it.
     var anchor by remember { mutableStateOf<String?>(null) }
@@ -222,10 +227,8 @@ fun SmartMediaGrid(
                     repeat(albumColumns - albumRows[index].size) { Spacer(Modifier.weight(1f)) }
                 }
             }
-            if (hiddenCount > 0) item(key = "hidden-albums") {
-                OutlinedButton(onClick = { showHidden = !showHidden }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Text(if (showHidden) "Hide hidden albums" else if (hiddenCount == 1) "Show 1 hidden album" else "Show $hiddenCount hidden albums")
-                }
+            if (hiddenCount > 0) item(key = "hidden-albums", contentType = "hidden-albums") {
+                HiddenAlbumsRow(hiddenCount, hiddenUnlocked, onToggleHidden)
             }
             if (pageError) item(key = "prepend-error") { PageRetry(photos::retry) }
             // One snapshot of the layout for count, keys and content: reading the
@@ -278,7 +281,11 @@ private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, onClick: () -
         .semantics(mergeDescendants = true) { contentDescription = "Album ${album.name}, ${albumCaption(album)}" }) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
             if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            else Icon(Icons.Outlined.FolderOpen, null, Modifier.align(Alignment.Center).size(40.dp), tint = MaterialTheme.colorScheme.primary)
+            else Icon(if (album.gallery.startsWith("album-")) Icons.Outlined.PhotoLibrary else Icons.Outlined.FolderOpen, null,
+                Modifier.align(Alignment.Center).size(40.dp), tint = MaterialTheme.colorScheme.primary)
+            if (album.hidden) Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.5f)) {
+                Icon(Icons.Outlined.VisibilityOff, "Hidden", Modifier.padding(4.dp).size(16.dp), tint = Color.White)
+            }
             if (album.pinned) Surface(Modifier.align(Alignment.TopEnd).padding(8.dp), shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.5f)) {
                 Icon(Icons.Outlined.Star, "Pinned", Modifier.padding(4.dp).size(16.dp), tint = Color.White)
             }
@@ -288,6 +295,30 @@ private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, onClick: () -
         Text(albumCaption(album), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, modifier = Modifier.padding(horizontal = 2.dp).padding(bottom = 4.dp))
     }
+}
+
+/** Unlock hidden albums with the phone's lock, or lock them again. */
+@Composable
+private fun HiddenAlbumsRow(count: Int, unlocked: Boolean, onToggle: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(if (unlocked) "Lock hidden albums" else "Hidden albums") },
+        supportingContent = {
+            Text(when {
+                unlocked -> "They lock again when you leave the app"
+                count == 1 -> "1 album · Unlock with your screen lock"
+                else -> "$count albums · Unlock with your screen lock"
+            })
+        },
+        leadingContent = {
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                Icon(if (unlocked) Icons.Outlined.VisibilityOff else Icons.Outlined.Lock, null,
+                    Modifier.padding(10.dp).size(20.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.padding(horizontal = 4.dp).clip(RoundedCornerShape(16.dp))
+            .clickable(onClickLabel = if (unlocked) "Lock hidden albums" else "Unlock hidden albums", onClick = onToggle),
+    )
 }
 
 /** The first card of the album row: start a new album. */
