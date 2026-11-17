@@ -1,0 +1,44 @@
+[package]
+name = "pg-mobile"
+description = "Typed native mobile bridge for the shared gallery core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "pg-bindgen"
+path = "src/bin/pg-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+pg-core.workspace = true
+pg-drive.workspace = true
+proton-drive-rs.workspace = true
+proton-sdk.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+tokio = { workspace = true, features = ["net"] }
+thiserror.workspace = true
+uniffi.workspace = true
+# Without a tracing subscriber, the "log" feature forwards tracing events
+# (ours and the SDK's) to the `log` facade, which Android sends to logcat.
+tracing = { workspace = true, features = ["log"] }
+log = { version = "0.4", features = ["std"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "=0.21.1"
+rustls-platform-verifier = "=0.6.2"
+android_logger = "0.14"
+
+[lints.rust]
+unsafe_code = "deny"

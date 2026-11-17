@@ -1,0 +1,14 @@
+/target/
+/data/
+*.db
+*.db-shm
+*.db-wal
+.env
+/android/.gradle/
+/android/**/build/
+/android/local.properties
+*.p12
+*.jks
+*.keystore
+__pycache__/
+

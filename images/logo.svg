@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Proton Gallery">
+  <!-- Original gallery glyph; tile colors/depth and three-part rhythm reference
+       the MIT proton-stream/images/logo.svg by Nils Pukropp and contributors. -->
+  <defs>
+    <linearGradient id="pg-face" x1="12" y1="12" x2="116" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A48BFF"/><stop offset="0.55" stop-color="#7552FF"/><stop offset="1" stop-color="#5B36F2"/>
+    </linearGradient>
+    <linearGradient id="pg-glyph" x1="0" y1="38" x2="0" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#ECE6FF"/>
+    </linearGradient>
+    <mask id="pg-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+      <path d="M40,38H88A8,8 0,0 1,96 46V80A8,8 0,0 1,88 88H40A8,8 0,0 1,32 80V46A8,8 0,0 1,40 38Z M40,44H88Q90,44 90,46V80Q90,82 88,82H40Q38,82 38,80V46Q38,44 40,44Z" fill="#FFFFFF" fill-rule="evenodd"/>
+      <path d="M38,78L49,62L63,77L73,65L90,80V82H38Z" fill="#FFFFFF"/>
+      <path d="M88.5,52A4.5,4.5 0,1 1,79.5 52A4.5,4.5 0,1 1,88.5 52Z" fill="#FFFFFF"/>
+      <path d="M52.5 0h5.5v128h-5.5zM73.5 0H79v128h-5.5z" fill="#000000"/>
+    </mask>
+  </defs>
+  <rect x="12" y="16" width="104" height="100" rx="26" fill="#4424C0"/>
+  <rect x="12" y="12" width="104" height="100" rx="26" fill="url(#pg-face)"/>
+  <rect x="12.5" y="12.5" width="103" height="99" rx="25.5" stroke="#FFFFFF" stroke-opacity="0.2"/>
+  <g transform="translate(0 3)"><rect width="128" height="128" fill="#2E1596" fill-opacity="0.3" mask="url(#pg-cut)"/></g>
+  <rect width="128" height="128" fill="url(#pg-glyph)" mask="url(#pg-cut)"/>
+</svg>
