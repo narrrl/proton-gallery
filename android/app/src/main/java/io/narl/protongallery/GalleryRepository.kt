@@ -109,10 +109,11 @@ class GalleryRepository private constructor(private val context: Context) {
 
     suspend fun phoneIndex(scan: Long, items: List<PhoneMedia>) = withContext(Native) { engine.phoneIndex(scan, items) }
     suspend fun phoneFinish(scan: Long) = withContext(Native) { engine.phoneFinish(scan) }
+    suspend fun phoneReconcile(ids: List<String>) = withContext(Native) { engine.phoneReconcile(ids) }
     suspend fun phoneFolders() = withContext(Native) { engine.phoneFolders() }
     suspend fun setBackupFolder(folder: String, enabled: Boolean) = withContext(Native) { engine.setBackupFolder(folder, enabled) }
     suspend fun backupQueue(limit: Int) = withContext(Native) { engine.backupQueue(limit.toUInt()) }
-    suspend fun checkBackup() = withContext(Native) { engine.checkBackup() }
+    suspend fun checkBackup(skip: Collection<String> = emptyList()) = withContext(Native) { engine.checkBackup(skip.toList()) }
     suspend fun backupRemaining() = withContext(Native) { engine.backupRemaining().toLong() }
     suspend fun setPhoneHashes(hashes: List<PhoneHash>) = withContext(Native) { engine.setPhoneHashes(hashes) }
     suspend fun uploadPhone(id: String, sha1: String, reader: MediaReader, thumbnail: ByteArray?) =

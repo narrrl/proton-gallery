@@ -60,10 +60,15 @@ object PhoneLibrary {
     private var lastScan = 0L
 
     /**
-     * Index everything visible to the app, in batches. Media the scan no longer
-     * sees is forgotten at the end, so an interrupted scan removes nothing.
-     * One scan at a time; nothing is read when the media index is unchanged
-     * since the last complete scan, unless `force`.
+     * Bring the catalog in line with the system media index. One scan at a
+     * time; nothing is read when the index is unchanged since the last scan,
+     * unless `force`.
+     *
+     * After the first complete scan, later ones are quick: only identifiers
+     * are listed (to notice removed and newly visible items), and full
+     * metadata is read only for media the system changed since then. A full
+     * scan runs again when the index was rebuilt. Returns the number of items
+     * read, or -1 when nothing changed.
      */
     suspend fun scan(context: Context, repository: GalleryRepository, force: Boolean = false): Int = scanning.withLock {
         if (!hasAccess(context)) return@withLock 0
@@ -74,14 +79,56 @@ object PhoneLibrary {
             repository.phoneFolders().sumOf { it.count.toLong() } == visible) return@withLock -1
         PhoneBackup.scanning(true)
         try {
-            val scan = maxOf(System.currentTimeMillis(), lastScan + 1).also { lastScan = it }
-            val count = withContext(Dispatchers.IO) { read(context, repository, scan) } ?: return@withLock 0
-            // A removed phone file can bring its Proton copy back into the picker.
-            if (repository.phoneFinish(scan) > 0uL) PhotoPicker.changed(context)
-            if (marker != null) preferences.edit { putString("indexed", marker) }
+            // Taken before reading, so changes made during the scan are read next time.
+            val version = runCatching { MediaStore.getVersion(context) }.getOrNull()
+            val generation = runCatching { generations(context) }.getOrNull()
+            val since = preferences.getLong("generation", -1L)
+                .takeIf { !force && version != null && it >= 0 && preferences.getString("version", null) == version }
+            val count = withContext(Dispatchers.IO) {
+                if (since != null) update(context, repository, since) else full(context, repository)
+            } ?: return@withLock 0
+            if (marker != null) preferences.edit {
+                putString("indexed", marker)
+                if (version != null && generation != null) { putString("version", version); putLong("generation", generation) }
+                else { remove("version"); remove("generation") }
+            }
             count
         } finally { PhoneBackup.scanning(false) }
     }
+
+    /** Read every item, then forget what the scan did not see. */
+    private suspend fun full(context: Context, repository: GalleryRepository): Int? {
+        val scan = maxOf(System.currentTimeMillis(), lastScan + 1).also { lastScan = it }
+        val count = read(context, repository, scan, mediaQuery()) ?: return null
+        // A removed phone file can bring its Proton copy back into the picker.
+        if (repository.phoneFinish(scan) > 0uL) PhotoPicker.changed(context)
+        return count
+    }
+
+    /**
+     * List identifiers only, forget what is gone, then read what is new to the
+     * catalog or changed after generation `since`.
+     */
+    private suspend fun update(context: Context, repository: GalleryRepository, since: Long): Int? {
+        val ids = ArrayList<String>()
+        context.contentResolver.query(files, arrayOf(MediaStore.MediaColumns._ID), mediaQuery(), null)?.use { cursor ->
+            while (cursor.moveToNext()) ids += cursor.getLong(0).toString()
+        } ?: return null
+        val reconciled = repository.phoneReconcile(ids)
+        if (reconciled.removed > 0uL) PhotoPicker.changed(context)
+        val scan = maxOf(System.currentTimeMillis(), lastScan + 1).also { lastScan = it }
+        var count = read(context, repository, scan, mediaQuery("${MediaStore.MediaColumns.GENERATION_MODIFIED} > ?", since.toString())) ?: return null
+        // Newly visible items (shared later with partial access) keep their old generation.
+        for (part in reconciled.unknown.chunked(500)) {
+            count += read(context, repository, scan, mediaQuery("${MediaStore.MediaColumns._ID} IN (${part.joinToString(",") { "?" }})",
+                *part.toTypedArray())) ?: 0
+        }
+        return count
+    }
+
+    /** The highest generation of any external volume: every change raises it. */
+    private fun generations(context: Context): Long =
+        MediaStore.getExternalVolumeNames(context).maxOf { MediaStore.getGeneration(context, it) }
 
     /**
      * Changes whenever media is added, changed or removed: the index version
@@ -97,13 +144,15 @@ object PhoneLibrary {
         "$version:$generation:$count:${partialAccess(context)}" to count
     }.getOrNull()
 
-    private fun mediaQuery() = Bundle().apply {
-        putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?,?)")
+    /** Photos and videos, optionally narrowed by `extra` with its arguments. */
+    private fun mediaQuery(extra: String? = null, vararg arguments: String) = Bundle().apply {
+        val types = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?,?)"
+        putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, if (extra == null) types else "$types AND ($extra)")
         putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(
-            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(), MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString()))
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(), MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(), *arguments))
     }
 
-    private suspend fun read(context: Context, repository: GalleryRepository, scan: Long): Int? {
+    private suspend fun read(context: Context, repository: GalleryRepository, scan: Long, query: Bundle): Int? {
         val columns = arrayOf(
             MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
@@ -113,7 +162,7 @@ object PhoneLibrary {
         )
         var count = 0
         val batch = ArrayList<PhoneMedia>(500)
-        context.contentResolver.query(files, columns, mediaQuery(), null)?.use { cursor ->
+        context.contentResolver.query(files, columns, query, null)?.use { cursor ->
             while (cursor.moveToNext()) {
                 val name = cursor.getString(1) ?: continue
                 val mime = cursor.getString(2) ?: continue

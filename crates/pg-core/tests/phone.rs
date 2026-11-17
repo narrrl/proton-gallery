@@ -479,3 +479,71 @@ async fn only_verified_older_backups_may_leave_the_phone() {
     assert_eq!(freeable[0].sha1, hash);
     assert_eq!(freeable[0].size_bytes, 1000);
 }
+
+#[tokio::test]
+async fn a_quick_rescan_forgets_deleted_items_and_reports_unknown_ones() {
+    let (catalog, _) = setup().await;
+    catalog
+        .phone_upsert(1, vec![media("1", "a.jpg", 10), media("2", "b.jpg", 20)])
+        .await
+        .unwrap();
+    catalog
+        .phone_mark(account(), vec![("1".into(), BackupState::Missing)])
+        .await
+        .unwrap();
+    let (removed, unknown) = catalog
+        .phone_retain(vec!["2".into(), "3".into(), "3".into()])
+        .await
+        .unwrap();
+    assert_eq!(removed, 1);
+    assert_eq!(unknown, ["3"]);
+    assert!(
+        catalog
+            .phone_entry("1".into(), Some(account()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        catalog
+            .phone_entry("2".into(), Some(account()))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // Nothing changed: nothing to do.
+    assert_eq!(
+        catalog.phone_retain(vec!["2".into()]).await.unwrap(),
+        (0, vec![])
+    );
+}
+
+#[tokio::test]
+async fn files_the_phone_could_not_read_do_not_hold_up_the_check() {
+    let (catalog, _) = setup().await;
+    catalog
+        .phone_upsert(1, vec![media("1", "a.jpg", 10), media("2", "b.jpg", 20)])
+        .await
+        .unwrap();
+    catalog
+        .phone_mark(
+            account(),
+            vec![
+                ("1".into(), BackupState::Maybe),
+                ("2".into(), BackupState::Maybe),
+            ],
+        )
+        .await
+        .unwrap();
+    let all = catalog.phone_unhashed(account(), 10, vec![]).await.unwrap();
+    assert_eq!(
+        all,
+        [("2".to_owned(), false), ("1".to_owned(), false)],
+        "newest first"
+    );
+    let rest = catalog
+        .phone_unhashed(account(), 10, vec!["2".into()])
+        .await
+        .unwrap();
+    assert_eq!(rest, [("1".to_owned(), false)]);
+}

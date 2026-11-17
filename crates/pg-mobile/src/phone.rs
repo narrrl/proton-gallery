@@ -45,6 +45,13 @@ pub struct PhoneHash {
     pub sha1: String,
 }
 
+/// The outcome of [`GalleryEngine::phone_reconcile`].
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct PhoneReconcile {
+    pub removed: u64,
+    pub unknown: Vec<String>,
+}
+
 /// A phone item to read: its identifier, and whether it is a video.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct PhoneRef {
@@ -114,6 +121,37 @@ fn remote_failure(what: &'static str) -> impl Fn(ProtonError) -> GalleryError {
     }
 }
 
+/// Why an upload failed, in words that suggest what to do about it.
+fn upload_failure(error: ProtonError) -> GalleryError {
+    tracing::warn!("upload failed: {}", pg_drive::auth::cause_chain(&error));
+    let detail = match &error {
+        ProtonError::Transport(_) => {
+            "Couldn’t reach Proton during the upload. It will try again.".to_owned()
+        }
+        ProtonError::Api(api) if api.code == ResponseCode::TooManyRequests => {
+            "Proton asked to slow down. The upload will try again later.".to_owned()
+        }
+        ProtonError::Api(api) if api.http_status == 413 || api.http_status == 507 => {
+            "There isn’t enough space in your Proton account for this file.".to_owned()
+        }
+        ProtonError::Api(api) if !api.message.trim().is_empty() => {
+            format!("Proton didn’t accept this file: {}", api.message.trim())
+        }
+        ProtonError::Api(api) => format!(
+            "Proton didn’t accept this file (error {}).",
+            api.http_status
+        ),
+        ProtonError::Crypto(_) => "This file couldn’t be encrypted for upload.".to_owned(),
+        ProtonError::KeysLocked => {
+            "Your account keys are locked. Sign in again to back up.".to_owned()
+        }
+        ProtonError::Serialization(_) | ProtonError::InvalidOperation(_) => {
+            format!("Couldn’t upload this file: {error}")
+        }
+    };
+    GalleryError::Operation { detail }
+}
+
 /// `IMG_1.jpg`, then `IMG_1 (1).jpg`, `IMG_1 (2).jpg`, …
 fn numbered(name: &str, n: u32) -> String {
     if n == 0 {
@@ -153,6 +191,14 @@ impl GalleryEngine {
     /// End a complete scan; media it did not see is gone from the phone.
     pub fn phone_finish(&self, scan: i64) -> Result<u64, GalleryError> {
         Ok(self.runtime.block_on(self.catalog.phone_finish(scan))?)
+    }
+
+    /// Compare the catalog with every identifier the phone shows now: items
+    /// that are gone are forgotten, and identifiers the catalog does not know
+    /// are returned for the host to read in full.
+    pub fn phone_reconcile(&self, ids: Vec<String>) -> Result<PhoneReconcile, GalleryError> {
+        let (removed, unknown) = self.runtime.block_on(self.catalog.phone_retain(ids))?;
+        Ok(PhoneReconcile { removed, unknown })
     }
 
     pub fn phone_folders(&self) -> Result<Vec<PhoneFolder>, GalleryError> {
@@ -265,7 +311,9 @@ impl GalleryEngine {
     /// One round of comparing phone media with Proton Photos. Names are
     /// compared first; only same-named files need their contents hashed.
     /// Returns the phone items to hash before the next round; empty when done.
-    pub fn check_backup(&self) -> Result<Vec<PhoneRef>, GalleryError> {
+    /// `skip` lists items the host could not read this time; they are not
+    /// offered again, so they cannot hold up the rest of the check.
+    pub fn check_backup(&self, skip: Vec<String>) -> Result<Vec<PhoneRef>, GalleryError> {
         self.runtime.block_on(async {
             let _guard = self.backup_check.lock().await;
             let account = self.auth.account().await?;
@@ -335,7 +383,9 @@ impl GalleryEngine {
                     }
                     self.catalog.phone_mark(id.clone(), marks).await?;
                 }
-                Ok::<_, GalleryError>(refs(self.catalog.phone_unhashed(id.clone(), 200).await?))
+                Ok::<_, GalleryError>(refs(
+                    self.catalog.phone_unhashed(id.clone(), 200, skip).await?,
+                ))
             };
             tokio::select! { biased;
                 _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
@@ -437,7 +487,7 @@ impl GalleryEngine {
                                         .into(),
                             }
                         }
-                        _ => remote_failure("upload this photo")(e),
+                        _ => upload_failure(e),
                     })?;
                 if entry.favorite {
                     let favorite = PhotoTagsUpdate {
@@ -551,7 +601,7 @@ mod tests {
         assert_eq!(page.items[0].aspect_ratio, Some(1.5));
         assert_eq!(engine.count_at(LibraryView::Photos).unwrap(), 2);
         assert!(engine.backup_queue(10).unwrap().is_empty());
-        assert!(engine.check_backup().is_err());
+        assert!(engine.check_backup(vec![]).is_err());
         engine.set_backup_folder("camera".into(), true).unwrap();
         assert!(engine.phone_folders().unwrap()[0].backup);
     }

@@ -113,31 +113,33 @@ object PhoneBackup {
 
     internal fun scanning(active: Boolean) = mutableProgress.update { it.copy(scanning = active) }
 
+    /** Files that couldn’t be read; the check passes over them until the app restarts. */
+    private val unreadable = java.util.Collections.synchronizedSet(HashSet<String>())
+
     /**
      * Compare phone media with Proton. Names are compared first; only
      * same-named files are read and hashed. Results are kept, so a check
-     * that was interrupted continues where it stopped.
+     * that was interrupted continues where it stopped, and later checks only
+     * look at what is new.
      */
     suspend fun check(context: Context, repository: GalleryRepository): Unit = checking.withLock {
-        var start = repository.backupRemaining()
-        if (start == 0L) {
+        var start = repository.backupRemaining() - unreadable.size
+        if (start <= 0L) {
             // Names that appeared in Proton since the last check are compared again.
-            repository.checkBackup()
+            if (repository.checkBackup(unreadable.toList()).isEmpty()) return@withLock
             start = repository.backupRemaining()
-            if (start == 0L) return@withLock
         }
         mutableProgress.update { it.copy(checking = true, toCheck = start, checkTotal = start) }
         try {
-            var more = true
-            while (more) {
-                val pending = repository.checkBackup()
-                val left = repository.backupRemaining()
+            while (true) {
+                val pending = repository.checkBackup(unreadable.toList())
+                val left = (repository.backupRemaining() - unreadable.size).coerceAtLeast(0)
                 mutableProgress.update { it.copy(toCheck = left, checkTotal = maxOf(it.checkTotal, left)) }
-                val hashes = if (pending.isEmpty()) emptyList()
-                    else hashAll(context, pending) { mutableProgress.update { it.copy(toCheck = (it.toCheck - 1).coerceAtLeast(0)) } }
-                // Unreadable files stay unchecked until the next scan drops them.
-                more = hashes.isNotEmpty()
-                if (more) repository.setPhoneHashes(hashes)
+                if (pending.isEmpty()) break
+                val hashes = hashAll(context, pending) { mutableProgress.update { it.copy(toCheck = (it.toCheck - 1).coerceAtLeast(0)) } }
+                val read = hashes.mapTo(HashSet()) { it.id }
+                pending.filter { it.id !in read }.forEach { unreadable += it.id }
+                if (hashes.isNotEmpty()) repository.setPhoneHashes(hashes)
             }
         } finally {
             mutableProgress.update { it.copy(checking = false, toCheck = 0, checkTotal = 0) }
@@ -161,8 +163,9 @@ object PhoneBackup {
 
     /**
      * Upload `items` right away, or, when `items` is null, scan, compare and
-     * upload everything missing from the backup folders. Returns how many
-     * uploads failed.
+     * upload everything missing from the backup folders. Uploads start as
+     * soon as the check finds something missing; they never wait for the
+     * whole library to be compared. Returns how many uploads failed.
      */
     suspend fun run(context: Context, items: List<PhoneRef>?): Int {
         val repository = GalleryRepository.get(context)
@@ -172,13 +175,24 @@ object PhoneBackup {
                 if (items != null) mutableProgress.update { it.copy(message = "Sign in to Proton to back up") }
                 return 0
             }
-            val queue = if (items == null) {
-                PhoneLibrary.scan(context, repository)
-                check(context, repository)
-                repository.backupQueue(5_000)
-            } else items
-            if (queue.isEmpty()) return 0
-            return upload(context, repository, queue)
+            if (items != null) return uploadSession { upload(context, repository, items) }
+            PhoneLibrary.scan(context, repository)
+            return coroutineScope {
+                val checker = launch { check(context, repository) }
+                val tried = HashSet<String>()
+                var failed = 0
+                uploadSession {
+                    while (true) {
+                        val finished = !checker.isActive
+                        val queue = repository.backupQueue(500).filter { tried.add(it.id) }
+                        if (queue.isNotEmpty()) failed += upload(context, repository, queue)
+                        else if (finished) break
+                        else delay(1_500)
+                    }
+                }
+                checker.join()
+                failed
+            }
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (error: Exception) {
@@ -189,37 +203,43 @@ object PhoneBackup {
         }
     }
 
-    private suspend fun upload(context: Context, repository: GalleryRepository, queue: List<PhoneRef>): Int {
+    /** One upload session: its progress adds up, and its outcome shows once at the end. */
+    private suspend fun <T> uploadSession(block: suspend () -> T): T {
         runs.incrementAndGet()
-        mutableProgress.update { it.copy(uploading = true, total = it.total + queue.size, message = null) }
-        var failed = 0
-        try {
-            for (item in queue) {
-                val error = uploading.withLock {
-                    try {
-                        uploadOne(context, repository, item) { sent, size -> mutableProgress.update { it.copy(bytes = sent, size = size) } }
-                        null
-                    } catch (cancel: CancellationException) { throw cancel }
-                    catch (error: Exception) {
-                        android.util.Log.w("ProtonGallery", "Backup of one item failed", error)
-                        error
-                    }
-                }
-                if (error != null) failed++
-                mutableProgress.update {
-                    it.copy(done = it.done + 1, failed = it.failed + if (error != null) 1 else 0, bytes = 0, size = 0,
-                        message = if (error != null) describe(error) else it.message)
-                }
-            }
-        } finally {
+        try { return block() }
+        finally {
             if (runs.decrementAndGet() == 0) mutableProgress.update {
                 val sent = it.done - it.failed
-                it.copy(uploading = false, done = 0, total = 0, failed = 0, bytes = 0, size = 0, message = when {
+                if (it.total == 0) it.copy(uploading = false)
+                else it.copy(uploading = false, done = 0, total = 0, failed = 0, bytes = 0, size = 0, message = when {
                     it.failed > 0 -> "${if (it.failed == 1) "1 item" else "${it.failed} items"} couldn’t be backed up. ${it.message ?: ""}".trim()
                     sent == 1 -> "1 item backed up"
                     sent > 1 -> "$sent items backed up"
                     else -> it.message
                 })
+            }
+        }
+    }
+
+    private suspend fun upload(context: Context, repository: GalleryRepository, queue: List<PhoneRef>): Int {
+        if (queue.isEmpty()) return 0
+        mutableProgress.update { it.copy(uploading = true, total = it.total + queue.size, message = if (it.total == 0) null else it.message) }
+        var failed = 0
+        for (item in queue) {
+            val error = uploading.withLock {
+                try {
+                    uploadOne(context, repository, item) { sent, size -> mutableProgress.update { it.copy(bytes = sent, size = size) } }
+                    null
+                } catch (cancel: CancellationException) { throw cancel }
+                catch (error: Exception) {
+                    android.util.Log.w("ProtonGallery", "Backup of one item failed", error)
+                    error
+                }
+            }
+            if (error != null) failed++
+            mutableProgress.update {
+                it.copy(done = it.done + 1, failed = it.failed + if (error != null) 1 else 0, bytes = 0, size = 0,
+                    message = if (error != null) describe(error) else it.message)
             }
         }
         return failed

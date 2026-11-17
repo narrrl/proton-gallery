@@ -147,6 +147,21 @@ fn text(value: Option<&AccountId>) -> rusqlite::types::Value {
     })
 }
 
+/// Remove phone items and everything recorded about them.
+fn forget_phone_media(tx: &rusqlite::Transaction<'_>, nodes: &[String]) -> Result<()> {
+    for node in nodes {
+        tx.execute("DELETE FROM phone_backup WHERE node=?1", [node])?;
+        tx.execute("DELETE FROM phone_media WHERE node=?1", [node])?;
+        for table in ["memberships", "media_shapes", "assets"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE account=?1 AND volume=?2 AND node=?3"),
+                params![PHONE, PHONE_VOLUME, node],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 impl Catalog {
     /// Record one batch of a scan. Unchanged files keep their check results;
     /// a changed file is compared again.
@@ -232,25 +247,45 @@ impl Catalog {
                     .query_map([scan], |r| r.get(0))?
                     .collect::<rusqlite::Result<_>>()?
             };
-            for node in &gone {
-                tx.execute("DELETE FROM phone_backup WHERE node=?1", [node])?;
-                tx.execute("DELETE FROM phone_media WHERE node=?1", [node])?;
-                tx.execute(
-                    "DELETE FROM memberships WHERE account=?1 AND volume=?2 AND node=?3",
-                    params![PHONE, PHONE_VOLUME, node],
-                )?;
-                tx.execute(
-                    "DELETE FROM media_shapes WHERE account=?1 AND volume=?2 AND node=?3",
-                    params![PHONE, PHONE_VOLUME, node],
-                )?;
-                tx.execute(
-                    "DELETE FROM assets WHERE account=?1 AND volume=?2 AND node=?3",
-                    params![PHONE, PHONE_VOLUME, node],
-                )?;
-            }
+            forget_phone_media(&tx, &gone)?;
             // Backup folders stay chosen while empty, e.g. after freeing space.
             tx.commit()?;
             Ok(gone.len() as u64)
+        })
+        .await
+    }
+
+    /// Compare the catalog with every identifier the phone shows now, without
+    /// reading metadata again: forget items that are gone, and return the
+    /// identifiers the catalog does not know yet with the number forgotten.
+    pub async fn phone_retain(&self, ids: Vec<String>) -> Result<(u64, Vec<String>)> {
+        if ids.len() > 2_000_000 || ids.iter().any(|id| id.is_empty() || id.len() > 64) {
+            return Err(Error::Invalid("phone identifiers exceed bounds".into()));
+        }
+        self.run(move |conn| {
+            let tx = conn.transaction()?;
+            tx.execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS phone_seen(node TEXT PRIMARY KEY NOT NULL);
+                 DELETE FROM temp.phone_seen;",
+            )?;
+            {
+                let mut seen = tx.prepare_cached("INSERT OR IGNORE INTO temp.phone_seen(node) VALUES (?1)")?;
+                for id in &ids {
+                    seen.execute([id])?;
+                }
+            }
+            let gone: Vec<String> = tx
+                .prepare("SELECT node FROM phone_media WHERE node NOT IN (SELECT node FROM temp.phone_seen)")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let unknown: Vec<String> = tx
+                .prepare("SELECT node FROM temp.phone_seen WHERE node NOT IN (SELECT node FROM phone_media)")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            forget_phone_media(&tx, &gone)?;
+            tx.execute("DELETE FROM temp.phone_seen", [])?;
+            tx.commit()?;
+            Ok((gone.len() as u64, unknown))
         })
         .await
     }
@@ -355,15 +390,19 @@ impl Catalog {
         &self,
         account: AccountId,
         limit: usize,
+        skip: Vec<String>,
     ) -> Result<Vec<(String, bool)>> {
+        let skip = serde_json::to_string(&skip)?;
         self.run(move |conn| {
             let mut query = conn.prepare_cached(
                 "SELECT p.node,json_extract(a.payload,'$.kind')='video' FROM phone_media p
                  JOIN phone_backup b ON b.node=p.node AND b.account=?1
                  JOIN assets a ON a.account='phone' AND a.volume='media' AND a.node=p.node
-                 WHERE b.state='maybe' AND p.sha1 IS NULL LIMIT ?2",
+                 WHERE b.state='maybe' AND p.sha1 IS NULL
+                 AND p.node NOT IN (SELECT value FROM json_each(?3))
+                 ORDER BY a.sort_time DESC LIMIT ?2",
             )?;
-            let rows = query.query_map(params![account.as_str(), limit as i64], |r| {
+            let rows = query.query_map(params![account.as_str(), limit as i64, skip], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
