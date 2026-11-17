@@ -150,8 +150,91 @@ async fn version_one_catalog_migrates_without_losing_existing_metadata() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
-        6
+        7
     );
+}
+
+#[tokio::test]
+async fn version_six_catalog_lists_existing_photos_for_the_picker() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v6.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    for schema in [
+        include_str!("../src/schema_v1.sql"),
+        include_str!("../src/schema_v2.sql"),
+        include_str!("../src/schema_v3.sql"),
+        include_str!("../src/schema_v4.sql"),
+        include_str!("../src/schema_v5.sql"),
+        include_str!("../src/schema_v6.sql"),
+    ] {
+        conn.execute_batch(schema).unwrap();
+    }
+    conn.execute_batch("PRAGMA user_version=6; PRAGMA application_id=0x50474c59;")
+        .unwrap();
+    let source = SyntheticSource::new(3).unwrap();
+    conn.execute(
+        "INSERT INTO sources(id,payload) VALUES (?1,?2)",
+        rusqlite::params![
+            source.spec().id.as_str(),
+            serde_json::to_string(source.spec()).unwrap()
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO source_kinds(source,kind) VALUES (?1,'photos')",
+        [source.spec().id.as_str()],
+    )
+    .unwrap();
+    for (index, node) in ["n1", "n2", "n3"].into_iter().enumerate() {
+        let spec = source.spec();
+        let asset = Asset {
+            key: AssetKey {
+                account: spec.account.clone(),
+                volume: spec.volume.clone(),
+                node: NodeId::new(node).unwrap(),
+            },
+            name: format!("{node}.jpg"),
+            kind: MediaKind::Image,
+            mime: "image/jpeg".into(),
+            revision: None,
+            size_bytes: Some(1),
+            sort_time: index as i64,
+        };
+        conn.execute(
+            "INSERT INTO assets(account,volume,node,sort_time,payload) VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                spec.account.as_str(),
+                spec.volume.as_str(),
+                node,
+                index as i64,
+                serde_json::to_string(&asset).unwrap()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memberships(source,account,volume,node) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![
+                spec.id.as_str(),
+                spec.account.as_str(),
+                spec.volume.as_str(),
+                node
+            ],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    // Media already in the catalog before the upgrade is listed, oldest first.
+    let catalog = Catalog::open(&path).await.unwrap();
+    assert_eq!(catalog.picker_state().await.unwrap().generation, 3);
+    let listed: Vec<_> = catalog
+        .picker_changes(source.spec().id.clone(), 1, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.asset.name)
+        .collect();
+    assert_eq!(listed, ["n2.jpg", "n3.jpg"]);
 }
 
 #[tokio::test]

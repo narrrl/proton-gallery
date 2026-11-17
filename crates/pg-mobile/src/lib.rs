@@ -16,11 +16,12 @@ mod authentication;
 mod diagnostics;
 mod originals;
 mod phone;
+mod picker;
 
 use pg_core::catalog::Catalog;
 use pg_core::library::SourceKind;
 use pg_core::local::LocalLibrary;
-use pg_core::model::{MediaKind, PageSize, SourceId, TimelineCursor};
+use pg_core::model::{MediaKind, NodeId, PageSize, SourceId, SourceSpec, TimelineCursor};
 
 uniffi::setup_scaffolding!();
 

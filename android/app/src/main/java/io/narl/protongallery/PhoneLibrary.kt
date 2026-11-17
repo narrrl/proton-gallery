@@ -76,7 +76,8 @@ object PhoneLibrary {
         try {
             val scan = maxOf(System.currentTimeMillis(), lastScan + 1).also { lastScan = it }
             val count = withContext(Dispatchers.IO) { read(context, repository, scan) } ?: return@withLock 0
-            repository.phoneFinish(scan)
+            // A removed phone file can bring its Proton copy back into the picker.
+            if (repository.phoneFinish(scan) > 0uL) PhotoPicker.changed(context)
             if (marker != null) preferences.edit { putString("indexed", marker) }
             count
         } finally { PhoneBackup.scanning(false) }

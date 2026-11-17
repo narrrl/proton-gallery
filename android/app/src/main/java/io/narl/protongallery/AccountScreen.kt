@@ -28,6 +28,10 @@ import android.content.ClipData
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
+import android.os.Build
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontFamily
 import kotlinx.coroutines.launch
 
@@ -117,6 +121,7 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                             Text(if (state.syncing) "Refreshing Photos…" else "Refresh Proton Photos")
                         }
                         TextButton(onClick = onSignOut, enabled = !state.busy, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("Sign out", color = MaterialTheme.colorScheme.error) }
+                        PhotoPickerSection(Modifier.padding(top = 24.dp))
                     }
                     state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium) }
                     if (state.error != null || state.report != null || state.checking) ConnectionCheck(state, onTestConnection)
@@ -153,6 +158,56 @@ private fun ConnectionCheck(state: AccountState, onTest: () -> Unit) {
                 SelectionContainer {
                     Text(report, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Proton Photos in Android's own photo picker. Android lists only the cloud
+ * apps the phone maker allows, so the first step is a one-time adb command.
+ */
+@Composable
+private fun PhotoPickerSection(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current
+    var checks by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycle) {
+        // Settings or adb may have changed it while the app was away.
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) checks++ }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+    }
+    val status by produceState<PhotoPicker.Status?>(null, checks) {
+        value = withContext(Dispatchers.IO) { PhotoPicker.status(context) }
+    }
+    val current = status ?: return
+    if (current == PhotoPicker.Status.Unavailable) return
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Android photo picker", style = MaterialTheme.typography.titleSmall)
+            Text(when (current) {
+                PhotoPicker.Status.Active -> "Your Proton Photos show up whenever an app asks you to choose a photo."
+                PhotoPicker.Status.Allowed -> "Choose Proton Gallery as the cloud media app, and your Proton Photos show up whenever an app asks you to choose a photo."
+                else -> "Android only lists cloud apps your phone maker allows. To add Proton Gallery, turn on USB debugging, connect the phone to a computer and run this once:"
+            }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            if (current == PhotoPicker.Status.NotAllowed) {
+                val command = PhotoPicker.command(context.packageName)
+                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(top = 12.dp)) {
+                    SelectionContainer {
+                        Text(command, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                Text("This sets the whole list. If you use another cloud app in the picker, such as Google Photos (com.google.android.apps.photos), add it after a comma. Restart the phone if Proton Gallery doesn’t show up.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                TextButton(onClick = { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("adb command", command))) } }) { Text("Copy command") }
+            }
+            if (current != PhotoPicker.Status.NotAllowed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                TextButton(onClick = { runCatching { context.startActivity(PhotoPicker.settings()) } }, modifier = Modifier.padding(top = 4.dp)) {
+                    Text(if (current == PhotoPicker.Status.Active) "Picker settings" else "Choose in picker settings")
                 }
             }
         }

@@ -199,6 +199,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val progress = watchProgress(repo, { it.syncProgress().toLong() }) { indexed -> mutableAccount.update { it.copy(indexed = indexed) } }
             try {
                 repo.syncPhotos()
+                PhotoPicker.changed(getApplication())
                 refreshDetails(repo)
                 refreshPhone(scan = false)
             } catch (cancel: CancellationException) { throw cancel }

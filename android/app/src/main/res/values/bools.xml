@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CloudMediaProvider exists from Android 13. -->
+    <bool name="photo_picker">false</bool>
+</resources>

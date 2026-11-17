@@ -65,6 +65,21 @@ class AccountUiTest {
         assertNull(verificationToken("""{"type":"HUMAN_VERIFICATION_SUCCESS","payload":{"type":"email","token":"answer"}}"""))
         assertNull(verificationToken("""{"type":"ERROR","payload":{"token":"answer"}}"""))
     }
+    @Test fun a_signed_in_account_explains_how_to_add_proton_photos_to_the_system_picker() {
+        render(AccountState(status = AccountStatus(SignInStage.CONNECTED, "fixture-user", null, false), visible = true))
+        compose.onNodeWithText("Android photo picker").performScrollTo().assertIsDisplayed()
+        // Robolectric's media provider allows no cloud apps, like most phones.
+        compose.onNodeWithText("adb shell device_config put mediaprovider allowed_cloud_providers io.narl.protongallery")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Copy command").assertExists()
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/photo-picker-setup-dark.png")
+    }
+    @Test fun the_adb_command_matches_each_android_version() {
+        assertEquals("adb shell device_config override mediaprovider allowed_cloud_providers app", PhotoPicker.command("app", 35))
+        assertEquals("adb shell device_config put mediaprovider allowed_cloud_providers app", PhotoPicker.command("app", 34))
+        assertEquals("adb shell device_config put storage_native_boot allowed_cloud_providers app.picker\n" +
+            "adb shell device_config put mediaprovider allowed_cloud_providers app", PhotoPicker.command("app", 33))
+    }
     private var current: androidx.compose.runtime.MutableState<AccountState>? = null
     private fun render(state: AccountState, signIn: (String,String)->Unit = {_,_->}, code:(String)->Unit = {}, test: () -> Unit = {}) {
         current?.let { it.value = state; return }

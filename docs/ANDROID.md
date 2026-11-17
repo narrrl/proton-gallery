@@ -31,6 +31,21 @@ Uploads (`upload_phone`) hash the file, skip it when Proton already holds the sa
 
 **Free up space** (in the Backup sheet) removes phone copies of backed-up media older than a chosen period (30 days, 3 months by default, or a year), so recent photos stay in the camera roll and in other apps' photo pickers. Candidates must be marked backed up, have a known SHA-1, and have their Proton copy in the synced Photos library; right before deleting, each one's name and SHA-1 are confirmed with Proton again (`free_up_verified`), and an incomplete answer cancels everything. Android's own `createDeleteRequest` dialog then asks the user, in batches of up to 2,000.
 
+### Android's system photo picker
+
+On Android 13 and later, `PickerProvider` (a `CloudMediaProvider`, authority `<package>.picker`) puts Proton Photos into the system photo picker that every app uses, beside the phone's own media. The picker keeps its own copy of the library's metadata and asks only for what changed after the last generation it saw: catalog schema v7 gives every new or changed member of a Photos source the next number (`picker_changes`), including when its phone copy appears or goes away. Proton photos whose file is also on the phone carry its `MEDIA_STORE_URI`, so the picker shows them once. The collection identifier is random per catalog and includes the Photos source, so a rebuilt catalog or another account makes the picker read everything again. Proton media is never deleted from the catalog, so no deletions are reported. Thumbnails and large previews come from Proton and are kept in `cache/picker` (up to 256 MB); a picked file is the decrypted original in `cache/originals`. The app tells the picker about changes after a Photos sync, a backup run and a phone scan that removed files. Albums, search and video previews inside the picker are not offered.
+
+Android lists only the cloud apps the phone maker allows, so this needs one adb command first (the account sheet shows the right one and a copy button):
+
+```sh
+# Android 15 and later; Android 14 uses `put` instead of `override`.
+adb shell device_config override mediaprovider allowed_cloud_providers io.narl.protongallery.testing
+# Android 13 additionally reads the authority from another namespace, and only at boot:
+adb shell device_config put storage_native_boot allowed_cloud_providers io.narl.protongallery.testing.picker
+```
+
+The value is the whole list: name other cloud apps too, comma-separated (for example `com.google.android.apps.photos,io.narl.protongallery.testing`); `adb shell device_config get mediaprovider allowed_cloud_providers` shows the current one. Restart the phone if the app does not show up, then choose it under the picker's settings (the account sheet links there, `MediaStore.ACTION_PICK_IMAGES_SETTINGS`). On Android 13 and 14 a server flag sync can reset a `put` value. Some Android 16 builds also need `cloud_media_feature_enabled true` in both namespaces. To test, `adb shell am start -a android.provider.action.PICK_IMAGES -t 'image/*'`.
+
 Device dates mean **added to this app**. Photos chronology uses the server's capture date; ordinary Drive currently uses remote modification time. Identical device bytes deduplicate, and reimport repairs the stored copy while preserving its original title/date. Unsupported images can import but fail to decode; viewing reports that failure.
 
 ### Drive galleries and album settings

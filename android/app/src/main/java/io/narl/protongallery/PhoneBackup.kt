@@ -278,6 +278,7 @@ class BackupWorker(context: Context, parameters: WorkerParameters) : CoroutineWo
         } catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { return@coroutineScope Result.retry() }
         finally { notification.cancel() }
+        PhotoPicker.changed(applicationContext)
         if (items == null) Backup.watchNewMedia(applicationContext)
         if (failed > 0 && runAttemptCount < 3) Result.retry() else Result.success()
     }

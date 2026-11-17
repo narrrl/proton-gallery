@@ -48,6 +48,19 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/shared_paths" />
         </provider>
+        <!-- Proton Photos in Android's own photo picker (Android 13 and later).
+             Only the system's media provider may bind it. -->
+        <provider
+            android:name=".PickerProvider"
+            android:authorities="${applicationId}.picker"
+            android:enabled="@bool/photo_picker"
+            tools:targetApi="33"
+            android:exported="true"
+            android:permission="com.android.providers.media.permission.MANAGE_CLOUD_MEDIA_PROVIDERS">
+            <intent-filter>
+                <action android:name="android.content.action.CLOUD_MEDIA_PROVIDER" />
+            </intent-filter>
+        </provider>
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"

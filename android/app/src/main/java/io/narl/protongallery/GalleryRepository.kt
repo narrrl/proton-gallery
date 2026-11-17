@@ -118,6 +118,10 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun uploadPhone(id: String, sha1: String, reader: MediaReader, thumbnail: ByteArray?) =
         withContext(Native) { engine.uploadPhone(id, sha1, reader, thumbnail) }
 
+    suspend fun pickerCollection() = withContext(Native) { engine.pickerCollection() }
+    suspend fun pickerMedia(after: Long, limit: Int) = withContext(Native) { engine.pickerMedia(after.toULong(), limit.toUInt()) }
+    suspend fun pickerItem(id: String) = withContext(Native) { engine.pickerItem(id) }
+
     suspend fun freeUpSummary(keepDays: Int) = withContext(Native) { engine.freeUpSummary(keepDays.coerceAtLeast(0).toUInt()) }
     suspend fun freeUpVerified(keepDays: Int) = withContext(Native) { engine.freeUpVerified(keepDays.coerceAtLeast(0).toUInt()) }
     /** The decrypted original of a Proton item, in the app's cache. */
