@@ -18,6 +18,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import io.narl.protongallery.icons.*
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
@@ -63,7 +64,8 @@ import java.io.File
  * fill the screen.
  */
 @Composable
-fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit) {
+fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit,
+    onDelete: (GalleryItem) -> Unit = {}) {
     val pager = rememberPagerState(initialPage = initial) { items.size }
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
@@ -87,6 +89,7 @@ fun MediaViewer(items: List<GalleryItem>, initial: Int, thumbnails: ThumbnailLoa
                         Text("${pager.currentPage + 1} / ${items.size}", color = Color.White, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).padding(start = 8.dp))
                         IconButton(onClick = { media.share(listOf(current)) }) { Icon(Icons.Outlined.Share, "Share", tint = Color.White) }
                         IconButton(onClick = { info = !info }) { Icon(Icons.Outlined.Info, "Photo details", tint = Color.White) }
+                        if (current.deletable) IconButton(onClick = { onDelete(current) }) { Icon(Icons.Outlined.Delete, "Delete", tint = Color.White) }
                     }
                     // The full-resolution photo replaces the preview when it is ready.
                     ActivityBar(if (loading) Activity("Loading the full photo") else null, color = Color.White)

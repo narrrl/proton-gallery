@@ -2,8 +2,8 @@
 //!
 //! Android's picker keeps its own copy of a cloud library and asks for what
 //! changed since the last generation it saw. The catalog counts changes to
-//! Photos-source members in `picker_changes` (see schema v7). Remote media is
-//! never deleted from the catalog, so there are no deletions to report.
+//! Photos-source members in `picker_changes` (see schema v7); members that
+//! leave the source stay there marked deleted (schema v8).
 use rusqlite::{OptionalExtension, params};
 
 use crate::catalog::Catalog;
@@ -88,6 +88,45 @@ impl Catalog {
                     height,
                     phone,
                 })
+            })
+            .collect()
+        })
+        .await
+    }
+
+    /// Media of `source` removed after generation `after`, oldest first:
+    /// the node and the generation of its removal.
+    pub async fn picker_deletions(
+        &self,
+        source: SourceSpec,
+        after: u64,
+        limit: u32,
+    ) -> Result<Vec<(NodeId, u64)>> {
+        let after =
+            i64::try_from(after).map_err(|_| Error::Invalid("generation out of range".into()))?;
+        let limit = limit.clamp(1, PICKER_PAGE_MAX);
+        self.run(move |conn| {
+            let mut query = conn.prepare_cached(
+                "SELECT node,generation FROM picker_changes
+                 WHERE deleted=1 AND generation>?1 AND account=?2 AND volume=?3
+                 ORDER BY generation LIMIT ?4",
+            )?;
+            let rows = query.query_map(
+                params![
+                    after,
+                    source.account.as_str(),
+                    source.volume.as_str(),
+                    limit
+                ],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+            )?;
+            rows.map(|row| {
+                let (node, generation) = row?;
+                Ok((
+                    NodeId::new(node)?,
+                    u64::try_from(generation)
+                        .map_err(|_| Error::Invalid("negative picker generation".into()))?,
+                ))
             })
             .collect()
         })

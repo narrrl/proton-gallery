@@ -98,14 +98,25 @@ class PickerProvider : CloudMediaProvider() {
         cursor
     }
 
-    // Proton media is never removed from the catalog, so nothing is reported.
+    /** Proton media trashed here or gone from Proton since `EXTRA_SYNC_GENERATION`. */
     override fun onQueryDeletedMedia(extras: Bundle): Cursor = work { repository ->
-        MatrixCursor(arrayOf(MediaColumns.ID)).apply {
-            this.extras = Bundle().apply {
-                putString(EXTRA_MEDIA_COLLECTION_ID, repository.pickerCollection().idOrEmpty())
-                putStringArrayList(ContentResolver.EXTRA_HONORED_ARGS, arrayListOf(EXTRA_SYNC_GENERATION, EXTRA_PAGE_TOKEN))
-            }
+        val collection = repository.pickerCollection()
+        val cursor = MatrixCursor(arrayOf(MediaColumns.ID))
+        val requested = extras.getString(EXTRA_MEDIA_COLLECTION_ID)
+        var next: Long? = null
+        if (collection != null && (requested == null || requested == collection.id)) {
+            val after = maxOf(extras.getLong(EXTRA_SYNC_GENERATION, 0L),
+                extras.getString(EXTRA_PAGE_TOKEN)?.toLongOrNull() ?: 0L).coerceAtLeast(0L)
+            val page = repository.pickerDeleted(after, PAGE)
+            page.ids.forEach { cursor.addRow(arrayOf(it)) }
+            next = page.next?.toLong()
         }
+        cursor.extras = Bundle().apply {
+            putString(EXTRA_MEDIA_COLLECTION_ID, collection.idOrEmpty())
+            putStringArrayList(ContentResolver.EXTRA_HONORED_ARGS, arrayListOf(EXTRA_SYNC_GENERATION, EXTRA_PAGE_TOKEN))
+            next?.let { putString(EXTRA_PAGE_TOKEN, it.toString()) }
+        }
+        cursor
     }
 
     override fun onQueryAlbums(extras: Bundle): Cursor = work { repository ->

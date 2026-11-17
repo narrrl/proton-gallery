@@ -10,6 +10,7 @@ pub mod local;
 pub mod model;
 pub mod phone;
 pub mod picker;
+pub mod removal;
 pub mod source;
 pub mod synthetic;
 

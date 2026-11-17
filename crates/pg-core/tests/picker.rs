@@ -227,3 +227,69 @@ fn every_item_has_a_mime_type_the_picker_can_filter_on() {
         "image/png"
     );
 }
+
+#[tokio::test]
+async fn trashed_and_vanished_photos_leave_the_timeline_and_the_picker() {
+    let (catalog, photos) = setup().await;
+    for (node, name, time) in [("r1", "a.jpg", 1), ("r2", "b.jpg", 2), ("r3", "c.jpg", 3)] {
+        catalog
+            .add_to_source(photos.id.clone(), remote(node, name, "image/jpeg", time))
+            .await
+            .unwrap();
+    }
+    let before = catalog.picker_state().await.unwrap().generation;
+
+    // Trashed in this app.
+    let trashed = remote("r1", "a.jpg", "image/jpeg", 1).key;
+    assert_eq!(
+        catalog
+            .remove_assets(account(), vec![trashed])
+            .await
+            .unwrap(),
+        1
+    );
+    // Gone from Proton at the next complete sync.
+    assert_eq!(
+        catalog
+            .prune_source(photos.id.clone(), vec![NodeId::new("r3").unwrap()])
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(catalog.source_count(photos.id.clone()).await.unwrap(), 1);
+    let deleted: Vec<String> = catalog
+        .picker_deletions(photos.clone(), before, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(node, _)| node.to_string())
+        .collect();
+    assert_eq!(deleted, ["r1", "r2"]);
+    assert!(changed(&catalog, &photos, before).await.is_empty());
+
+    // Restored in Proton and synced again: listed, no longer deleted.
+    let seen = catalog.picker_state().await.unwrap().generation;
+    catalog
+        .add_to_source(photos.id.clone(), remote("r2", "b.jpg", "image/jpeg", 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        changed(&catalog, &photos, seen).await,
+        [("b.jpg".into(), None)]
+    );
+    let deleted = catalog
+        .picker_deletions(photos.clone(), before, 10)
+        .await
+        .unwrap();
+    assert_eq!(deleted.len(), 1);
+
+    // Another account's items are refused.
+    let mut foreign = remote("r3", "c.jpg", "image/jpeg", 3).key;
+    foreign.account = AccountId::new("other").unwrap();
+    assert!(
+        catalog
+            .remove_assets(account(), vec![foreign])
+            .await
+            .is_err()
+    );
+}

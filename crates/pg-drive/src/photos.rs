@@ -39,6 +39,18 @@ impl ProtonPhotosSource {
         })
     }
 
+    /// Every node of the last complete listing on the Photos volume, or
+    /// `None` before the timeline was listed.
+    pub fn listed_nodes(&self) -> Option<Vec<NodeId>> {
+        let listing = self.listing.get()?;
+        listing
+            .entries
+            .iter()
+            .filter(|e| e.uid.volume_id.as_str() == self.spec.volume.as_str())
+            .map(|e| NodeId::new(e.uid.link_id.as_str()).ok())
+            .collect()
+    }
+
     pub async fn thumbnail(
         &self,
         asset: &AssetKey,

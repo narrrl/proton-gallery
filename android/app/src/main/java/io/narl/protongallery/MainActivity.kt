@@ -111,10 +111,16 @@ class MainActivity : ComponentActivity() {
                 deleting?.let { model.freedUp(result.resultCode == RESULT_OK, it.count, it.bytes) }
                 deleting = null
             }
+            var trashing by remember { mutableStateOf<UiRequest.Trash?>(null) }
+            val trash = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+                trashing?.let { model.phoneTrashed(result.resultCode == RESULT_OK, it) }
+                trashing = null
+            }
             LaunchedEffect(model) {
                 model.requests.collect { request ->
                     when (request) {
                         is UiRequest.Delete -> { deleting = request; delete.launch(IntentSenderRequest.Builder(request.sender).build()) }
+                        is UiRequest.Trash -> { trashing = request; trash.launch(IntentSenderRequest.Builder(request.sender).build()) }
                         is UiRequest.Share -> runCatching { startActivity(request.intent) }
                         is UiRequest.Picked -> {
                             val result = Intent().addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -128,7 +134,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original) }
+            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, delete = model::delete) }
             GalleryTheme(theme) {
                 GalleryApp(
                     state, photos, thumbnails, theme, zoom,

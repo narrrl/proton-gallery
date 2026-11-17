@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -86,7 +87,12 @@ class MediaActions(
     val share: (List<GalleryItem>) -> Unit = {},
     val largePhoto: suspend (GalleryItem) -> android.graphics.Bitmap? = { null },
     val original: suspend (GalleryItem) -> java.io.File? = { null },
+    /** Move to the trash, after the user confirmed. */
+    val delete: (List<GalleryItem>) -> Unit = {},
 )
+
+/** Only Proton and phone media can be deleted; files saved in the app's own library cannot. */
+val GalleryItem.deletable: Boolean get() = inProton || phoneId != null
 
 /** Drive folder chooser callbacks. */
 data class ChooserActions(
@@ -125,6 +131,8 @@ fun GalleryApp(
     // While true, tapping a photo makes it the album cover instead of opening it.
     var pickingCover by rememberSaveable(location.section, location.album?.id) { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Pair<List<GalleryItem>, Int>?>(null) }
+    // Items waiting for the user to confirm their deletion.
+    var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val grid = key(location.section, location.nativeView()) { rememberLazyListState() }
@@ -227,7 +235,8 @@ fun GalleryApp(
                     pick != null -> PickBar(pick.multiple, selection.size, onCancelPick) { onPick(selection.values.toList()) }
                     selection.isNotEmpty() && pick == null -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
                         onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() },
-                        onShare = { media.share(selection.values.toList()); selection = emptyMap() })
+                        onShare = { media.share(selection.values.toList()); selection = emptyMap() },
+                        onDelete = if (selection.values.any { it.deletable }) { { confirmDelete = selection.values.filter { it.deletable } } } else null)
                     pickingCover -> PickingBar { pickingCover = false }
                     location.album != null || device -> Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onNavigate(location.back()) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
@@ -261,8 +270,40 @@ fun GalleryApp(
         onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
     if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)
-    selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null }) }
+    selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },
+        onDelete = { confirmDelete = listOf(it) }) }
+    confirmDelete?.let { items ->
+        DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },
+            onDismiss = { confirmDelete = null })
+    }
     crashReport?.let { CrashReportDialog(it, onDismissCrash) }
+}
+
+/** Deleting moves to the trash; say which trash, and warn about anything not backed up. */
+@Composable
+fun DeleteDialog(items: List<GalleryItem>, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val phone = items.count { it.phoneId != null }
+    val proton = items.count { it.inProton }
+    val unsaved = items.count { it.phoneId != null && !it.inProton && !it.backedUp }
+    val what = if (items.size == 1) (if (items[0].isVideo) "this video" else "this photo") else "${items.size} items"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Outlined.Delete, null) },
+        title = { Text("Delete $what?") },
+        text = {
+            val subject = if (items.size == 1) "It moves" else "They move"
+            Text(buildString {
+                append(when {
+                    phone > 0 && proton > 0 -> "$subject to the trash on this phone and in Proton Photos."
+                    proton > 0 -> "$subject to the Proton trash, where you can restore ${if (items.size == 1) "it" else "them"} in Proton Drive."
+                    else -> "$subject to this phone’s trash."
+                })
+                if (unsaved > 0) append(if (unsaved == 1) " 1 of them isn’t backed up." else " $unsaved of them aren’t backed up.")
+            })
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Move to trash") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** Photos and Drive: the screen title and the way between them in one control. */

@@ -203,6 +203,36 @@ class GalleryUiTest {
         assertEquals(listOf("Coast 1.jpg"), shared.map { it.name })
     }
 
+    @Test fun deleting_asks_first_and_says_which_trash() {
+        // Two on the phone and in Proton, one only in Proton.
+        val items = fixtureItems().mapIndexed { index, item ->
+            item.copy(phoneId = if (index < 2) "$index" else null, backedUp = true, inProton = true)
+        }
+        var deleted = emptyList<GalleryItem>()
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true, media = MediaActions(delete = { deleted = it }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Photo: Coast 2.jpg").performClick()
+        compose.onNodeWithContentDescription("Delete").performClick()
+        compose.onNodeWithText("Delete 2 items?").assertExists()
+        compose.onNodeWithText("They move to the trash on this phone and in Proton Photos.").assertExists()
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/delete-confirm-light.png")
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(emptyList<GalleryItem>(), deleted)
+        compose.onNodeWithContentDescription("Delete").performClick()
+        compose.onNodeWithText("Move to trash").performClick()
+        assertEquals(listOf("Coast 1.jpg", "Coast 2.jpg"), deleted.map { it.name })
+        compose.onNodeWithText("2 selected").assertDoesNotExist()
+    }
+
+    @Test fun files_kept_only_in_the_app_cannot_be_deleted_from_a_selection() {
+        render(fixtureItems(), ThemeMode.Light)
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg", substring = true).onFirst().performTouchInput { longClick() }
+        compose.onNodeWithText("1 selected").assertExists()
+        compose.onNodeWithContentDescription("Delete").assertDoesNotExist()
+    }
+
     @Test fun another_app_can_pick_several_photos() {
         val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = true) }
         var picked = emptyList<GalleryItem>()

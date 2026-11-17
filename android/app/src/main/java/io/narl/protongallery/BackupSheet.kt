@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -18,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.PhoneFolder
 import io.narl.protongallery.icons.CloudUpload
+import io.narl.protongallery.icons.LibraryAdd
 
 /** What the backup controls can do; defaults keep previews and tests short. */
 class BackupActions(
@@ -73,13 +75,16 @@ fun PhotosHeader(backup: BackupState, onAllow: () -> Unit) {
 
 /** Replaces the top bar while items are selected. */
 @Composable
-fun SelectionBar(selected: List<GalleryItem>, onClose: () -> Unit, onBackUp: () -> Unit, onShare: () -> Unit) {
+fun SelectionBar(selected: List<GalleryItem>, onClose: () -> Unit, onBackUp: () -> Unit, onShare: () -> Unit,
+    onDelete: (() -> Unit)? = null, onAddToAlbum: (() -> Unit)? = null) {
     val waiting = selected.count { it.phoneId != null && !it.backedUp }
     Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Clear selection") }
         Text(if (selected.size == 1) "1 selected" else "${selected.size} selected", Modifier.weight(1f).padding(start = 4.dp),
             style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         IconButton(onClick = onShare) { Icon(Icons.Outlined.Share, "Share") }
+        if (onAddToAlbum != null) IconButton(onClick = onAddToAlbum) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
+        if (onDelete != null) IconButton(onClick = onDelete) { Icon(Icons.Outlined.Delete, "Delete") }
         if (waiting > 0) FilledTonalButton(onClick = onBackUp) {
             Icon(Icons.Outlined.CloudUpload, null, Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))

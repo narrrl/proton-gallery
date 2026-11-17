@@ -143,6 +143,13 @@ impl GalleryEngine {
             *cache=Some(source.clone());
         }
         let checkpoint=pg_core::indexer::scan(&self.catalog,source.as_ref(),true,&account.cancel,|p|{self.indexed.store(p.indexed,Ordering::Relaxed);}).await?;
+        // A complete listing is the truth: photos it no longer has were
+        // deleted elsewhere (or restored items return through the scan).
+        use pg_core::source::MediaSource;
+        if checkpoint.complete && let Some(listed)=source.listed_nodes() {
+            let removed=self.catalog.prune_source(source.spec().id.clone(),listed).await?;
+            if removed>0 { tracing::info!("{removed} photos are no longer in Proton Photos"); }
+        }
         Ok(checkpoint.indexed)
     })
     }

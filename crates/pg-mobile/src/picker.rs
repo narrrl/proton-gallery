@@ -36,6 +36,13 @@ pub struct PickerPage {
     pub next: Option<u64>,
 }
 
+#[derive(uniffi::Record)]
+pub struct PickerDeletions {
+    pub ids: Vec<String>,
+    /// Pass back as `after` for the next page; `None` on the last page.
+    pub next: Option<u64>,
+}
+
 impl GalleryEngine {
     async fn picker_source(&self) -> Result<Option<SourceSpec>, GalleryError> {
         let Some(account) = self.auth.account_id() else {

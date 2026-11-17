@@ -17,6 +17,7 @@ mod diagnostics;
 mod originals;
 mod phone;
 mod picker;
+mod trash;
 
 use pg_core::catalog::Catalog;
 use pg_core::library::SourceKind;
@@ -63,6 +64,9 @@ pub struct GalleryItem {
     /// Whether Proton holds a copy; false only for phone media.
     #[uniffi(default = true)]
     pub backed_up: bool,
+    /// A Proton photo or Drive file, which can be moved to the Proton trash.
+    #[uniffi(default = false)]
+    pub in_proton: bool,
 }
 
 #[derive(Clone, uniffi::Enum)]
@@ -281,6 +285,7 @@ impl GalleryEngine {
                 aspect_ratio: ratio,
                 phone_id: link.phone,
                 backed_up: link.backed_up,
+                in_proton: !phone && asset.key.account.as_str() != "local-device",
             });
         }
         Ok(items)

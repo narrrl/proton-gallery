@@ -65,6 +65,8 @@ data class LibraryState(
 sealed interface UiRequest {
     /** Ask the user to let the app delete these phone items. */
     data class Delete(val sender: IntentSender, val count: Int, val bytes: Long) : UiRequest
+    /** Ask the user to let the app move phone items to the system trash; then trash `proton` too. */
+    data class Trash(val sender: IntentSender, val proton: List<GalleryItem>, val count: Int) : UiRequest
     data class Share(val intent: Intent) : UiRequest
     /** Return chosen items to the app that asked for them. */
     data class Picked(val uris: List<Uri>, val mimes: List<String>) : UiRequest
@@ -632,6 +634,65 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(guard) {
             runCatching { PhoneLibrary.scan(app, repo, force = true); refreshDetails(repo); refreshFolders(repo) }
             mutableState.update { it.copy(revision = it.revision + 1) }
+        }
+    }
+
+    /**
+     * Move items to the trash: phone files to the system trash (the system
+     * asks first), Proton copies to the Proton trash. An item on both goes
+     * from both, so it never comes back through backup.
+     */
+    fun delete(items: List<GalleryItem>) {
+        val deletable = items.filter { it.inProton || it.phoneId != null }
+        if (deletable.isEmpty()) return
+        val proton = deletable.filter { it.inProton }
+        val phone = deletable.mapNotNull { PhoneLibrary.uri(it) }
+        if (phone.isEmpty()) return trashProton(proton, deletable.size)
+        viewModelScope.launch(guard) {
+            try {
+                val request = MediaStore.createTrashRequest(getApplication<Application>().contentResolver, phone, true)
+                mutableRequests.emit(UiRequest.Trash(request.intentSender, proton, deletable.size))
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                android.util.Log.w("ProtonGallery", "Couldn't ask to delete", error)
+                mutableState.update { it.copy(message = "Couldn’t delete these. Try again.", error = true) }
+            }
+        }
+    }
+
+    /** The system trash dialog closed. */
+    fun phoneTrashed(confirmed: Boolean, request: UiRequest.Trash) {
+        if (!confirmed) return
+        if (request.proton.isNotEmpty()) trashProton(request.proton, request.count)
+        else afterDelete(request.count, 0)
+    }
+
+    private fun trashProton(items: List<GalleryItem>, count: Int) {
+        val repo = repository.value ?: return
+        if (items.isNotEmpty() && !mutableAccount.value.connected) return showAccount()
+        viewModelScope.launch(guard) {
+            mutableState.update { it.copy(preparing = if (items.size == 1) "Moving to the Proton trash" else "Moving ${items.size} items to the Proton trash") }
+            try {
+                val outcome = repo.trash(items)
+                PhotoPicker.changed(getApplication())
+                afterDelete(count - outcome.failed.toInt(), outcome.failed.toInt())
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t move to the Proton trash. Try again.", error = true) }
+            } finally { mutableState.update { it.copy(preparing = null) } }
+        }
+    }
+
+    private fun afterDelete(deleted: Int, failed: Int) {
+        mutableState.update { it.copy(revision = it.revision + 1, error = failed > 0, message = when {
+            failed > 0 -> "$failed couldn’t be moved to the trash. Try again."
+            deleted == 1 -> "Moved to the trash"
+            else -> "Moved $deleted items to the trash"
+        }) }
+        val repo = repository.value ?: return
+        viewModelScope.launch(guard) {
+            runCatching { refreshDetails(repo); refreshFolders(repo) }
+            refreshPhone()
         }
     }
 

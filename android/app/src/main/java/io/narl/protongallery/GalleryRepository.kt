@@ -122,6 +122,8 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun pickerCollection() = withContext(Native) { engine.pickerCollection() }
     suspend fun pickerMedia(after: Long, limit: Int) = withContext(Native) { engine.pickerMedia(after.toULong(), limit.toUInt()) }
     suspend fun pickerItem(id: String) = withContext(Native) { engine.pickerItem(id) }
+    suspend fun pickerDeleted(after: Long, limit: Int) = withContext(Native) { engine.pickerDeleted(after.toULong(), limit.toUInt()) }
+    suspend fun trash(items: List<GalleryItem>) = withContext(Native) { engine.trashItems(items.map { it.assetKey }) }
 
     suspend fun freeUpSummary(keepDays: Int) = withContext(Native) { engine.freeUpSummary(keepDays.coerceAtLeast(0).toUInt()) }
     suspend fun freeUpVerified(keepDays: Int) = withContext(Native) { engine.freeUpVerified(keepDays.coerceAtLeast(0).toUInt()) }
