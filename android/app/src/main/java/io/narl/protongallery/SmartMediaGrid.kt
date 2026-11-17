@@ -9,10 +9,12 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -89,6 +91,9 @@ fun SmartMediaGrid(
     albums: List<FolderAlbum> = emptyList(), onAlbum: (FolderAlbum) -> Unit = {},
     tags: List<AlbumTag> = emptyList(), selectedTag: String? = null, onTag: (String?) -> Unit = {},
     albumsTitle: String = "Albums",
+    // One scrolling row of albums above the photos, as on the Photos tab.
+    albumsRow: Boolean = false,
+    onNewAlbum: (() -> Unit)? = null,
     header: (@Composable () -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(),
     // Long-press selects; while anything is selected, a tap adds or removes.
@@ -145,11 +150,13 @@ fun SmartMediaGrid(
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { failed = true }
         }
-        val albumRows = shownAlbums.chunked(albumColumns)
+        val albumRows = if (albumsRow) emptyList() else shownAlbums.chunked(albumColumns)
+        val showRow = albumsRow && (shownAlbums.isNotEmpty() || onNewAlbum != null)
         val pageError = photos.loadState.prepend is LoadState.Error
         // Items listed before the photo rows; keep in step with the LazyColumn below.
         val leading = (if (tags.isNotEmpty()) 1 else 0) + (if (header != null) 1 else 0) +
-            (if (shownAlbums.isNotEmpty()) 1 else 0) + albumRows.size + (if (hiddenCount > 0) 1 else 0) + (if (pageError) 1 else 0)
+            (if (shownAlbums.isNotEmpty() && !albumsRow) 1 else 0) + albumRows.size + (if (showRow) 1 else 0) +
+            (if (hiddenCount > 0) 1 else 0) + (if (pageError) 1 else 0)
         val currentRows by rememberUpdatedState(rows)
         val currentLeading by rememberUpdatedState(leading)
         LaunchedEffect(rows) {
@@ -192,7 +199,20 @@ fun SmartMediaGrid(
                 }
             }
             if (header != null) item(key = "header", contentType = "header") { header() }
-            if (shownAlbums.isNotEmpty()) item(key = "albums-heading", contentType = "heading") {
+            if (showRow) item(key = "albums-row", contentType = "albums-row") {
+                Column(Modifier.padding(bottom = 8.dp)) {
+                    Text(albumsTitle, style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 8.dp))
+                    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (onNewAlbum != null) item(key = "new-album") { NewAlbumCard(onNewAlbum, Modifier.width(128.dp)) }
+                        items(shownAlbums.size, key = { "album-${shownAlbums[it].id}" }) { index ->
+                            val album = shownAlbums[index]
+                            AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.width(128.dp))
+                        }
+                    }
+                }
+            }
+            if (shownAlbums.isNotEmpty() && !albumsRow) item(key = "albums-heading", contentType = "heading") {
                 Text(if (selectedTag != null) "Tagged “$selectedTag”" else albumsTitle, style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 4.dp))
             }
@@ -267,6 +287,19 @@ private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, onClick: () -
             modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = 8.dp))
         Text(albumCaption(album), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1, modifier = Modifier.padding(horizontal = 2.dp).padding(bottom = 4.dp))
+    }
+}
+
+/** The first card of the album row: start a new album. */
+@Composable
+private fun NewAlbumCard(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClickLabel = "Create an album", onClick = onClick)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Add, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+        Text("New album", style = MaterialTheme.typography.titleSmall, maxLines = 1,
+            modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = 8.dp))
     }
 }
 

@@ -136,7 +136,8 @@ impl GalleryEngine {
             result=tokio::time::timeout(std::time::Duration::from_secs(60),photos.get_photos_root())=>result.map_err(|_|GalleryError::Operation{detail:"Proton took too long to respond. Try refreshing again.".into()})?.map_err(|e|{tracing::warn!("Photos root failed: {}",pg_drive::auth::cause_chain(&e));GalleryError::Operation{detail:"Couldn’t open Proton Photos. Check your connection, or sign in again if your session has expired.".into()}})?,
         };
         let Some(root)=root else {return Ok(0);};
-        let source=Arc::new(pg_drive::photos::ProtonPhotosSource::new(photos,account.id,&root)?);
+        let albums=photos.clone();
+        let source=Arc::new(pg_drive::photos::ProtonPhotosSource::new(photos,account.id.clone(),&root)?);
         {
             let mut cache=self.photos.write().unwrap();
             if account.cancel.is_cancelled() {return Err(pg_core::Error::Cancelled.into());}
@@ -150,6 +151,7 @@ impl GalleryEngine {
             let removed=self.catalog.prune_source(source.spec().id.clone(),listed).await?;
             if removed>0 { tracing::info!("{removed} photos are no longer in Proton Photos"); }
         }
+        tokio::select!{biased; _=account.cancel.cancelled()=>{}, _=self.sync_albums(&albums,&account.id)=>{}}
         Ok(checkpoint.indexed)
     })
     }

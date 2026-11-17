@@ -7,6 +7,7 @@ import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import io.narl.protongallery.bridge.GalleryEngine
 import io.narl.protongallery.bridge.GalleryException
+import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.LibraryView
 import io.narl.protongallery.bridge.AlbumOptions
@@ -136,9 +137,18 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun totals() = withContext(Native) { engine.totals() }
     suspend fun count(location: GalleryLocation) = withContext(Native) { location.nativeView()?.let(engine::countAt)?.toLong() ?: 0L }
     suspend fun albums(location: GalleryLocation) = withContext(Native) {
-        if (location.section != GallerySection.Drive) emptyList()
-        else engine.albums(location.album?.gallery, location.album?.id)
+        when {
+            location.section == GallerySection.Photos && location.album == null -> engine.photoAlbums()
+            location.section != GallerySection.Drive -> emptyList()
+            else -> engine.albums(location.album?.gallery, location.album?.id)
+        }
     }
+    suspend fun photoAlbums() = withContext(Native) { engine.photoAlbums() }
+    suspend fun createAlbum(name: String) = withContext(Native) { engine.createAlbum(name) }
+    suspend fun addToAlbum(album: FolderAlbum, items: List<GalleryItem>) = withContext(Native) { engine.addToAlbum(album.id, items.map { it.assetKey }) }
+    suspend fun removeFromAlbum(album: FolderAlbum, items: List<GalleryItem>) = withContext(Native) { engine.removeFromAlbum(album.id, items.map { it.assetKey }) }
+    suspend fun renameAlbum(album: FolderAlbum, name: String) = withContext(Native) { engine.renameAlbum(album.id, name) }
+    suspend fun deleteAlbum(album: FolderAlbum) = withContext(Native) { engine.deleteAlbum(album.id) }
     suspend fun options(location: GalleryLocation): AlbumOptions? = withContext(Native) { location.nativeView()?.let(engine::viewOptions) }
     suspend fun setOptions(location: GalleryLocation, options: AlbumOptions): AlbumOptions? = withContext(Native) {
         location.nativeView()?.let { engine.setViewOptions(it, options) }

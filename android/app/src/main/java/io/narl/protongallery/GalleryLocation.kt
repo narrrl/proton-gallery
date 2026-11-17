@@ -16,11 +16,15 @@ data class GalleryLocation(
         GallerySection.Device -> "On this device"
     }
     fun nativeView(): LibraryView? = when (section) {
-        GallerySection.Photos -> LibraryView.Photos
+        // A Proton album pages like a Drive album: it is a one-level gallery of itself.
+        GallerySection.Photos -> album?.let { LibraryView.DriveAlbum(it.gallery, it.id) } ?: LibraryView.Photos
         GallerySection.Device -> LibraryView.Device
         GallerySection.Drive -> album?.let { LibraryView.DriveAlbum(it.gallery, it.id) }
     }
-    fun child(album: FolderAlbum) = GalleryLocation(GallerySection.Drive, trail + album)
+    fun child(album: FolderAlbum) = copy(trail = trail + album)
+
+    /** Inside one of the account's Proton Photos albums. */
+    val protonAlbum: Boolean get() = section == GallerySection.Photos && album != null
     fun back() = if (trail.isNotEmpty()) copy(trail = trail.dropLast(1)) else GalleryLocation()
     /// Same place with fresh album records (e.g. after a rename).
     fun renamed(album: FolderAlbum) = copy(trail = trail.map { if (it.gallery == album.gallery && it.id == album.id) album else it })

@@ -40,6 +40,9 @@ fun AlbumOptionsSheet(
     onChooseCover: () -> Unit,
     onRemoveGallery: () -> Unit,
     onDismiss: () -> Unit,
+    /** A Proton Photos album: its name is renamed in Proton, and it can be deleted. */
+    proton: Boolean = false,
+    onDeleteAlbum: () -> Unit = {},
 ) {
     var title by rememberSaveable { mutableStateOf(options.title ?: "") }
     var description by rememberSaveable { mutableStateOf(options.description ?: "") }
@@ -63,7 +66,7 @@ fun AlbumOptionsSheet(
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 24.dp).imePadding()) {
             Text("Edit album", style = MaterialTheme.typography.headlineSmall)
             if (album != null) {
-                Text("Changes stay in this app. Your Drive folder isn’t renamed.", style = MaterialTheme.typography.bodySmall,
+                Text(if (proton) "The name changes in Proton Photos too. Everything else stays in this app." else "Changes stay in this app. Your Drive folder isn’t renamed.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                 OutlinedTextField(title, { title = it.take(200) }, Modifier.fillMaxWidth().padding(top = 20.dp),
                     label = { Text("Name") }, placeholder = { Text(album.folderName.ifEmpty { album.name }) }, singleLine = true,
@@ -103,7 +106,9 @@ fun AlbumOptionsSheet(
                 ToggleRow("Pin to top", "Show before other albums", pinned) { pinned = it }
                 ToggleRow("Hide from album list", "Still reachable with “Show hidden albums”", hidden) { hidden = it }
                 if (album.parent == null) TextButton(onClick = { confirmRemove = true }, modifier = Modifier.padding(top = 8.dp),
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Remove gallery from this app") }
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                    Text(if (proton) "Delete album" else "Remove gallery from this app")
+                }
             }
 
             Row(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalArrangement = Arrangement.End) {
@@ -113,7 +118,14 @@ fun AlbumOptionsSheet(
             }
         }
     }
-    if (confirmRemove) AlertDialog(
+    if (confirmRemove && proton) AlertDialog(
+        onDismissRequest = { confirmRemove = false },
+        title = { Text("Delete this album?") },
+        text = { Text("“${album?.name}” is deleted from Proton Photos. Its photos stay in your timeline.") },
+        confirmButton = { TextButton(onClick = { confirmRemove = false; onDismiss(); onDeleteAlbum() }) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Keep") } },
+    )
+    else if (confirmRemove) AlertDialog(
         onDismissRequest = { confirmRemove = false },
         title = { Text("Remove this gallery?") },
         text = { Text("“${album?.name}” and its albums leave this app. Nothing is deleted from Drive, and you can add the folder again later.") },

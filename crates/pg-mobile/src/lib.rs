@@ -16,6 +16,7 @@ mod authentication;
 mod diagnostics;
 mod originals;
 mod phone;
+mod photo_albums;
 mod picker;
 mod trash;
 

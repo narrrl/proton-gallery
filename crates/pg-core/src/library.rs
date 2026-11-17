@@ -1,5 +1,8 @@
 //! Photos timeline and folder galleries are different namespaces. Every Drive
 //! folder is an album, and can contain both direct media and nested albums.
+//! Proton Photos albums share the album tables as single-level galleries of
+//! kind 'album' (see `photo_albums`), so settings, covers and paging work the
+//! same for both.
 use crate::catalog::Catalog;
 use crate::model::*;
 use crate::{Error, Result};
@@ -12,6 +15,8 @@ pub enum SourceKind {
     Photos,
     Drive,
     Device,
+    /// A Proton Photos album.
+    Album,
     Other,
 }
 impl SourceKind {
@@ -20,6 +25,7 @@ impl SourceKind {
             Self::Photos => "photos",
             Self::Drive => "drive",
             Self::Device => "device",
+            Self::Album => "album",
             Self::Other => "other",
         }
     }
@@ -326,7 +332,8 @@ impl Catalog {
             ));
         }
         self.query_albums(
-            "((?1 IS NULL AND n.parent IS NULL) OR (n.gallery=?1 AND n.parent=?2))",
+            "((?1 IS NULL AND n.parent IS NULL AND NOT EXISTS(SELECT 1 FROM source_kinds k WHERE k.source=n.source AND k.kind='album'))
+              OR (n.gallery=?1 AND n.parent=?2))",
             vec![
                 gallery.map(String::from).into(),
                 parent.map(String::from).into(),
@@ -437,7 +444,7 @@ impl Catalog {
         .await
     }
 
-    async fn query_albums(
+    pub(crate) async fn query_albums(
         &self,
         filter: &'static str,
         values: Vec<rusqlite::types::Value>,

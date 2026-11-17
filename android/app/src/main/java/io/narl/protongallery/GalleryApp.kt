@@ -121,6 +121,7 @@ fun GalleryApp(
     backup: BackupState = BackupState(), backupActions: BackupActions = BackupActions(),
     media: MediaActions = MediaActions(),
     pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, onCancelPick: () -> Unit = {},
+    albumActions: AlbumActions = AlbumActions(),
 ) {
     var backupSheet by rememberSaveable { mutableStateOf(false) }
     // Selected timeline items by id, in the order they were chosen.
@@ -133,6 +134,9 @@ fun GalleryApp(
     var selected by remember { mutableStateOf<Pair<List<GalleryItem>, Int>?>(null) }
     // Items waiting for the user to confirm their deletion.
     var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
+    // Items waiting for an album to go into, and the "New album" dialog.
+    var addingToAlbum by remember { mutableStateOf<List<GalleryItem>?>(null) }
+    var naming by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val grid = key(location.section, location.nativeView()) { rememberLazyListState() }
@@ -206,6 +210,8 @@ fun GalleryApp(
                 }, albums = albums, onAlbum = { onNavigate(location.child(it)) },
                     tags = if (driveRoot) tags else emptyList(), selectedTag = tagFilter, onTag = onTag,
                     albumsTitle = if (driveRoot) "Galleries" else "Albums",
+                    albumsRow = photosRoot,
+                    onNewAlbum = if (photosRoot && account.connected && pick == null) { { naming = true } } else null,
                     header = gridHeader,
                     contentPadding = PaddingValues(top = top, bottom = bottom + 24.dp),
                     selection = selection.keys,
@@ -236,7 +242,11 @@ fun GalleryApp(
                     selection.isNotEmpty() && pick == null -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
                         onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() },
                         onShare = { media.share(selection.values.toList()); selection = emptyMap() },
-                        onDelete = if (selection.values.any { it.deletable }) { { confirmDelete = selection.values.filter { it.deletable } } } else null)
+                        onDelete = if (selection.values.any { it.deletable }) { { confirmDelete = selection.values.filter { it.deletable } } } else null,
+                        onAddToAlbum = if (location.section == GallerySection.Photos && account.connected) {
+                            { addingToAlbum = selection.values.toList(); albumActions.loadChoices() }
+                        } else null,
+                        onRemoveFromAlbum = if (location.protonAlbum) { { albumActions.remove(selection.values.toList()); selection = emptyMap() } } else null)
                     pickingCover -> PickingBar { pickingCover = false }
                     location.album != null || device -> Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onNavigate(location.back()) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
@@ -266,8 +276,18 @@ fun GalleryApp(
         backup = backup, onBackup = { menu = false; backupSheet = true })
     if (backupSheet) BackupSheet(backup, account.connected, backupActions, onSignIn = { backupSheet = false; onAccount() },
         onDismiss = { backupSheet = false })
-    if (editing && options != null) AlbumOptionsSheet(options, location.album, tags, onSaveOptions,
-        onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false })
+    if (editing && options != null) AlbumOptionsSheet(
+        if (location.protonAlbum) options.copy(title = options.title ?: location.album?.name) else options,
+        location.album, tags, onSaveOptions,
+        onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false },
+        proton = location.protonAlbum, onDeleteAlbum = { location.album?.let(albumActions.delete) })
+    addingToAlbum?.let { items ->
+        AlbumChooserSheet(items, albumActions.choices, thumbnails,
+            onChoose = { album -> albumActions.add(album, items); addingToAlbum = null; selection = emptyMap() },
+            onCreate = { name -> albumActions.create(name, items); addingToAlbum = null; selection = emptyMap() },
+            onDismiss = { addingToAlbum = null })
+    }
+    if (naming) NewAlbumDialog(onCreate = { albumActions.create(it, emptyList()); naming = false }, onDismiss = { naming = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
     if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)
     selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },

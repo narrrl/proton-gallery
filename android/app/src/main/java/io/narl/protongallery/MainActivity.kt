@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            val albumChoices by model.albumChoices.collectAsStateWithLifecycle()
             val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, delete = model::delete) }
             GalleryTheme(theme) {
                 GalleryApp(
@@ -155,6 +156,8 @@ class MainActivity : ComponentActivity() {
                     crashReport = crashReport, onDismissCrash = { crashReport = null },
                     backup = backup, backupActions = backupActions, media = media,
                     pick = pick, onPick = model::pick, onCancelPick = { setResult(RESULT_CANCELED); finish() },
+                    albumActions = AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
+                        model::removeFromAlbum, model::deleteAlbum),
                 )
             }
         }

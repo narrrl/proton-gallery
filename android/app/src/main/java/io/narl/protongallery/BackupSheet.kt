@@ -76,13 +76,14 @@ fun PhotosHeader(backup: BackupState, onAllow: () -> Unit) {
 /** Replaces the top bar while items are selected. */
 @Composable
 fun SelectionBar(selected: List<GalleryItem>, onClose: () -> Unit, onBackUp: () -> Unit, onShare: () -> Unit,
-    onDelete: (() -> Unit)? = null, onAddToAlbum: (() -> Unit)? = null) {
+    onDelete: (() -> Unit)? = null, onAddToAlbum: (() -> Unit)? = null, onRemoveFromAlbum: (() -> Unit)? = null) {
     val waiting = selected.count { it.phoneId != null && !it.backedUp }
     Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Clear selection") }
         Text(if (selected.size == 1) "1 selected" else "${selected.size} selected", Modifier.weight(1f).padding(start = 4.dp),
             style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
         IconButton(onClick = onShare) { Icon(Icons.Outlined.Share, "Share") }
+        if (onRemoveFromAlbum != null) TextButton(onClick = onRemoveFromAlbum) { Text("Remove") }
         if (onAddToAlbum != null) IconButton(onClick = onAddToAlbum) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
         if (onDelete != null) IconButton(onClick = onDelete) { Icon(Icons.Outlined.Delete, "Delete") }
         if (waiting > 0) FilledTonalButton(onClick = onBackUp) {

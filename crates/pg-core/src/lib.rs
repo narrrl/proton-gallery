@@ -9,6 +9,7 @@ pub mod library;
 pub mod local;
 pub mod model;
 pub mod phone;
+pub mod photo_albums;
 pub mod picker;
 pub mod removal;
 pub mod source;

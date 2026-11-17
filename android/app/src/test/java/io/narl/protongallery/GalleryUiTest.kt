@@ -233,6 +233,42 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Delete").assertDoesNotExist()
     }
 
+    @Test fun the_photos_tab_lists_albums_and_adds_a_selection_to_one() {
+        val items = fixtureItems().map { it.copy(inProton = true) }
+        val summer = FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL, cover = items[4])
+        val added = mutableListOf<String>()
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true, photoAlbums = listOf(summer),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            albumActions = AlbumActions(choices = listOf(summer), add = { album, chosen -> added += "${album.name}:${chosen.size}" }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Albums").assertExists()
+        compose.onNodeWithText("New album").assertExists()
+        compose.onNodeWithContentDescription("Album Summer, 3 items").assertExists()
+        waitForThumbnails()
+        compose.onRoot().captureRoboImage("build/screenshots/photo-albums-light.png")
+
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Add to album").performClick()
+        compose.onNodeWithText("Add to album").assertExists()
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/add-to-album-light.png")
+        compose.onNode(hasText("Summer") and hasClickAction() and !hasContentDescription("Album Summer, 3 items")).performClick()
+        assertEquals(listOf("Summer:1"), added)
+        compose.onNodeWithText("1 selected").assertDoesNotExist()
+    }
+
+    @Test fun a_new_album_can_be_named_from_the_photos_tab() {
+        val created = mutableListOf<String>()
+        render(fixtureItems().map { it.copy(inProton = true) }, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            albumActions = AlbumActions(create = { name, chosen -> created += "$name:${chosen.size}" }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("New album").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("New album").performClick()
+        compose.onNodeWithText("Create").assertIsNotEnabled()
+        compose.onNode(hasSetTextAction()).performTextInput("Hiking")
+        compose.onNodeWithText("Create").performClick()
+        assertEquals(listOf("Hiking:0"), created)
+    }
+
     @Test fun another_app_can_pick_several_photos() {
         val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = true) }
         var picked = emptyList<GalleryItem>()
@@ -316,7 +352,8 @@ class GalleryUiTest {
 
     private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {},
         backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false,
-        media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null) {
+        media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
+        photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions()) {
         val directory = File("build/test-thumbnails-smart").apply { mkdirs() }
         compose.setContent {
             var location by remember { mutableStateOf(initialLocation) }
@@ -324,7 +361,7 @@ class GalleryUiTest {
             val year = remember { FolderAlbum("gallery", "year", "root", "2026", 0uL, 1uL) }
             val coast = remember { FolderAlbum("gallery", "coast", "year", "Coast", items.size.toULong(), 0uL, description = options?.description, tags = options?.tags ?: emptyList()) }
             val albums = when (location.album?.id) {
-                null -> if (location.section == GallerySection.Drive) listOf(root) else emptyList()
+                null -> if (location.section == GallerySection.Drive) listOf(root) else if (photosTab) photoAlbums else emptyList()
                 "root" -> listOf(year)
                 "year" -> listOf(coast)
                 else -> emptyList()
@@ -339,7 +376,8 @@ class GalleryUiTest {
                         remember { ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) }) }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == "coast") options else null,
-                        account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick)
+                        account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick,
+                        albumActions = albumActions)
                 }
             }
         }

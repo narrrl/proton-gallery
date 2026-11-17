@@ -334,6 +334,87 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // Proton Photos albums to choose from when adding photos; loaded when asked.
+    private val mutableAlbumChoices = MutableStateFlow<List<FolderAlbum>?>(null)
+    val albumChoices = mutableAlbumChoices.asStateFlow()
+
+    fun loadAlbumChoices() {
+        val repo = repository.value ?: return
+        viewModelScope.launch(guard) {
+            mutableAlbumChoices.value = runCatching { repo.photoAlbums() }.getOrDefault(emptyList())
+        }
+    }
+
+    /** Proton photos can go into albums; phone photos once they are backed up. */
+    private fun albumReady(items: List<GalleryItem>) = items.filter { it.inProton }
+
+    private fun albumWork(busy: String, failure: String, work: suspend (GalleryRepository) -> String?) {
+        val repo = repository.value ?: return
+        if (!mutableAccount.value.connected) return showAccount()
+        viewModelScope.launch(guard) {
+            mutableState.update { it.copy(preparing = busy) }
+            try {
+                val message = work(repo)
+                refreshDetails(repo)
+                mutableAlbumChoices.value = null
+                mutableState.update { it.copy(revision = it.revision + 1, message = message ?: it.message, error = false) }
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                android.util.Log.w("ProtonGallery", failure, error)
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: failure, error = true) }
+            } finally { mutableState.update { it.copy(preparing = null) } }
+        }
+    }
+
+    private fun addedMessage(added: Int, failed: Int, skipped: Int, album: String): String = buildString {
+        append(if (added == 1) "Added 1 to “$album”" else "Added $added to “$album”")
+        if (failed > 0) append(". $failed couldn’t be added")
+        if (skipped > 0) append(if (skipped == 1) ". 1 isn’t backed up yet" else ". $skipped aren’t backed up yet")
+    }
+
+    fun addToAlbum(album: FolderAlbum, items: List<GalleryItem>) {
+        val ready = albumReady(items)
+        if (ready.isEmpty()) {
+            mutableState.update { it.copy(message = "Back these up first, then add them to an album.", error = false) }
+            return
+        }
+        albumWork("Adding to “${album.name}”", "Couldn’t add to the album. Try again.") { repo ->
+            val change = repo.addToAlbum(album, ready)
+            addedMessage(change.changed.toInt(), change.failed.toInt(), items.size - ready.size, album.name)
+        }
+    }
+
+    /** Create an album, with `items` in it when any are given. */
+    fun createAlbum(name: String, items: List<GalleryItem>) {
+        val ready = albumReady(items)
+        albumWork("Creating “${name.trim()}”", "Couldn’t create the album. Try again.") { repo ->
+            val album = repo.createAlbum(name)
+            if (ready.isEmpty()) "Created “${album.name}”" else {
+                val change = repo.addToAlbum(album, ready)
+                addedMessage(change.changed.toInt(), change.failed.toInt(), items.size - ready.size, album.name)
+            }
+        }
+    }
+
+    fun removeFromAlbum(items: List<GalleryItem>) {
+        val album = location.value.album?.takeIf { location.value.protonAlbum } ?: return
+        albumWork("Removing from “${album.name}”", "Couldn’t remove from the album. Try again.") { repo ->
+            val change = repo.removeFromAlbum(album, items)
+            buildString {
+                append(if (change.changed == 1uL) "Removed 1 from the album" else "Removed ${change.changed} from the album")
+                if (change.failed > 0uL) append(". ${change.failed} couldn’t be removed")
+            }
+        }
+    }
+
+    fun deleteAlbum(album: FolderAlbum) {
+        albumWork("Deleting “${album.name}”", "Couldn’t delete the album. Try again.") { repo ->
+            repo.deleteAlbum(album)
+            navigate(GalleryLocation())
+            "Deleted “${album.name}”. Its photos are still in your timeline."
+        }
+    }
+
     // Presentation options of the open album or timeline.
     private val mutableOptions = MutableStateFlow<AlbumOptions?>(null)
     val options = mutableOptions.asStateFlow()
@@ -357,12 +438,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val before = mutableOptions.value
         viewModelScope.launch(guard) {
             try {
-                val saved = repo.setOptions(place, options) ?: return@launch
+                // A Proton album's name lives in Proton; only presentation stays here.
+                val album = place.album
+                val local = if (place.protonAlbum && album != null) {
+                    val name = options.title?.trim()
+                    if (!name.isNullOrEmpty() && name != album.folderName) repo.renameAlbum(album, name)
+                    options.copy(title = null)
+                } else options
+                val saved = repo.setOptions(place, local)?.let { saved ->
+                    if (place.protonAlbum) saved.copy(title = options.title?.trim()?.ifEmpty { null } ?: album?.folderName) else saved
+                } ?: return@launch
                 if (location.value != place) return@launch
                 mutableOptions.value = saved
                 if (before?.order != saved.order) mutableOrder.update { it + 1 }
                 place.album?.let { album ->
-                    mutableLocation.value = place.renamed(album.copy(name = saved.title ?: album.folderName.ifEmpty { album.name },
+                    val name = saved.title ?: album.folderName.ifEmpty { album.name }
+                    mutableLocation.value = place.renamed(album.copy(name = name, folderName = if (place.protonAlbum) name else album.folderName,
                         description = saved.description, tags = saved.tags, pinned = saved.pinned, hidden = saved.hidden))
                 }
                 mutableTags.value = repo.albumTags()
