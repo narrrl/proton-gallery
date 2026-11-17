@@ -8,6 +8,7 @@ pub mod indexer;
 pub mod library;
 pub mod local;
 pub mod model;
+pub mod phone;
 pub mod source;
 pub mod synthetic;
 

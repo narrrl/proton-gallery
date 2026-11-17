@@ -150,7 +150,7 @@ async fn version_one_catalog_migrates_without_losing_existing_metadata() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
-        5
+        6
     );
 }
 

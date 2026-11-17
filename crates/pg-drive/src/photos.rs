@@ -122,6 +122,11 @@ impl MediaSource for ProtonPhotosSource {
     }
 }
 
+/// The catalog record of a Photos node, sorted by its capture time.
+pub fn photo_asset(account: &AccountId, node: Node, capture_time: i64) -> Result<Option<Asset>> {
+    project(account, node, capture_time)
+}
+
 fn project(account: &AccountId, node: Node, capture_time: i64) -> Result<Option<Asset>> {
     Ok(super::to_asset(account, node)?.map(|mut asset| {
         asset.sort_time = capture_time;

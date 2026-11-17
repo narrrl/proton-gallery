@@ -14,6 +14,7 @@ mod albums;
 mod android_tls;
 mod authentication;
 mod diagnostics;
+mod phone;
 
 use pg_core::catalog::Catalog;
 use pg_core::library::SourceKind;
@@ -54,6 +55,12 @@ pub struct GalleryItem {
     /// Account/volume/node identity as JSON, for choosing an album cover.
     #[uniffi(default = "")]
     pub asset_key: String,
+    /// The phone's media identifier when the file is on this phone.
+    #[uniffi(default = None)]
+    pub phone_id: Option<String>,
+    /// Whether Proton holds a copy; false only for phone media.
+    #[uniffi(default = true)]
+    pub backed_up: bool,
 }
 
 #[derive(Clone, uniffi::Enum)]
@@ -145,6 +152,7 @@ pub struct GalleryEngine {
     indexed: AtomicU64,
     drive_sync: tokio::sync::Mutex<()>,
     drive_indexed: AtomicU64,
+    backup_check: tokio::sync::Mutex<()>,
 }
 
 #[uniffi::export]
@@ -183,6 +191,9 @@ impl GalleryEngine {
             catalog
                 .set_source_kind(LocalLibrary::source()?.id, SourceKind::Device)
                 .await?;
+            catalog
+                .register_source(pg_core::phone::phone_source()?)
+                .await?;
             pg_core::Result::Ok((catalog, local))
         })?;
         Ok(Arc::new(Self {
@@ -195,6 +206,7 @@ impl GalleryEngine {
             indexed: AtomicU64::new(0),
             drive_sync: tokio::sync::Mutex::new(()),
             drive_indexed: AtomicU64::new(0),
+            backup_check: tokio::sync::Mutex::new(()),
         }))
     }
 
@@ -233,8 +245,16 @@ impl GalleryEngine {
             .catalog
             .aspect_ratios(assets.iter().map(|a| a.key.clone()).collect())
             .await?;
+        let links = self
+            .catalog
+            .phone_links(
+                self.auth.account_id(),
+                assets.iter().map(|a| a.key.clone()).collect(),
+            )
+            .await?;
         let mut items = Vec::with_capacity(assets.len());
-        for ((asset, path), ratio) in assets.into_iter().zip(paths).zip(ratios) {
+        for (((asset, path), ratio), link) in assets.into_iter().zip(paths).zip(ratios).zip(links) {
+            let phone = pg_core::phone::is_phone(&asset.key);
             let key = serde_json::to_string(&asset.key).map_err(|_| GalleryError::Operation {
                 detail: "Invalid asset identity".into(),
             })?;
@@ -245,7 +265,7 @@ impl GalleryEngine {
                 } else {
                     asset.key.stable_id()?
                 },
-                remote_key: path.is_none().then(|| key.clone()),
+                remote_key: (path.is_none() && !phone).then(|| key.clone()),
                 asset_key: key,
                 revision: asset.revision.map(|revision| revision.to_string()),
                 name: asset.name,
@@ -257,6 +277,8 @@ impl GalleryEngine {
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default(),
                 aspect_ratio: ratio,
+                phone_id: link.phone,
+                backed_up: link.backed_up,
             });
         }
         Ok(items)
@@ -354,6 +376,23 @@ impl GalleryEngine {
         let cursor = cursor.as_deref().map(TimelineCursor::decode).transpose()?;
         let size = PageSize::new(limit as usize)?;
         self.runtime.block_on(async {
+            if matches!(view, LibraryView::Photos) {
+                let page = self
+                    .catalog
+                    .timeline_window(
+                        self.photo_source().await?,
+                        self.auth.account_id(),
+                        cursor,
+                        backwards,
+                        size,
+                    )
+                    .await?;
+                return Ok(GalleryPage {
+                    items: self.items(page.items).await?,
+                    next: page.next.map(|c| c.encode()).transpose()?,
+                    previous: page.previous.map(|c| c.encode()).transpose()?,
+                });
+            }
             let Some(source) = self.view_source(view).await? else {
                 return Ok(GalleryPage {
                     items: vec![],
@@ -429,6 +468,13 @@ impl GalleryEngine {
 
     pub fn count_at(&self, view: LibraryView) -> Result<u64, GalleryError> {
         self.runtime.block_on(async {
+            if matches!(view, LibraryView::Photos) {
+                let photos = self.photo_source().await?;
+                return Ok(self
+                    .catalog
+                    .timeline_count(photos, self.auth.account_id())
+                    .await?);
+            }
             match self.view_source(view).await? {
                 Some(source) => Ok(self.catalog.source_count(source).await?),
                 None => Ok(0),

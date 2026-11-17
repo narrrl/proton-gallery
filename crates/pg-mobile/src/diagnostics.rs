@@ -242,12 +242,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("last-panic.txt");
         install();
-        set_panic_file(path.clone());
-        let _ = std::thread::Builder::new()
-            .name("panic-probe".into())
-            .spawn(|| panic!("diagnostics-panic-marker"))
-            .unwrap()
-            .join();
+        // Engines opened by parallel tests point the hook at their own folder;
+        // try again until this panic lands here.
+        for _ in 0..50 {
+            set_panic_file(path.clone());
+            let _ = std::thread::Builder::new()
+                .name("panic-probe".into())
+                .spawn(|| panic!("diagnostics-panic-marker"))
+                .unwrap()
+                .join();
+            if path.is_file() {
+                break;
+            }
+        }
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("panic-probe"), "{text}");
         assert!(text.contains("diagnostics-panic-marker"), "{text}");
