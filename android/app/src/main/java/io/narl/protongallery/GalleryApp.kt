@@ -175,6 +175,17 @@ fun GalleryApp(
             if (location.private) { selected = null; onNavigate(GalleryLocation(location.section)) }
         }
     }
+    // While hidden albums are open, nothing of the screen may leave the phone:
+    // no screenshots, recordings, casting or recent-apps thumbnail.
+    DisposableEffect(hiddenUnlocked, activityContext) {
+        val window = activityContext?.window
+        if (hiddenUnlocked) window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        if (android.os.Build.VERSION.SDK_INT >= 33) activityContext?.setRecentsScreenshotEnabled(!hiddenUnlocked)
+        onDispose {
+            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            if (android.os.Build.VERSION.SDK_INT >= 33) activityContext?.setRecentsScreenshotEnabled(true)
+        }
+    }
     val toggleHidden = {
         when {
             hiddenUnlocked -> lock()

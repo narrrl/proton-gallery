@@ -55,7 +55,7 @@ class PickerProvider : CloudMediaProvider() {
 
     private fun <T> work(signal: CancellationSignal? = null, block: suspend (GalleryRepository) -> T): T = runBlocking(Dispatchers.IO) {
         val repository = GalleryRepository.get(app)
-        runCatching { repository.ensureSession() }.onFailure { Log.w(TAG, "Session restore failed", it) }
+        runCatching { repository.ensureSession() }.onFailure { Log.w(TAG, "Session restore failed: ${it.javaClass.simpleName}") }
         val job = async { block(repository) }
         signal?.setOnCancelListener { job.cancel() }
         job.await()
@@ -154,7 +154,7 @@ class PickerProvider : CloudMediaProvider() {
             }
         } catch (missing: FileNotFoundException) { throw missing }
         catch (error: Exception) {
-            Log.w(TAG, "Original download for the picker failed", error)
+            Log.w(TAG, "Original download for the picker failed: ${error.javaClass.simpleName}")
             throw FileNotFoundException(error.message ?: "Download failed")
         }
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)

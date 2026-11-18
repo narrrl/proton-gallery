@@ -57,3 +57,20 @@ These do not block starting the Rust foundation and performance spikes. Initial 
 The user's revised direction is authoritative: normal Proton Photos is the main view; explicitly selected Drive folders are separate galleries with recursive subalbums and mixed direct media. Device imports stay separate. Photos is part of the first delivery rather than a later M5 addition.
 
 The justified-row algorithm is ported from proton-drive-linux into pg-core and called through UniFFI. This prevents desktop/Android from diverging into different layout rules. Source kinds and per-gallery parent edges preserve real namespace and folder relationships. Schema 4 adds ordered membership indexes so sparse album reads do not walk the global timeline. The [product document](PRODUCT.md) records implementation boundaries and the updated delivery gates.
+
+## 2026-11-18 — Hidden photos and data at rest
+
+Proton has no way to hide photos: no tag, and an album's `Hidden` flag is read-only in the API. Hiding is therefore a choice made on this phone. A photo is hidden while it is in any album marked hidden. It then leaves the timeline, the search and the system photo picker here (schema 10 tells the picker at once), while the album itself stays an ordinary Proton album that other Proton apps show. The app says so where an album is hidden. "Hide" puts photos into the hidden album, creating one named Hidden when there is none; phone-only photos are backed up first. The phone's copy stays in the phone's own gallery until the user deletes it.
+
+The lock on hidden albums is the phone's own (biometric or screen lock) and gates the screen, not the data: nothing on disk is encrypted with it. What it does protect:
+
+- Thumbnails of hidden albums stay in memory and are dropped when the albums lock. Originals decrypted for viewing are deleted at the lock; copies handed to another app at the lock after that.
+- While hidden albums are open the window is secure: no screenshots, recordings, casting or recent-apps thumbnail.
+- Hidden albums stay out of the album lists of other actions, and their names out of the backup settings, until unlocked.
+
+Data at rest otherwise:
+
+- The session (tokens and key passphrases) is AES-GCM encrypted under a non-exportable Android Keystore key. The key does not require an unlocked device, because backup runs while the phone is locked.
+- The catalog stays plain SQLite (mode 600, app-private, under Android's file-based encryption). It holds decrypted names, album titles and the hidden flag. Signing out deletes everything of the account from it and rewrites the file (`VACUUM`), and deletes the thumbnail, picker and original caches. SQLCipher would add about 3 MB, an OpenSSL cross-build and a key migration; reconsider it before hidden albums are described as a vault.
+- Decrypted originals in the cache expire after a day, checked whenever the app leaves the screen. Grid thumbnails of non-hidden media stay on disk (320 px WebP, 256 MB) until sign-out or the system clears the cache.
+- Release builds drop verbose logs; warnings name the kind of failure only, never paths or file names.

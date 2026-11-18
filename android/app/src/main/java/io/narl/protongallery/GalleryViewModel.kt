@@ -112,7 +112,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // Last line of defence: an unexpected failure in a background task shows a
     // message instead of closing the app.
     private val guard = CoroutineExceptionHandler { _, error ->
-        android.util.Log.e("ProtonGallery", "Background task failed", error)
+        android.util.Log.e("ProtonGallery", "Background task failed: ${error.javaClass.simpleName}")
         CrashLog.note(getApplication(), error)
         mutableState.update { it.copy(message = "Something went wrong. Try again.", error = true) }
     }
@@ -191,6 +191,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 // Previews and originals of this account must not outlive it.
                 withContext(Dispatchers.IO) {
                     File(getApplication<Application>().cacheDir, "thumbnails").deleteRecursively()
+                    File(getApplication<Application>().cacheDir, "picker").deleteRecursively()
                     Originals.directory(getApplication()).deleteRecursively()
                 }
                 mutableAccount.update { AccountState(generation = it.generation + 1) }
@@ -368,7 +369,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.update { it.copy(revision = it.revision + 1, message = message ?: it.message, error = false) }
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
-                android.util.Log.w("ProtonGallery", failure, error)
+                android.util.Log.w("ProtonGallery", "$failure ${error.javaClass.simpleName}")
                 mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: failure, error = true) }
             } finally { mutableState.update { it.copy(preparing = null) } }
         }
@@ -675,7 +676,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     }
                     refreshFolders(repo)
                 } catch (cancel: CancellationException) { throw cancel }
-                catch (error: Exception) { android.util.Log.w("ProtonGallery", "Phone library update failed", error) }
+                catch (error: Exception) { android.util.Log.w("ProtonGallery", "Phone library update failed: ${error.javaClass.simpleName}") }
             } while (phoneAgain)
         }
     }
@@ -756,7 +757,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 mutableRequests.emit(UiRequest.Trash(request.intentSender, proton, deletable.size))
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
-                android.util.Log.w("ProtonGallery", "Couldn't ask to delete", error)
+                android.util.Log.w("ProtonGallery", "Couldn't ask to delete: ${error.javaClass.simpleName}")
                 mutableState.update { it.copy(message = "Couldn’t delete these. Try again.", error = true) }
             }
         }
@@ -776,7 +777,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val request = MediaStore.createFavoriteRequest(getApplication<Application>().contentResolver, phone, favorite)
                 mutableRequests.emit(UiRequest.Favorite(request.intentSender))
             } catch (cancel: CancellationException) { throw cancel }
-            catch (error: Exception) { android.util.Log.w("ProtonGallery", "Couldn't ask to change favorites", error) }
+            catch (error: Exception) { android.util.Log.w("ProtonGallery", "Couldn't ask to change favorites: ${error.javaClass.simpleName}") }
             if (proton.isEmpty()) return@launch
             if (!mutableAccount.value.connected) return@launch showAccount()
             try {
@@ -798,10 +799,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     // Originals of hidden albums decrypted for viewing; deleted when they lock.
     private val privateFiles = java.util.Collections.synchronizedSet(HashSet<File>())
+    // Copies of hidden media handed to another app. Sharing itself leaves the
+    // app and locks, so these go at the lock after that, once the other app
+    // has had them.
+    private val privateHandedOut = java.util.Collections.synchronizedSet(HashSet<File>())
 
     /** Hidden albums locked: delete what was decrypted from them. */
     fun forgetPrivate() {
         val files = synchronized(privateFiles) { privateFiles.toList().also { privateFiles.clear() } }
+        synchronized(privateHandedOut) { privateFiles += privateHandedOut; privateHandedOut.clear() }
         if (files.isNotEmpty()) viewModelScope.launch(Dispatchers.IO) { files.forEach { it.delete() } }
     }
 
@@ -867,11 +873,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 else -> "Downloading $downloads originals from Proton"
             }) }
             try {
-                val uris = items.map { Originals.uri(app, repo, it) }
+                val private = location.value.private
+                val uris = items.map { item ->
+                    Originals.uri(app, repo, item) { file -> if (private) privateHandedOut += file }
+                }
                 mutableRequests.emit(request(uris, items.map(Originals::mime)))
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
-                android.util.Log.w("ProtonGallery", "Couldn't $verb", error)
+                android.util.Log.w("ProtonGallery", "Couldn't $verb: ${error.javaClass.simpleName}")
                 mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t get these ready. Try again.", error = true) }
             } finally { mutableState.update { it.copy(preparing = null) } }
         }
@@ -883,6 +892,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (item.remoteKey == null) return null
         repo.preview(item)?.let { bytes -> withContext(Dispatchers.Default) { ThumbnailLoader.decodeBytes(bytes, 2560) } }?.let { return it }
         val file = repo.downloadOriginal(item, Originals.directory(getApplication()))
+        if (location.value.private) privateFiles += file
         return withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(file, 2560) }
     }
 

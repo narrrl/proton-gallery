@@ -112,9 +112,21 @@ impl GalleryEngine {
         self.runtime.block_on(self.auth.reset(false))?;
         Ok(())
     }
+    /// Sign out and forget what the catalog knew of the account: decrypted
+    /// names, album titles and backup state must not outlive the session.
     pub fn sign_out(&self) -> Result<(), GalleryError> {
+        let account = self.auth.account_id();
         self.runtime.block_on(self.auth.reset(true))?;
         *self.photos.write().unwrap() = None;
+        if let Some(account) = account {
+            self.runtime.block_on(async {
+                // Running syncs stop with the session; wait so none writes after.
+                let _photos = self.photos_sync.lock().await;
+                let _drive = self.drive_sync.lock().await;
+                let _check = self.backup_check.lock().await;
+                self.catalog.forget_account(account).await
+            })?;
+        }
         Ok(())
     }
     /// Media indexed so far by the running Photos sync.

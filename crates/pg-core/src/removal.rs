@@ -70,3 +70,59 @@ impl Catalog {
         .await
     }
 }
+
+impl Catalog {
+    /// Forget everything the catalog holds of `account`: its sources,
+    /// albums and their settings, media records, shapes, backup state and
+    /// picker history. Decrypted names and album titles must not outlive a
+    /// sign-out. The phone's own media and the app's device library stay.
+    /// The freed pages are then rewritten, so the old rows are not left in
+    /// the file either.
+    pub async fn forget_account(&self, account: AccountId) -> Result<()> {
+        self.run(move |conn| {
+            let tx = conn.transaction()?;
+            let account = account.as_str();
+            tx.execute(
+                "CREATE TEMP TABLE IF NOT EXISTS forgotten_sources(id TEXT PRIMARY KEY)",
+                [],
+            )?;
+            tx.execute("DELETE FROM forgotten_sources", [])?;
+            tx.execute(
+                "INSERT INTO forgotten_sources SELECT id FROM sources WHERE json_extract(payload,'$.account')=?1",
+                [account],
+            )?;
+            for sql in [
+                "DELETE FROM album_tags WHERE source IN forgotten_sources",
+                "DELETE FROM album_settings WHERE source IN forgotten_sources",
+                "DELETE FROM scans WHERE source IN forgotten_sources",
+                "DELETE FROM album_nodes WHERE source IN forgotten_sources OR gallery IN forgotten_sources",
+                "DELETE FROM album_adds WHERE account=?1 OR album IN forgotten_sources",
+                "DELETE FROM backup_albums WHERE account=?1 OR album IN forgotten_sources",
+                "DELETE FROM memberships WHERE account=?1 OR source IN forgotten_sources",
+                "DELETE FROM source_kinds WHERE source IN forgotten_sources",
+                "DELETE FROM media_shapes WHERE account=?1",
+                "DELETE FROM local_media WHERE account=?1",
+                "DELETE FROM phone_backup WHERE account=?1",
+                "DELETE FROM assets WHERE account=?1",
+                "DELETE FROM sources WHERE id IN forgotten_sources",
+                "DELETE FROM picker_changes WHERE account=?1",
+            ] {
+                if sql.contains("?1") {
+                    tx.execute(sql, [account])?;
+                } else {
+                    tx.execute(sql, [])?;
+                }
+            }
+            tx.execute("DROP TABLE forgotten_sources", [])?;
+            // The system photo picker must drop its copy and start again.
+            tx.execute(
+                "UPDATE picker_state SET collection=lower(hex(randomblob(16))),generation=generation+1",
+                [],
+            )?;
+            tx.commit()?;
+            conn.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+            Ok(())
+        })
+        .await
+    }
+}

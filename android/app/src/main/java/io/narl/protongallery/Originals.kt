@@ -28,7 +28,7 @@ object Originals {
     }
 
     /** Something another app may read once the caller grants it: a media or a cache URI. */
-    suspend fun uri(context: Context, repository: GalleryRepository, item: GalleryItem): Uri {
+    suspend fun uri(context: Context, repository: GalleryRepository, item: GalleryItem, made: (File) -> Unit = {}): Uri {
         PhoneLibrary.uri(item)?.let { return it }
         val file = when {
             item.remoteKey != null -> repository.downloadOriginal(item, directory(context))
@@ -40,6 +40,7 @@ object Originals {
             }
             else -> throw IllegalStateException("This item has no file")
         }
+        made(file)
         return FileProvider.getUriForFile(context, context.packageName + AUTHORITY_SUFFIX, file, item.name)
     }
 

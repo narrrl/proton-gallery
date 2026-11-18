@@ -46,6 +46,12 @@ class MainActivity : ComponentActivity() {
             PickRequest(it.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false), it.type)
         }
         lifecycleScope.launch { Originals.trim(applicationContext) }
+        // Decrypted originals must not wait for the next start to expire.
+        lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
+            override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+                if (!isChangingConfigurations) lifecycleScope.launch { Originals.trim(applicationContext) }
+            }
+        })
         setContent {
             val model: GalleryViewModel = viewModel()
             val state by model.state.collectAsStateWithLifecycle()

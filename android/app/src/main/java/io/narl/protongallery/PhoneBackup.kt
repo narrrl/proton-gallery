@@ -199,7 +199,7 @@ object PhoneBackup {
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (error: Exception) {
-            android.util.Log.w("ProtonGallery", "Backup stopped", error)
+            android.util.Log.w("ProtonGallery", "Backup stopped: ${error.javaClass.simpleName}")
             val message = (error as? GalleryException.Operation)?.detail ?: "Backup stopped. It will try again later."
             mutableProgress.update { it.copy(message = message) }
             throw error
@@ -247,7 +247,7 @@ object PhoneBackup {
                     null
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (error: Exception) {
-                    android.util.Log.w("ProtonGallery", "Backup of one item failed", error)
+                    android.util.Log.w("ProtonGallery", "Backup of one item failed: ${error.javaClass.simpleName}")
                     error
                 }
             }

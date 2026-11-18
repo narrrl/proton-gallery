@@ -178,3 +178,76 @@ async fn backups_go_into_their_folders_albums_once_uploaded() {
         .unwrap();
     assert!(catalog.backup_albums(account()).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn signing_out_forgets_the_accounts_records_and_keeps_the_phones() {
+    let catalog = Catalog::in_memory().await.unwrap();
+    catalog
+        .register_source(phone_source().unwrap())
+        .await
+        .unwrap();
+    catalog
+        .phone_upsert(1, vec![media("1", "camera")])
+        .await
+        .unwrap();
+    let photos = album("photos-1");
+    catalog.register_source(photos.clone()).await.unwrap();
+    catalog
+        .set_source_kind(photos.id.clone(), pg_core::library::SourceKind::Photos)
+        .await
+        .unwrap();
+    let asset = Asset {
+        key: AssetKey {
+            account: account(),
+            volume: VolumeId::new("photos-volume").unwrap(),
+            node: NodeId::new("r1").unwrap(),
+        },
+        name: "secret-name.jpg".into(),
+        kind: MediaKind::Image,
+        mime: "image/jpeg".into(),
+        revision: None,
+        size_bytes: Some(1),
+        sort_time: 1,
+        favorite: false,
+    };
+    catalog
+        .add_to_source(photos.id.clone(), asset.clone())
+        .await
+        .unwrap();
+    let private = album("album-private");
+    catalog
+        .sync_photo_album(private.clone(), vec![asset])
+        .await
+        .unwrap();
+    back_up(&catalog, "1").await;
+    catalog
+        .set_backup_album(account(), None, private.id.clone(), true)
+        .await
+        .unwrap();
+    let before = catalog.picker_state().await.unwrap();
+
+    catalog.forget_account(account()).await.unwrap();
+    assert!(catalog.photo_albums(account()).await.unwrap().is_empty());
+    assert_eq!(catalog.source_count(photos.id.clone()).await.unwrap(), 0);
+    assert!(catalog.backup_albums(account()).await.unwrap().is_empty());
+    assert_ne!(
+        catalog.picker_state().await.unwrap().collection,
+        before.collection
+    );
+    let outline = catalog
+        .timeline_outline(None, Some(account()))
+        .await
+        .unwrap();
+    // Only the phone's own photo is left, no longer backed up.
+    assert_eq!(outline.len(), 1);
+    assert_eq!(outline[0].key.node.as_str(), "1");
+    assert_eq!(
+        catalog
+            .phone_entry("1".into(), Some(account()))
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        BackupState::Unchecked
+    );
+}
