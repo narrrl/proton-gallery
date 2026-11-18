@@ -103,45 +103,67 @@ fun groupLabel(time: Long, grouping: AlbumGrouping): String? {
     else date.format(DateTimeFormatter.ofPattern("LLLL yyyy", Locale.getDefault()))
 }
 
-/** Plan every row of `outline`: a heading where the group changes, then its
- * photos justified to the width. Unknown shapes are square, so the rows only
- * change with the outline. */
-private fun planRows(outline: GalleryOutline, grouping: AlbumGrouping, width: Int, target: Int, gap: Int): List<GalleryRow> {
-    val zone = ZoneId.systemDefault()
-    // Group of each item, formatted only where it changes.
-    fun group(time: Long): Long = if (grouping == AlbumGrouping.NONE) 0L else {
-        val date = Instant.ofEpochSecond(time).atZone(zone).toLocalDate()
-        when (grouping) {
-            AlbumGrouping.YEAR -> date.year.toLong()
-            AlbumGrouping.MONTH -> date.year * 12L + date.monthValue
-            else -> date.toEpochDay()
-        }
+/** The group of a capture time; items of one group share a heading. */
+private fun groupOf(time: Long, grouping: AlbumGrouping, zone: ZoneId): Long = if (grouping == AlbumGrouping.NONE) 0L else {
+    val date = Instant.ofEpochSecond(time).atZone(zone).toLocalDate()
+    when (grouping) {
+        AlbumGrouping.YEAR -> date.year.toLong()
+        AlbumGrouping.MONTH -> date.year * 12L + date.monthValue
+        else -> date.toEpochDay()
     }
+}
+
+/** Plan the rows of items `from` until `until` of `outline`: a heading where
+ * the group changes, then its photos justified to the width. Unknown shapes
+ * are square, so the rows only change with the outline. */
+private fun planRows(
+    outline: GalleryOutline, grouping: AlbumGrouping, width: Int, target: Int, gap: Int,
+    from: Int = 0, until: Int = outline.count,
+): List<GalleryRow> {
+    val zone = ZoneId.systemDefault()
+    fun group(time: Long) = groupOf(time, grouping, zone)
     val rows = ArrayList<GalleryRow>()
-    var start = 0
-    while (start < outline.count) {
+    var start = from
+    while (start < until) {
         val section = group(outline.times[start])
         var end = start + 1
-        while (end < outline.count && group(outline.times[end]) == section) end++
+        while (end < until && group(outline.times[end]) == section) end++
         groupLabel(outline.times[start], grouping)?.let { rows += GalleryRow.Heading("group-${outline.ids[start]}", it) }
         // The planner takes a bounded number of items. Its rows only look
         // ahead, so planning in pieces and keeping all but each piece's last
         // row gives the same rows as planning the whole section at once.
-        var from = start
-        while (from < end) {
-            val until = minOf(end, from + 1024)
-            val planned = planSmartGrid((from until until).map(outline::ratio), width.toUInt(), target.toUInt(), gap.toUInt())
-            val keep = if (until == end) planned else planned.dropLast(1).ifEmpty { planned }
+        var piece = start
+        while (piece < end) {
+            val pieceEnd = minOf(end, piece + 1024)
+            val planned = planSmartGrid((piece until pieceEnd).map(outline::ratio), width.toUInt(), target.toUInt(), gap.toUInt())
+            val keep = if (pieceEnd == end) planned else planned.dropLast(1).ifEmpty { planned }
             for (row in keep) {
-                val first = from + row.start.toInt()
+                val first = piece + row.start.toInt()
                 rows += GalleryRow.Media("row-${outline.ids[first]}", first, IntArray(row.tiles.size) { row.tiles[it].width.toInt() }, row.tiles.first().height.toInt())
             }
-            from = keep.last().let { from + it.start.toInt() + it.tiles.size }
+            piece = keep.last().let { piece + it.start.toInt() + it.tiles.size }
         }
         start = end
     }
     return rows
 }
+
+/** While pinching, only the rows around `anchor` are planned, on the spot, so
+ * every finger movement resizes the tiles in the next frame however large the
+ * view. They start at the anchor's group when it is near, so most rows already
+ * match the full plan that replaces them once the fingers lift. */
+private fun planAround(outline: GalleryOutline, anchor: Int, grouping: AlbumGrouping, width: Int, target: Int, gap: Int): List<GalleryRow> {
+    val zone = ZoneId.systemDefault()
+    val section = groupOf(outline.times[anchor], grouping, zone)
+    var from = anchor
+    while (from > 0 && anchor - from < PINCH_BEHIND && groupOf(outline.times[from - 1], grouping, zone) == section) from--
+    return planRows(outline, grouping, width, target, gap, from, minOf(outline.count, anchor + PINCH_AHEAD))
+}
+
+// Items planned around the anchor while pinching: before it within its group,
+// and after it, several screens of the smallest tiles.
+private const val PINCH_BEHIND = 1500
+private const val PINCH_AHEAD = 600
 
 /** Every row is planned from the outline at once, so the grid only moves when
  * media is added or removed. Records and thumbnails load as rows come into
@@ -191,7 +213,7 @@ fun SmartMediaGrid(
         var layout by remember { mutableStateOf<GridLayout?>(null) }
         var failed by remember { mutableStateOf(false) }
         var retry by remember { mutableIntStateOf(0) }
-        LaunchedEffect(outline, widthPx, targetPx, gapPx, grouping, retry) {
+        LaunchedEffect(outline, widthPx, targetPx, gapPx, grouping, retry, pinching) {
             if (outline == null) { layout = null; return@LaunchedEffect }
             // The photo at the top stays at the top through the new layout.
             val before = layout
@@ -199,7 +221,9 @@ fun SmartMediaGrid(
             val kept = anchor ?: (before?.rows?.getOrNull(topRow) as? GalleryRow.Media)?.let { before.outline.ids[it.start] }
             val offset = if (anchor != null) 0 else scroll.firstVisibleItemScrollOffset
             try {
-                val rows = withContext(Dispatchers.Default) { planRows(outline, grouping, widthPx, targetPx, gapPx) }
+                val around = if (pinching) anchor?.let(outline::indexOf)?.takeIf { it >= 0 } else null
+                val rows = if (around != null) planAround(outline, around, grouping, widthPx, targetPx, gapPx)
+                    else withContext(Dispatchers.Default) { planRows(outline, grouping, widthPx, targetPx, gapPx) }
                 val next = GridLayout(outline, rows)
                 layout = next
                 failed = false
