@@ -3,11 +3,13 @@
 //! Android's picker keeps its own copy of a cloud library and asks for what
 //! changed since the last generation it saw. The catalog counts changes to
 //! Photos-source members in `picker_changes` (see schema v7); members that
-//! leave the source stay there marked deleted (schema v8).
+//! leave the source stay there marked deleted (schema v8). Members in a
+//! hidden album are reported as deleted while it is hidden (schema v10).
 use rusqlite::{OptionalExtension, params};
 
 use crate::catalog::Catalog;
 use crate::model::*;
+use crate::phone::not_hidden;
 use crate::{Error, Result};
 
 /// The picker's view of the catalog: a random identity and the last change.
@@ -59,7 +61,7 @@ impl Catalog {
             i64::try_from(after).map_err(|_| Error::Invalid("generation out of range".into()))?;
         let limit = limit.clamp(1, PICKER_PAGE_MAX);
         self.run(move |conn| {
-            let mut query = conn.prepare_cached(
+            let mut query = conn.prepare_cached(&format!(
                 "SELECT c.generation,a.payload,s.width,s.height,
                     (SELECT b.node FROM phone_backup b WHERE b.account=c.account
                         AND b.remote_volume=c.volume AND b.remote_node=c.node LIMIT 1)
@@ -67,8 +69,9 @@ impl Catalog {
                  JOIN memberships m ON m.source=?1 AND (m.account,m.volume,m.node)=(c.account,c.volume,c.node)
                  JOIN assets a ON (a.account,a.volume,a.node)=(c.account,c.volume,c.node)
                  LEFT JOIN media_shapes s ON (s.account,s.volume,s.node)=(c.account,c.volume,c.node)
-                 WHERE c.generation>?2 ORDER BY c.generation LIMIT ?3",
-            )?;
+                 WHERE c.generation>?2 AND {} ORDER BY c.generation LIMIT ?3",
+                not_hidden("c")
+            ))?;
             let rows = query.query_map(params![source.as_str(), after, limit], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -106,11 +109,12 @@ impl Catalog {
             i64::try_from(after).map_err(|_| Error::Invalid("generation out of range".into()))?;
         let limit = limit.clamp(1, PICKER_PAGE_MAX);
         self.run(move |conn| {
-            let mut query = conn.prepare_cached(
-                "SELECT node,generation FROM picker_changes
-                 WHERE deleted=1 AND generation>?1 AND account=?2 AND volume=?3
-                 ORDER BY generation LIMIT ?4",
-            )?;
+            let mut query = conn.prepare_cached(&format!(
+                "SELECT c.node,c.generation FROM picker_changes c
+                 WHERE (c.deleted=1 OR NOT {}) AND c.generation>?1 AND c.account=?2 AND c.volume=?3
+                 ORDER BY c.generation LIMIT ?4",
+                not_hidden("c")
+            ))?;
             let rows = query.query_map(
                 params![
                     after,
@@ -138,8 +142,8 @@ impl Catalog {
         self.run(move |conn| {
             let payload: Option<String> = conn
                 .query_row(
-                    "SELECT a.payload FROM memberships m JOIN assets a USING(account,volume,node)
-                     WHERE m.source=?1 AND m.account=?2 AND m.volume=?3 AND m.node=?4",
+                    &format!("SELECT a.payload FROM memberships m JOIN assets a USING(account,volume,node)
+                     WHERE m.source=?1 AND m.account=?2 AND m.volume=?3 AND m.node=?4 AND {}", not_hidden("m")),
                     params![
                         source.id.as_str(),
                         source.account.as_str(),

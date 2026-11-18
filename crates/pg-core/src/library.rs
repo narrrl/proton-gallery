@@ -387,6 +387,16 @@ impl Catalog {
             if !exists {
                 return Err(Error::NotFound);
             }
+            // Hiding takes media out of the timeline and the photo picker,
+            // so the timeline itself and the phone cannot be hidden.
+            let shared: bool = tx.query_row(
+                "SELECT ?1='phone' OR EXISTS(SELECT 1 FROM source_kinds WHERE source=?1 AND kind='photos')",
+                [source.as_str()],
+                |r| r.get(0),
+            )?;
+            if settings.hidden && shared {
+                return Err(Error::Invalid("the timeline cannot be hidden".into()));
+            }
             if let Some(cover) = &settings.cover {
                 let member: bool = tx.query_row(
                     "WITH RECURSIVE tree(source) AS (SELECT ?1 UNION SELECT c.source FROM album_nodes c JOIN tree t ON c.parent=t.source)

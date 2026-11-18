@@ -294,3 +294,170 @@ async fn trashed_and_vanished_photos_leave_the_timeline_and_the_picker() {
             .is_err()
     );
 }
+
+fn album(id: &str) -> SourceSpec {
+    SourceSpec {
+        label: "Private".into(),
+        ..spec(id)
+    }
+}
+
+async fn hide(catalog: &Catalog, source: &SourceSpec, hidden: bool) {
+    let settings = pg_core::library::AlbumSettings {
+        hidden,
+        ..catalog.album_settings(source.id.clone()).await.unwrap()
+    };
+    catalog
+        .set_album_settings(source.id.clone(), settings)
+        .await
+        .unwrap();
+}
+
+async fn timeline(catalog: &Catalog, photos: &SourceSpec) -> Vec<String> {
+    catalog
+        .timeline_outline(Some(photos.id.clone()), Some(account()))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.key.node.to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn media_in_a_hidden_album_leaves_the_timeline_and_the_picker() {
+    let (catalog, photos) = setup().await;
+    for (node, name, time) in [("r1", "a.jpg", 1), ("r2", "b.jpg", 2)] {
+        catalog
+            .add_to_source(photos.id.clone(), remote(node, name, "image/jpeg", time))
+            .await
+            .unwrap();
+    }
+    // A phone photo whose Proton copy goes into the hidden album.
+    catalog
+        .phone_upsert(
+            1,
+            vec![PhoneMedia {
+                id: "7".into(),
+                name: "IMG_7.jpg".into(),
+                mime: "image/jpeg".into(),
+                folder: "camera".into(),
+                folder_name: "Camera".into(),
+                taken: 3,
+                modified: 3,
+                size_bytes: 1000,
+                width: 4,
+                height: 3,
+                favorite: false,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(timeline(&catalog, &photos).await, ["7", "r2", "r1"]);
+
+    let private = album("album-private");
+    catalog
+        .sync_photo_album(
+            private.clone(),
+            vec![remote("r1", "a.jpg", "image/jpeg", 1)],
+        )
+        .await
+        .unwrap();
+    let before = catalog.picker_state().await.unwrap().generation;
+    hide(&catalog, &private, true).await;
+
+    // Hiding is a change: the picker hears that r1 is gone.
+    assert_eq!(timeline(&catalog, &photos).await, ["7", "r2"]);
+    let deleted: Vec<String> = catalog
+        .picker_deletions(photos.clone(), before, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(node, _)| node.to_string())
+        .collect();
+    assert_eq!(deleted, ["r1"]);
+    assert!(
+        changed(&catalog, &photos, 0)
+            .await
+            .iter()
+            .all(|(name, _)| name != "a.jpg")
+    );
+    assert!(
+        catalog
+            .picker_asset(photos.clone(), NodeId::new("r1").unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // The album itself still shows it.
+    assert_eq!(catalog.source_count(private.id.clone()).await.unwrap(), 1);
+    assert_eq!(
+        catalog
+            .timeline_count(Some(photos.id.clone()), Some(account()))
+            .await
+            .unwrap(),
+        2
+    );
+
+    // Backed up, then moved into the hidden album: the phone original
+    // leaves the timeline with its copy.
+    catalog
+        .add_to_source(
+            photos.id.clone(),
+            remote("r3", "IMG_7.jpg", "image/jpeg", 3),
+        )
+        .await
+        .unwrap();
+    let copy = BackupState::BackedUp {
+        volume: VolumeId::new("photos-volume").unwrap(),
+        node: NodeId::new("r3").unwrap(),
+    };
+    catalog
+        .phone_mark(account(), vec![("7".into(), copy)])
+        .await
+        .unwrap();
+    assert_eq!(timeline(&catalog, &photos).await, ["r3", "r2"]);
+    let joined = catalog.picker_state().await.unwrap().generation;
+    catalog
+        .add_album_members(
+            private.id.clone(),
+            vec![remote("r3", "IMG_7.jpg", "image/jpeg", 3).key],
+        )
+        .await
+        .unwrap();
+    assert_eq!(timeline(&catalog, &photos).await, ["r2"]);
+    let deleted = catalog
+        .picker_deletions(photos.clone(), joined, 10)
+        .await
+        .unwrap();
+    assert_eq!(deleted.len(), 1);
+
+    // Shown again: everything is back, and the picker lists it anew.
+    let hidden = catalog.picker_state().await.unwrap().generation;
+    hide(&catalog, &private, false).await;
+    assert_eq!(timeline(&catalog, &photos).await, ["r3", "r2", "r1"]);
+    let mut back: Vec<String> = changed(&catalog, &photos, hidden)
+        .await
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    back.sort();
+    assert_eq!(back, ["IMG_7.jpg", "a.jpg"]);
+
+    // The timeline and the phone cannot be hidden.
+    let settings = pg_core::library::AlbumSettings {
+        hidden: true,
+        ..Default::default()
+    };
+    assert!(
+        catalog
+            .set_album_settings(photos.id.clone(), settings.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        catalog
+            .set_album_settings(SourceId::new("phone").unwrap(), settings)
+            .await
+            .is_err()
+    );
+}

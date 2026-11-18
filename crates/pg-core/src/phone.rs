@@ -115,7 +115,10 @@ pub struct PhoneEntry {
 /// Proton copy is in the timeline, and while a same-named Proton photo is
 /// there and the contents have not been compared, so a backed-up library
 /// never shows every photo twice during the first check.
-pub(crate) const VISIBLE: &str = "(m.source=?1 OR (m.source='phone' AND NOT EXISTS(
+///
+/// Media in a hidden album is left out too (see [`NOT_HIDDEN`]), and so is a
+/// phone item whose Proton copy is in one.
+pub(crate) const VISIBLE: &str = "((m.source=?1 OR (m.source='phone' AND NOT EXISTS(
     SELECT 1 FROM phone_backup b WHERE b.account=?2 AND b.node=m.node AND (
         (b.state='backed_up' AND EXISTS(SELECT 1 FROM memberships r
             WHERE r.source=?1 AND r.account=?2 AND r.volume=b.remote_volume AND r.node=b.remote_node))
@@ -124,7 +127,25 @@ pub(crate) const VISIBLE: &str = "(m.source=?1 OR (m.source='phone' AND NOT EXIS
     AND NOT (?2 IS NOT NULL
         AND NOT EXISTS(SELECT 1 FROM phone_backup b WHERE b.account=?2 AND b.node=m.node)
         AND EXISTS(SELECT 1 FROM memberships r
-            WHERE r.source=?1 AND r.sort_name=m.sort_name))))";
+            WHERE r.source=?1 AND r.sort_name=m.sort_name))))
+    AND NOT EXISTS(SELECT 1 FROM memberships h JOIN album_settings s ON s.source=h.source
+        WHERE s.hidden=1 AND h.source<>m.source AND (h.account,h.volume,h.node)=(m.account,m.volume,m.node))
+    AND NOT (m.source='phone' AND EXISTS(SELECT 1 FROM phone_backup b
+        JOIN memberships h ON (h.account,h.volume,h.node)=(b.account,b.remote_volume,b.remote_node)
+        JOIN album_settings s ON s.source=h.source
+        WHERE b.account=?2 AND b.node=m.node AND b.state='backed_up' AND s.hidden=1 AND h.source IS NOT ?1)))";
+
+/// Whether the media `alias` names is in no hidden album. Hidden albums are a
+/// choice made on this phone: Proton cannot hide photos, so the albums stay
+/// in Proton and only this app leaves their media out of shared views such as
+/// the timeline and the system photo picker. `album_settings.hidden` of the
+/// timeline's own source is never set; the album view shows its own media.
+pub(crate) fn not_hidden(alias: &str) -> String {
+    format!(
+        "NOT EXISTS(SELECT 1 FROM memberships h JOIN album_settings s ON s.source=h.source
+            WHERE s.hidden=1 AND (h.account,h.volume,h.node)=({alias}.account,{alias}.volume,{alias}.node))"
+    )
+}
 
 fn state(row: Option<(String, Option<String>, Option<String>)>) -> Result<BackupState> {
     Ok(match row {
