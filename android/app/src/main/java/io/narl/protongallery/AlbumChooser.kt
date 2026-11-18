@@ -37,25 +37,38 @@ class AlbumActions(
     val create: (String, List<GalleryItem>) -> Unit = { _, _ -> },
     val remove: (List<GalleryItem>) -> Unit = {},
     val delete: (FolderAlbum) -> Unit = {},
+    /** Hide photos: into this hidden album, or a new one with this name. */
+    val hide: (List<GalleryItem>, FolderAlbum?, String) -> Unit = { _, _, _ -> },
 )
 
 /** Add the selected photos to an album, or to a new one. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumChooserSheet(
     items: List<GalleryItem>, albums: List<FolderAlbum>?, thumbnails: ThumbnailLoader,
     onChoose: (FolderAlbum) -> Unit, onCreate: (String) -> Unit, onDismiss: () -> Unit,
 ) {
-    var name by rememberSaveable { mutableStateOf("") }
     val waiting = items.count { !it.inProton }
+    AlbumChooserSheet("Add to album", buildString {
+        append(if (items.size == 1) "1 item" else "${items.size} items")
+        if (waiting > 0) append(if (waiting == 1) " · 1 isn’t backed up yet and stays out" else " · $waiting aren’t backed up yet and stay out")
+    }, albums, thumbnails, onChoose, onCreate, onDismiss)
+}
+
+/** Choose an album, or name a new one: `suggestion` fills the name field. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AlbumChooserSheet(
+    title: String, caption: String, albums: List<FolderAlbum>?, thumbnails: ThumbnailLoader,
+    onChoose: (FolderAlbum) -> Unit, onCreate: (String) -> Unit, onDismiss: () -> Unit,
+    suggestion: String = "", extra: (@Composable () -> Unit)? = null,
+) {
+    var name by rememberSaveable { mutableStateOf(suggestion) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 16.dp).imePadding()) {
-            Text("Add to album", Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall)
-            Text(buildString {
-                append(if (items.size == 1) "1 item" else "${items.size} items")
-                if (waiting > 0) append(if (waiting == 1) " · 1 isn’t backed up yet and stays out" else " · $waiting aren’t backed up yet and stay out")
-            }, Modifier.padding(horizontal = 24.dp).padding(top = 4.dp), style = MaterialTheme.typography.bodyMedium,
+            Text(title, Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall)
+            Text(caption, Modifier.padding(horizontal = 24.dp).padding(top = 4.dp), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            extra?.invoke()
             Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(name, { name = it.take(200) }, Modifier.weight(1f), label = { Text("New album") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),

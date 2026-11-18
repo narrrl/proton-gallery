@@ -175,7 +175,9 @@ object PhoneBackup {
                 if (items != null) mutableProgress.update { it.copy(message = "Sign in to Proton to back up") }
                 return 0
             }
-            if (items != null) return uploadSession { upload(context, repository, items) }
+            // Albums of earlier backups that failed to fill go first.
+            flushAlbums(repository)
+            if (items != null) return uploadSession { upload(context, repository, items) }.also { flushAlbums(repository) }
             PhoneLibrary.scan(context, repository)
             return coroutineScope {
                 val checker = launch { check(context, repository) }
@@ -191,6 +193,7 @@ object PhoneBackup {
                     }
                 }
                 checker.join()
+                flushAlbums(repository)
                 failed
             }
         } catch (cancel: CancellationException) {
@@ -201,6 +204,18 @@ object PhoneBackup {
             mutableProgress.update { it.copy(message = message) }
             throw error
         }
+    }
+
+    /** Put backed-up photos into the albums chosen for them. What fails stays
+     * queued for the next backup. */
+    private suspend fun flushAlbums(repository: GalleryRepository) {
+        try {
+            val change = repository.flushAlbumAdds()
+            if (change.failed > 0uL) mutableProgress.update {
+                it.copy(message = "Some backups couldn’t go into their albums yet. They will with the next backup.")
+            }
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (error: Exception) { android.util.Log.w("ProtonGallery", "Adding backups to albums failed: ${error.javaClass.simpleName}") }
     }
 
     /** One upload session: its progress adds up, and its outcome shows once at the end. */

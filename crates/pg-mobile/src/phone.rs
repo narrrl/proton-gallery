@@ -544,6 +544,10 @@ impl GalleryEngine {
                 vec![(phone.to_owned(), BackupState::BackedUp { volume, node })],
             )
             .await?;
+        // Added to its albums with the next flush, after this backup.
+        self.catalog
+            .queue_backup_albums(account.clone(), phone.to_owned())
+            .await?;
         let Some(source) = self.photo_source().await? else {
             return Ok(());
         };

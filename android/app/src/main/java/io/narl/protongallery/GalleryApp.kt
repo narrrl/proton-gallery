@@ -153,6 +153,8 @@ fun GalleryApp(
     var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for an album to go into, and the "New album" dialog.
     var addingToAlbum by remember { mutableStateOf<List<GalleryItem>?>(null) }
+    // Items waiting for a hidden album to go into.
+    var hiding by remember { mutableStateOf<List<GalleryItem>?>(null) }
     var naming by rememberSaveable { mutableStateOf(false) }
     // Hidden albums are shown only after the phone's lock confirms the user,
     // and lock again whenever the app leaves the screen. Never saved.
@@ -291,7 +293,8 @@ fun GalleryApp(
                         onAddToAlbum = if (canAddToAlbum) {
                             { addingToAlbum = selection.values.toList(); albumActions.loadChoices() }
                         } else null,
-                        onRemoveFromAlbum = if (location.protonAlbum) { { albumActions.remove(selection.values.toList()); selection = emptyMap() } } else null)
+                        onRemoveFromAlbum = if (location.protonAlbum) { { albumActions.remove(selection.values.toList()); selection = emptyMap() } } else null,
+                        onHide = if (canAddToAlbum && !location.private) { { hiding = selection.values.toList(); albumActions.loadChoices() } } else null)
                     pickingCover -> PickingBar { pickingCover = false }
                     location.album != null || device -> Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onNavigate(location.back()) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
@@ -320,14 +323,34 @@ fun GalleryApp(
         onAccount = { menu = false; onAccount() }, onRefresh = { menu = false; onRefresh() },
         backup = backup, onBackup = { menu = false; backupSheet = true })
     if (backupSheet) BackupSheet(backup, account.connected, backupActions, onSignIn = { backupSheet = false; onAccount() },
-        onDismiss = { backupSheet = false })
+        onDismiss = { backupSheet = false }, thumbnails = thumbnails, hiddenUnlocked = hiddenUnlocked, albumChoices = albumActions.choices)
     if (editing && options != null) AlbumOptionsSheet(
         if (location.protonAlbum) options.copy(title = options.title ?: location.album?.name) else options,
         location.album, tags, onSaveOptions,
         onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false },
         proton = location.protonAlbum, onDeleteAlbum = { location.album?.let(albumActions.delete) })
+    // Hiding needs no choice while there is at most one hidden album; with
+    // several, they are listed only after the phone's lock confirms the user.
+    val hiddenChoices = albumActions.choices?.filter { it.hidden }
+    LaunchedEffect(hiding, hiddenChoices) {
+        val items = hiding ?: return@LaunchedEffect
+        val choices = hiddenChoices ?: return@LaunchedEffect
+        when {
+            choices.size <= 1 -> { albumActions.hide(items, choices.firstOrNull(), "Hidden"); hiding = null; selection = emptyMap(); selected = null }
+            !hiddenUnlocked -> privacy.unlock { unlocked -> hiddenUnlocked = unlocked; if (!unlocked) hiding = null }
+        }
+    }
+    hiding?.let { items ->
+        if (hiddenUnlocked && (hiddenChoices?.size ?: 0) > 1) AlbumChooserSheet("Hide in",
+            "Hidden on this phone: these leave the timeline and the photo picker. Other Proton apps still show them.",
+            hiddenChoices, thumbnails,
+            onChoose = { album -> albumActions.hide(items, album, album.name); hiding = null; selection = emptyMap(); selected = null },
+            onCreate = { name -> albumActions.hide(items, null, name); hiding = null; selection = emptyMap(); selected = null },
+            onDismiss = { hiding = null })
+    }
     addingToAlbum?.let { items ->
-        AlbumChooserSheet(items, albumActions.choices, thumbnails,
+        // Hidden albums keep their names to themselves while locked.
+        AlbumChooserSheet(items, albumActions.choices?.filter { hiddenUnlocked || !it.hidden }, thumbnails,
             onChoose = { album -> albumActions.add(album, items); addingToAlbum = null; selection = emptyMap() },
             onCreate = { name -> albumActions.create(name, items); addingToAlbum = null; selection = emptyMap() },
             onDismiss = { addingToAlbum = null })
@@ -349,6 +372,7 @@ fun GalleryApp(
             backUp = { backupActions.upload(listOf(it)) },
             addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
             favorite = { item -> media.favorite(listOf(item), !item.favorite) },
+            hide = if (canAddToAlbum && !location.private) { { hiding = listOf(it); albumActions.loadChoices() } } else null,
         ), private = location.private) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },

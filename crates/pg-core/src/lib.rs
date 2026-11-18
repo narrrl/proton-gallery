@@ -1,5 +1,6 @@
 //! Platform-independent gallery behavior. No UI, credentials, or account login.
 
+pub mod backup_albums;
 pub mod bytes;
 pub mod catalog;
 pub mod error;

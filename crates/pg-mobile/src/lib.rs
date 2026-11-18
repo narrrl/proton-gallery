@@ -13,6 +13,7 @@ mod albums;
 #[allow(unsafe_code)] // The JVM requires one exported JNI symbol. No unsafe memory access.
 mod android_tls;
 mod authentication;
+mod backup_albums;
 mod diagnostics;
 mod originals;
 mod outline;

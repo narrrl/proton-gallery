@@ -99,6 +99,7 @@ class MainActivity : ComponentActivity() {
                     backUpNow = { askNotifications(); model.backUpNow() },
                     upload = { askNotifications(); model.upload(it) },
                     setKeepDays = model::setKeepDays, freeUp = model::freeUp,
+                    loadAlbums = model::loadAlbumChoices, setAlbum = model::setBackupAlbum, createAlbum = model::createBackupAlbum,
                 )
             }
             val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(100)) { model.import(it) }
@@ -165,7 +166,7 @@ class MainActivity : ComponentActivity() {
                                 startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } })
                     },
                     albumActions = AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
-                        model::removeFromAlbum, model::deleteAlbum),
+                        model::removeFromAlbum, model::deleteAlbum, model::hide),
                 )
             }
         }

@@ -15,6 +15,7 @@ import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.BackupAlbumTarget
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.AlbumTag
@@ -96,6 +97,8 @@ data class BackupState(
     val keepDays: Int = 90,
     /** What freeing up space would remove; null before it is known. */
     val freeable: FreeUpSummary? = null,
+    /** Proton albums that backups go into, by folder (null: every backup). */
+    val albums: List<BackupAlbumTarget> = emptyList(),
 ) {
     val automatic get() = folders.any { it.backup }
 }
@@ -680,7 +683,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun refreshFolders(repo: GalleryRepository) {
         val folders = repo.phoneFolders()
         val freeable = runCatching { repo.freeUpSummary(settings.keepDays) }.getOrNull()
-        mutableBackup.update { it.copy(folders = folders, freeable = freeable) }
+        val albums = runCatching { repo.backupAlbums() }.getOrDefault(mutableBackup.value.albums)
+        mutableBackup.update { it.copy(folders = folders, freeable = freeable, albums = albums) }
         settings.automatic = folders.any { it.backup }
     }
 
@@ -914,6 +918,58 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Upload chosen phone items now, on any network. */
+    /**
+     * Back up `folder` (every backup, for null) into `album` too, or stop.
+     * With `includeBackedUp`, what is already backed up goes in as well.
+     */
+    fun setBackupAlbum(folder: String?, album: FolderAlbum, add: Boolean, includeBackedUp: Boolean) =
+        backupAlbumWork(folder, add) { repo -> album.also { repo.setBackupAlbum(folder, it, add, includeBackedUp && add) } }
+
+    /** Create an album and back `folder` (every backup, for null) up into it. */
+    fun createBackupAlbum(folder: String?, name: String, includeBackedUp: Boolean) =
+        backupAlbumWork(folder, true) { repo -> repo.createAlbum(name).also { repo.setBackupAlbum(folder, it, true, includeBackedUp) } }
+
+    private fun backupAlbumWork(folder: String?, add: Boolean, work: suspend (GalleryRepository) -> FolderAlbum) {
+        val repo = repository.value ?: return
+        if (!mutableAccount.value.connected) return showAccount()
+        val from = folder?.let { id -> mutableBackup.value.folders.firstOrNull { it.id == id }?.name } ?: "this phone"
+        albumWork(if (add) "Choosing the album" else "Updating backup albums", "Couldn’t change the backup album. Try again.") { _ ->
+            val album = work(repo)
+            refreshFolders(repo)
+            // Queued photos that are backed up already go in now.
+            if (add) Backup.now(getApplication())
+            if (add) "Backups from $from also go into “${album.name}”" else "Backups from $from no longer go into “${album.name}”"
+        }
+    }
+
+    /**
+     * Hide photos on this phone: put them into a hidden album, `album` or a
+     * new one named Hidden. Phone photos not backed up yet are backed up and
+     * then go in.
+     */
+    fun hide(items: List<GalleryItem>, album: FolderAlbum?, name: String = "Hidden") {
+        val proton = items.filter { it.inProton }
+        val waiting = items.filter { !it.inProton && it.phoneId != null }
+        if (proton.isEmpty() && waiting.isEmpty()) {
+            mutableState.update { it.copy(message = "Only Proton Photos and this phone’s photos can be hidden", error = false) }
+            return
+        }
+        albumWork("Hiding", "Couldn’t hide. Try again.") { repo ->
+            val target = album ?: repo.createAlbum(name).also { repo.setAlbumHidden(it, true) }
+            if (!target.hidden && album != null) repo.setAlbumHidden(target, true)
+            val added = if (proton.isEmpty()) 0 else repo.addToAlbum(target, proton).changed.toInt()
+            if (waiting.isNotEmpty()) {
+                repo.queueAlbumAdds(target, waiting.mapNotNull { it.phoneId })
+                Backup.upload(getApplication(), waiting.map { PhoneRef(it.phoneId!!, it.isVideo) })
+            }
+            buildString {
+                append(if (added + waiting.size == 1) "Hidden on this phone" else "${added + waiting.size} hidden on this phone")
+                if (waiting.isNotEmpty()) append(". ${if (waiting.size == 1) "1 goes" else "${waiting.size} go"} after backing up")
+                if (items.any { it.phoneId != null }) append(". Other gallery apps still show the phone’s copy")
+            }
+        }
+    }
+
     fun upload(items: List<GalleryItem>) {
         if (!mutableAccount.value.connected) return showAccount()
         val refs = items.filter { it.phoneId != null && !it.backedUp }.map { PhoneRef(it.phoneId!!, it.isVideo) }

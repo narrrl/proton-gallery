@@ -9,6 +9,11 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import android.os.Build
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -16,10 +21,13 @@ import androidx.compose.ui.platform.LocalContext
 import android.text.format.Formatter
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.narl.protongallery.bridge.BackupAlbumTarget
+import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.PhoneFolder
 import io.narl.protongallery.icons.CloudUpload
 import io.narl.protongallery.icons.LibraryAdd
+import io.narl.protongallery.icons.VisibilityOff
 
 /** What the backup controls can do; defaults keep previews and tests short. */
 class BackupActions(
@@ -31,6 +39,11 @@ class BackupActions(
     val upload: (List<GalleryItem>) -> Unit = {},
     val setKeepDays: (Int) -> Unit = {},
     val freeUp: () -> Unit = {},
+    /** Load the albums to back up into; they arrive as the sheet's `albumChoices`. */
+    val loadAlbums: () -> Unit = {},
+    /** Back a folder (every backup, for null) up into an album too, or stop. */
+    val setAlbum: (folder: String?, album: FolderAlbum, add: Boolean, includeBackedUp: Boolean) -> Unit = { _, _, _, _ -> },
+    val createAlbum: (folder: String?, name: String, includeBackedUp: Boolean) -> Unit = { _, _, _ -> },
 )
 
 /** Free up space keeps this many recent days of media on the phone. */
@@ -76,7 +89,8 @@ fun PhotosHeader(backup: BackupState, onAllow: () -> Unit) {
 /** Replaces the top bar while items are selected. */
 @Composable
 fun SelectionBar(selected: List<GalleryItem>, onClose: () -> Unit, onBackUp: () -> Unit, onShare: () -> Unit,
-    onDelete: (() -> Unit)? = null, onAddToAlbum: (() -> Unit)? = null, onRemoveFromAlbum: (() -> Unit)? = null) {
+    onDelete: (() -> Unit)? = null, onAddToAlbum: (() -> Unit)? = null, onRemoveFromAlbum: (() -> Unit)? = null,
+    onHide: (() -> Unit)? = null) {
     val waiting = selected.count { it.phoneId != null && !it.backedUp }
     Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 4.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Clear selection") }
@@ -85,6 +99,7 @@ fun SelectionBar(selected: List<GalleryItem>, onClose: () -> Unit, onBackUp: () 
         IconButton(onClick = onShare) { Icon(Icons.Outlined.Share, "Share") }
         if (onRemoveFromAlbum != null) TextButton(onClick = onRemoveFromAlbum) { Text("Remove") }
         if (onAddToAlbum != null) IconButton(onClick = onAddToAlbum) { Icon(Icons.Outlined.LibraryAdd, "Add to album") }
+        if (onHide != null) IconButton(onClick = onHide) { Icon(Icons.Outlined.VisibilityOff, "Hide") }
         if (onDelete != null) IconButton(onClick = onDelete) { Icon(Icons.Outlined.Delete, "Delete") }
         if (waiting > 0) FilledTonalButton(onClick = onBackUp) {
             Icon(Icons.Outlined.CloudUpload, null, Modifier.size(18.dp))
@@ -111,7 +126,15 @@ fun PickBar(multiple: Boolean, selected: Int, onCancel: () -> Unit, onDone: () -
 /** Automatic backup: which folders, and when. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BackupSheet(backup: BackupState, connected: Boolean, actions: BackupActions, onSignIn: () -> Unit, onDismiss: () -> Unit) {
+fun BackupSheet(backup: BackupState, connected: Boolean, actions: BackupActions, onSignIn: () -> Unit, onDismiss: () -> Unit,
+    thumbnails: ThumbnailLoader? = null, hiddenUnlocked: Boolean = false, albumChoices: List<FolderAlbum>? = null) {
+    // The folder an album is being chosen for: its id (null: every backup) and name.
+    var choosing by remember { mutableStateOf<Pair<String?, String>?>(null) }
+    val albumChips: @Composable (String?, String) -> Unit = { folder, name ->
+        BackupAlbumChips(backup.albums.filter { it.folder == folder }, hiddenUnlocked,
+            onAdd = { choosing = folder to name; actions.loadAlbums() },
+            onRemove = { actions.setAlbum(folder, it, false, false) })
+    }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
             Column(Modifier.padding(horizontal = 24.dp)) {
@@ -128,7 +151,17 @@ fun BackupSheet(backup: BackupState, connected: Boolean, actions: BackupActions,
                     Text("Folders", Modifier.padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 4.dp), style = MaterialTheme.typography.titleSmall)
                     if (backup.folders.isEmpty()) Text("No photos found on this phone yet.", Modifier.padding(horizontal = 24.dp),
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    for (folder in backup.folders) SwitchRow(folder.name, folderCaption(folder), folder.backup) { actions.setFolder(folder, it) }
+                    for (folder in backup.folders) {
+                        SwitchRow(folder.name, folderCaption(folder), folder.backup) { actions.setFolder(folder, it) }
+                        if (folder.backup) albumChips(folder.id, folder.name)
+                    }
+                    if (backup.automatic) {
+                        Text("Every backup", Modifier.padding(horizontal = 24.dp).padding(top = 16.dp), style = MaterialTheme.typography.titleSmall)
+                        Text("Also put everything backed up from this phone into an album, such as one named after the phone.",
+                            Modifier.padding(horizontal = 24.dp).padding(top = 4.dp), style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        albumChips(null, Build.MODEL)
+                    }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
                     SwitchRow("Only on Wi‑Fi", "Mobile data is never used for automatic backup", backup.wifiOnly, actions.setWifiOnly)
                     SwitchRow("Only while charging", null, backup.chargingOnly, actions.setChargingOnly)
@@ -141,6 +174,43 @@ fun BackupSheet(backup: BackupState, connected: Boolean, actions: BackupActions,
                 }
             }
         }
+    }
+    choosing?.let { (folder, name) ->
+        var includeBackedUp by remember { mutableStateOf(true) }
+        val backedUp = backup.folders.filter { if (folder == null) it.backup else it.id == folder }
+            .sumOf { (it.count - it.notBackedUp).toLong() }
+        val chosen = backup.albums.filter { it.folder == folder }.map { it.album.id }.toSet()
+        val close = { choosing = null }
+        if (thumbnails != null) AlbumChooserSheet(
+            if (folder == null) "Back up everything into" else "Back up “$name” into",
+            "New backups go into this album too. Albums are kept in Proton Photos.",
+            albumChoices?.filter { it.id !in chosen && (hiddenUnlocked || !it.hidden) }, thumbnails,
+            onChoose = { actions.setAlbum(folder, it, true, includeBackedUp && backedUp > 0); close() },
+            onCreate = { actions.createAlbum(folder, it, includeBackedUp && backedUp > 0); close() },
+            onDismiss = close, suggestion = name,
+            extra = if (backedUp > 0) { {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(includeBackedUp, { includeBackedUp = it })
+                    Text(if (backedUp == 1L) "Also add the 1 item already backed up" else "Also add the $backedUp items already backed up",
+                        style = MaterialTheme.typography.bodyMedium)
+                }
+            } } else null)
+    }
+}
+
+/** The albums a folder's backups go into, and a chip to add one. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BackupAlbumChips(targets: List<BackupAlbumTarget>, hiddenUnlocked: Boolean, onAdd: () -> Unit, onRemove: (FolderAlbum) -> Unit) {
+    FlowRow(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (target in targets) {
+            // A hidden album keeps its name to itself while hidden albums are locked.
+            val name = if (target.album.hidden && !hiddenUnlocked) "Hidden album" else target.album.name
+            InputChip(selected = false, onClick = { onRemove(target.album) }, label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                trailingIcon = { Icon(Icons.Outlined.Close, "Stop backing up into $name", Modifier.size(18.dp)) })
+        }
+        AssistChip(onClick = onAdd, label = { Text(if (targets.isEmpty()) "Add to an album" else "Another album") },
+            leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null, Modifier.size(18.dp)) })
     }
 }
 

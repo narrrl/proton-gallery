@@ -128,6 +128,12 @@ class GalleryRepository private constructor(private val context: Context) {
         }
     }
     suspend fun photoAlbums() = withContext(Native) { engine.photoAlbums() }
+    suspend fun setAlbumHidden(album: FolderAlbum, hidden: Boolean) = withContext(Native) { engine.setAlbumHidden(album.id, hidden) }
+    suspend fun backupAlbums() = withContext(Native) { engine.backupAlbums() }
+    suspend fun setBackupAlbum(folder: String?, album: FolderAlbum, add: Boolean, includeBackedUp: Boolean) =
+        withContext(Native) { engine.setBackupAlbum(folder, album.id, add, includeBackedUp) }
+    suspend fun queueAlbumAdds(album: FolderAlbum, phoneIds: List<String>) = withContext(Native) { engine.queueAlbumAdds(album.id, phoneIds) }
+    suspend fun flushAlbumAdds() = withContext(Native) { engine.flushAlbumAdds() }
     suspend fun createAlbum(name: String) = withContext(Native) { engine.createAlbum(name) }
     suspend fun addToAlbum(album: FolderAlbum, items: List<GalleryItem>) = withContext(Native) { engine.addToAlbum(album.id, items.map { it.assetKey }) }
     suspend fun removeFromAlbum(album: FolderAlbum, items: List<GalleryItem>) = withContext(Native) { engine.removeFromAlbum(album.id, items.map { it.assetKey }) }

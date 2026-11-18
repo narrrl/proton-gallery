@@ -46,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -226,6 +227,9 @@ fun SmartMediaGrid(
             val offset = if (anchor != null) 0 else scroll.firstVisibleItemScrollOffset
             try {
                 val around = if (pinching) anchor?.let(outline::indexOf)?.takeIf { it >= 0 } else null
+                // Planned on the spot while pinching; leave the composition
+                // that started this effect before the layout and scroll change.
+                if (around != null) yield()
                 val rows = if (around != null) planAround(outline, around, grouping, widthPx, targetPx, gapPx)
                     else withContext(Dispatchers.Default) { planRows(outline, grouping, widthPx, targetPx, gapPx) }
                 val next = GridLayout(outline, rows)

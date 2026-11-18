@@ -21,6 +21,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.graphics.luminance
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.BackupAlbumTarget
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.AlbumOrder
@@ -86,6 +87,8 @@ class GalleryUiTest {
             pinch(center - Offset(40f, 0f), center - Offset(240f, 0f), center + Offset(40f, 0f), center + Offset(240f, 0f))
         }
         assertTrue("zoom stayed at $zoom", zoom > ZOOM_DEFAULT)
+        // Two separate gestures: the full plan after the first lands first.
+        compose.waitForIdle()
         compose.onRoot().performTouchInput {
             pinch(center - Offset(400f, 0f), center - Offset(10f, 0f), center + Offset(400f, 0f), center + Offset(10f, 0f))
         }
@@ -186,6 +189,60 @@ class GalleryUiTest {
         switches[2].performClick()
         assertEquals(listOf("camera=true", "wifi=false"), changes)
         compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/backup-sheet-dark.png")
+    }
+
+    @Test fun backups_can_go_into_albums_per_folder_and_for_everything() {
+        val folders = listOf(PhoneFolder("camera", "Camera", 120uL, 7uL, true))
+        val summer = FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)
+        val pixel = FolderAlbum("album-2", "album-2", null, "Pixel 6", 9uL, 0uL)
+        val secret = FolderAlbum("album-3", "album-3", null, "Private", 2uL, 0uL, hidden = true)
+        val changes = mutableListOf<String>()
+        render(emptyList(), ThemeMode.Light, initialLocation = GalleryLocation(),
+            backup = BackupState(folders = folders, albums = listOf(BackupAlbumTarget(null, pixel), BackupAlbumTarget("camera", secret))),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            actions = BackupActions(setAlbum = { folder, album, add, existing -> changes += "$folder:${album.name}:$add:$existing" }),
+            albumActions = AlbumActions(choices = listOf(summer, pixel, secret)))
+        compose.onNodeWithContentDescription("Account and settings").performClick()
+        compose.onNodeWithText("Backup is on. 7 waiting.").performClick()
+        // A hidden album keeps its name to itself while locked.
+        compose.onNodeWithText("Private").assertDoesNotExist()
+        compose.onNodeWithText("Hidden album").assertExists()
+        compose.onNodeWithText("Pixel 6").assertExists()
+        compose.onAllNodes(isRoot()).onLast().captureRoboImage("build/screenshots/backup-albums-light.png")
+
+        compose.onAllNodesWithText("Another album").onFirst().performClick()
+        compose.onNodeWithText("Back up “Camera” into").assertExists()
+        compose.onNodeWithText("Also add the 113 items already backed up").assertExists()
+        // Albums the folder goes into already, and hidden ones while locked, are not offered.
+        compose.onNodeWithText("Private").assertDoesNotExist()
+        compose.onNode(hasText("Summer") and hasClickAction()).performClick()
+        compose.onNodeWithContentDescription("Stop backing up into Pixel 6").performClick()
+        assertEquals(listOf("camera:Summer:true:true", "null:Pixel 6:false:false"), changes)
+    }
+
+    @Test fun selected_photos_hide_into_the_hidden_album() {
+        val items = fixtureItems().map { it.copy(inProton = true) }
+        val summer = FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)
+        val secret = FolderAlbum("album-3", "album-3", null, "Private", 2uL, 0uL, hidden = true)
+        val hidden = mutableListOf<String>()
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            albumActions = AlbumActions(choices = listOf(summer, secret),
+                hide = { chosen, album, _ -> hidden += "${chosen.size}:${album?.name}" }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Photo: Coast 2.jpg").performClick()
+        // With one hidden album, hiding needs no choice and no unlock.
+        compose.onNodeWithContentDescription("Hide").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("2:Private"), hidden)
+        compose.onNodeWithText("2 selected").assertDoesNotExist()
+
+        // Adding to an album while locked leaves hidden albums out.
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Add to album").performClick()
+        compose.onNode(hasText("Summer") and hasClickAction()).assertExists()
+        compose.onNodeWithText("Private").assertDoesNotExist()
     }
 
     @Test fun selected_photos_can_be_shared() {

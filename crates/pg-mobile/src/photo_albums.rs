@@ -27,11 +27,13 @@ fn album_spec(account: &AccountId, uid: &NodeUid, name: &str) -> Result<SourceSp
     })
 }
 
-fn album_uid(spec: &SourceSpec) -> NodeUid {
+pub(crate) fn album_uid(spec: &SourceSpec) -> NodeUid {
     NodeUid::new(spec.volume.as_str().into(), spec.root.as_str().into())
 }
 
-fn album_failure(what: &'static str) -> impl Fn(proton_sdk::error::ProtonError) -> GalleryError {
+pub(crate) fn album_failure(
+    what: &'static str,
+) -> impl Fn(proton_sdk::error::ProtonError) -> GalleryError {
     move |e| {
         tracing::warn!("{what} failed: {}", pg_drive::auth::cause_chain(&e));
         GalleryError::Operation {
@@ -128,7 +130,7 @@ impl GalleryEngine {
         Ok(assets)
     }
 
-    async fn album_for(
+    pub(crate) async fn album_for(
         &self,
         id: &str,
     ) -> Result<(pg_drive::auth::Account, SourceSpec), GalleryError> {
@@ -205,6 +207,21 @@ impl GalleryEngine {
                 .into_iter()
                 .next()
                 .ok_or(pg_core::Error::NotFound.into())
+        })
+    }
+
+    /// Hide an album on this phone, or show it again.
+    pub fn set_album_hidden(&self, album: String, hidden: bool) -> Result<(), GalleryError> {
+        self.runtime.block_on(async {
+            let (_, spec) = self.album_for(&album).await?;
+            let settings = self.catalog.album_settings(spec.id.clone()).await?;
+            self.catalog
+                .set_album_settings(
+                    spec.id,
+                    pg_core::library::AlbumSettings { hidden, ..settings },
+                )
+                .await?;
+            Ok(())
         })
     }
 

@@ -67,6 +67,8 @@ class ViewerActions(
     val backUp: ((GalleryItem) -> Unit)? = null,
     val addToAlbum: ((GalleryItem) -> Unit)? = null,
     val favorite: ((GalleryItem) -> Unit)? = null,
+    /** Put into a hidden album; null where hiding does not apply. */
+    val hide: ((GalleryItem) -> Unit)? = null,
 )
 
 /**
@@ -120,6 +122,9 @@ fun MediaViewer(outline: GalleryOutline, initial: Int, thumbnails: ThumbnailLoad
                                 DropdownMenu(more, onDismissRequest = { more = false }) {
                                     DropdownMenuItem(text = { Text(if (info) "Hide details" else "Details") }, leadingIcon = { Icon(Icons.Outlined.Info, null) },
                                         onClick = { more = false; info = !info })
+                                    val hide = actions.hide
+                                    if (hide != null && (current.inProton || current.phoneId != null)) DropdownMenuItem(text = { Text("Hide") },
+                                        leadingIcon = { Icon(Icons.Outlined.VisibilityOff, null) }, onClick = { more = false; hide(current) })
                                     val delete = actions.delete
                                     if (delete != null && current.deletable) DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
                                         onClick = { more = false; delete(current) })
