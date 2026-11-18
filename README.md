@@ -75,7 +75,7 @@ integration is available with an additional device setup step; see the
   </tr>
 </table>
 
-Actual Android UI captures using procedural test photos; no private account or photo library is shown.
+Actual Android UI captures using the same public demo photographs as Proton Drive, with synthetic library metadata; no private photo library is shown.
 
 ## Install
 

@@ -175,6 +175,25 @@ This builds the APK and runs Android lint and Robolectric interaction/layout tes
 The limits above describe the implementation, not Android device measurements.
 
 
+## Website screenshots
+
+The website and README use the same public demo photographs as Drive’s photo captures,
+with synthetic Gallery metadata. No private account is opened. Ordinary UI tests retain
+procedural images; the screenshot job opts into the photo fixtures explicitly.
+
+After a development build has produced the host native library and generated bindings:
+
+```sh
+JAVA_HOME=/path/to/jdk-21 scripts/screenshots.sh --photos ~/.cache/pdfs-screenshots
+```
+
+The photo directory is the cache populated by Drive’s `scripts/screenshots.sh`, or any
+explicitly supplied directory of demo JPEGs. The helper runs the relevant Compose UI tests
+and snapshots the photo captures to `android/app/build/photo-screenshots/`, separately
+from ordinary test output. The websites’ sync scripts then
+copy those captures and regenerate their social previews. The photographs are test inputs
+and website assets; they are not bundled with the Android app.
+
 ## Signed device-testing build
 
 A dedicated variant uses the persistent key in `~/Keys/proton-gallery/testing.p12` and private profile `~/Keys/proton-gallery/testing.json`. The alias is `proton-gallery-testing`. The directory is mode 700; both files are mode 600. Credentials are not stored in the checkout, printed, or passed on command lines.

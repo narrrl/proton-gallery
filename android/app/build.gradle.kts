@@ -65,6 +65,11 @@ android {
         unitTests.all {
             it.systemProperty("roborazzi.test.record", "true")
             it.systemProperty("jna.library.path", rootProject.projectDir.parentFile.resolve("target/debug").absolutePath)
+            providers.gradleProperty("pg.screenshot.photos").orNull?.let { directory ->
+                val photos = rootProject.file(directory)
+                it.systemProperty("pg.screenshot.photos", photos.absolutePath)
+                it.inputs.dir(photos)
+            }
         }
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }

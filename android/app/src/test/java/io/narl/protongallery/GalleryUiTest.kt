@@ -1,6 +1,7 @@
 package io.narl.protongallery
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -40,6 +41,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import kotlinx.coroutines.runBlocking
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -141,6 +143,10 @@ class GalleryUiTest {
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithText("Coast").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        if (System.getProperty("pg.screenshot.photos") != null) {
+            compose.onRoot().performTouchInput { swipeDown() }
+            compose.onNodeWithText("Coast").assertIsDisplayed()
+        }
         compose.onRoot().captureRoboImage("build/screenshots/nested-album-light.png")
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Coast").assertExists()
@@ -524,7 +530,14 @@ class GalleryUiTest {
         media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
         photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions(),
         driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock()) {
-        val directory = File("build/test-thumbnails-smart").apply { mkdirs() }
+        val thumbnailDirectory = if (System.getProperty("pg.screenshot.photos") == null) "build/test-thumbnails-smart" else "build/screenshot-photo-thumbnails"
+        val directory = File(thumbnailDirectory).apply { mkdirs() }
+        val thumbnailLoader = ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) })
+        if (System.getProperty("pg.screenshot.photos") != null) {
+            // Capture the cached-library state, as Drive's demo does. Album
+            // navigation must not race the first JPEG decode during capture.
+            runBlocking { items.forEach { requireNotNull(thumbnailLoader.load(it)) { "Cannot decode demo photo: ${it.localPath}" } } }
+        }
         compose.setContent {
             var location by remember { mutableStateOf(initialLocation) }
             val root = remember { FolderAlbum("gallery", "root", null, "Trips", 0uL, 1uL) }
@@ -543,7 +556,7 @@ class GalleryUiTest {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 GalleryTheme(theme) {
                     GalleryApp(state ?: LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), outline,
-                        remember { ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) }) }, theme, zoom, onImport, { theme = it },
+                        remember { thumbnailLoader }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == "coast") options else null,
                         account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick,
@@ -559,8 +572,9 @@ class GalleryUiTest {
         }
     }
 
-    /** Procedural test fixtures, not user photos and not shipped demo content. */
+    /** Normal tests use drawings; screenshot captures can opt into Drive's public demo photos. */
     private fun fixtureItems(): List<GalleryItem> {
+        System.getProperty("pg.screenshot.photos")?.let { return photoFixtureItems(File(it)) }
         val dir = File("build/test-media").apply { mkdirs() }
         return (0..23).map { index ->
             val file = File(dir, "coast-$index.jpg")
@@ -578,6 +592,24 @@ class GalleryUiTest {
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
             bitmap.recycle()
             GalleryItem("fixture-smart-$index", "Coast $index.jpg", "image/jpeg", false, file.length().toULong(), 1_789_000_000L - index / 9 * 86_400, file.absolutePath, dimensions.first.toDouble() / dimensions.second)
+        }
+    }
+
+    private fun photoFixtureItems(directory: File): List<GalleryItem> {
+        val photos = directory.listFiles()?.filter { it.isFile && it.extension.equals("jpg", ignoreCase = true) }?.sortedBy { it.name }
+            ?: error("Cannot read screenshot photo directory: $directory")
+        require(photos.isNotEmpty()) { "No JPEG demo photos in $directory" }
+        val output = File("build/screenshot-photo-media").apply { mkdirs() }
+        return (0..23).map { index ->
+            val source = photos[index % photos.size]
+            val file = File(output, "coast-$index.jpg")
+            source.copyTo(file, overwrite = true)
+            val dimensions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, dimensions)
+            require(dimensions.outWidth > 0 && dimensions.outHeight > 0) { "Invalid demo photo: $source" }
+            GalleryItem("screenshot-photo-$index-${source.name}", "Coast $index.jpg", "image/jpeg", false,
+                file.length().toULong(), 1_789_000_000L - index / 9 * 86_400, file.absolutePath,
+                dimensions.outWidth.toDouble() / dimensions.outHeight)
         }
     }
 }
