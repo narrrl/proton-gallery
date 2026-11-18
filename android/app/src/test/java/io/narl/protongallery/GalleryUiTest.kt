@@ -225,24 +225,55 @@ class GalleryUiTest {
         val summer = FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)
         val secret = FolderAlbum("album-3", "album-3", null, "Private", 2uL, 0uL, hidden = true)
         val hidden = mutableListOf<String>()
+        var asked = 0
         render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
             albumActions = AlbumActions(choices = listOf(summer, secret),
-                hide = { chosen, album, _ -> hidden += "${chosen.size}:${album?.name}" }))
+                hide = { chosen, album, name -> hidden += "${chosen.size}:${album?.name ?: "new $name"}" }),
+            privacy = PrivacyLock(available = { true }, unlock = { asked++; it(true) }))
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
-        compose.onNodeWithContentDescription("Photo: Coast 2.jpg").performClick()
-        // With one hidden album, hiding needs no choice and no unlock.
-        compose.onNodeWithContentDescription("Hide").performClick()
-        compose.waitForIdle()
-        assertEquals(listOf("2:Private"), hidden)
-        compose.onNodeWithText("2 selected").assertDoesNotExist()
 
         // Adding to an album while locked leaves hidden albums out.
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
         compose.onNodeWithContentDescription("Add to album").performClick()
         compose.onNode(hasText("Summer") and hasClickAction()).assertExists()
         compose.onNodeWithText("Private").assertDoesNotExist()
+        compose.onNode(hasText("Summer") and hasClickAction()).performClick()
+        compose.waitForIdle()
+
+        // Hiding asks which hidden album, after the phone's lock.
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Photo: Coast 2.jpg").performClick()
+        compose.onNodeWithContentDescription("Hide").performClick()
+        compose.waitForIdle()
+        assertEquals(1, asked)
+        compose.onNodeWithText("Hide in").assertExists()
+        compose.onNodeWithText("Summer").assertDoesNotExist()
+        compose.onNode(hasText("Private") and hasClickAction()).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("2:Private"), hidden)
+        compose.onNodeWithText("2 selected").assertDoesNotExist()
+    }
+
+    @Test fun hiding_without_a_hidden_album_offers_to_make_one() {
+        val items = fixtureItems().map { it.copy(inProton = true) }
+        val hidden = mutableListOf<String>()
+        var asked = 0
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            albumActions = AlbumActions(choices = listOf(FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)),
+                hide = { chosen, album, name -> hidden += "${chosen.size}:${album?.name ?: "new $name"}" }),
+            privacy = PrivacyLock(available = { true }, unlock = { asked++; it(true) }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Hide").performClick()
+        compose.waitForIdle()
+        // Nothing hidden to reveal yet, so no unlock; the name is suggested.
+        assertEquals(0, asked)
+        compose.onNodeWithText("Summer").assertDoesNotExist()
+        compose.onNodeWithText("Create").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("1:new Hidden"), hidden)
     }
 
     @Test fun selected_photos_can_be_shared() {

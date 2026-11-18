@@ -340,21 +340,19 @@ fun GalleryApp(
         location.album, tags, onSaveOptions,
         onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false },
         proton = location.protonAlbum, onDeleteAlbum = { location.album?.let(albumActions.delete) })
-    // Hiding needs no choice while there is at most one hidden album; with
-    // several, they are listed only after the phone's lock confirms the user.
+    // Hiding always asks which hidden album. Existing hidden albums are
+    // listed only after the phone's lock confirms the user; with none yet,
+    // the sheet only offers to make one.
     val hiddenChoices = albumActions.choices?.filter { it.hidden }
     LaunchedEffect(hiding, hiddenChoices) {
-        val items = hiding ?: return@LaunchedEffect
-        val choices = hiddenChoices ?: return@LaunchedEffect
-        when {
-            choices.size <= 1 -> { albumActions.hide(items, choices.firstOrNull(), "Hidden"); hiding = null; selection = emptyMap(); selected = null }
-            !hiddenUnlocked -> privacy.unlock { unlocked -> hiddenUnlocked = unlocked; if (!unlocked) hiding = null }
-        }
+        if (hiding == null || hiddenChoices.isNullOrEmpty() || hiddenUnlocked) return@LaunchedEffect
+        if (!privacy.available()) { lockMissing = true; hiding = null }
+        else privacy.unlock { unlocked -> hiddenUnlocked = unlocked; if (!unlocked) hiding = null }
     }
     hiding?.let { items ->
-        if (hiddenUnlocked && (hiddenChoices?.size ?: 0) > 1) AlbumChooserSheet("Hide in",
+        if (hiddenChoices != null && (hiddenUnlocked || hiddenChoices.isEmpty())) AlbumChooserSheet("Hide in",
             "Hidden on this phone: these leave the timeline and the photo picker. Other Proton apps still show them.",
-            hiddenChoices, thumbnails,
+            hiddenChoices, thumbnails, suggestion = if (hiddenChoices.isEmpty()) "Hidden" else "",
             onChoose = { album -> albumActions.hide(items, album, album.name); hiding = null; selection = emptyMap(); selected = null },
             onCreate = { name -> albumActions.hide(items, null, name); hiding = null; selection = emptyMap(); selected = null },
             onDismiss = { hiding = null })
