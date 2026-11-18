@@ -1,24 +1,51 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Proton Gallery">
-  <!-- Original gallery glyph; tile colors/depth and three-part rhythm reference
-       the MIT proton-stream/images/logo.svg by Nils Pukropp and contributors. -->
-  <defs>
-    <linearGradient id="pg-face" x1="12" y1="12" x2="116" y2="112" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#A48BFF"/><stop offset="0.55" stop-color="#7552FF"/><stop offset="1" stop-color="#5B36F2"/>
-    </linearGradient>
-    <linearGradient id="pg-glyph" x1="0" y1="38" x2="0" y2="88" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#ECE6FF"/>
-    </linearGradient>
-    <mask id="pg-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
-      <path d="M40,38H88A8,8 0,0 1,96 46V80A8,8 0,0 1,88 88H40A8,8 0,0 1,32 80V46A8,8 0,0 1,40 38Z M40,44H88Q90,44 90,46V80Q90,82 88,82H40Q38,82 38,80V46Q38,44 40,44Z" fill="#FFFFFF" fill-rule="evenodd"/>
-      <path d="M38,78L49,62L63,77L73,65L90,80V82H38Z" fill="#FFFFFF"/>
-      <path d="M88.5,52A4.5,4.5 0,1 1,79.5 52A4.5,4.5 0,1 1,88.5 52Z" fill="#FFFFFF"/>
-      <path d="M52.5 0h5.5v128h-5.5zM73.5 0H79v128h-5.5z" fill="#000000"/>
-    </mask>
-  </defs>
-  <rect x="12" y="16" width="104" height="100" rx="26" fill="#4424C0"/>
-  <rect x="12" y="12" width="104" height="100" rx="26" fill="url(#pg-face)"/>
-  <rect x="12.5" y="12.5" width="103" height="99" rx="25.5" stroke="#FFFFFF" stroke-opacity="0.2"/>
-  <g transform="translate(0 3)"><rect width="128" height="128" fill="#2E1596" fill-opacity="0.3" mask="url(#pg-cut)"/></g>
-  <rect width="128" height="128" fill="url(#pg-glyph)" mask="url(#pg-cut)"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" data-app="gallery" role="img" aria-labelledby="gallery-title gallery-desc">
+<title id="gallery-title">Proton Gallery</title>
+<desc id="gallery-desc">Frontal violet and pink vector icon with shallow metallic copper backing.</desc>
+<defs>
+  <linearGradient id="gallery-face" x1="36" y1="212" x2="220" y2="54" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#6240DA"/><stop offset=".52" stop-color="#8056EF"/><stop offset="1" stop-color="#D58BDF"/>
+  </linearGradient>
+  <linearGradient id="gallery-rear" x1="26" y1="42" x2="218" y2="220" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#8C68EE"/><stop offset="1" stop-color="#5533B5"/>
+  </linearGradient>
+  <linearGradient id="gallery-paper" x1="60" y1="80" x2="180" y2="162" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#E7DFFA"/><stop offset="1" stop-color="#BDA5EF"/>
+  </linearGradient>
+  <linearGradient id="gallery-copper" x1="32" y1="32" x2="232" y2="224" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#703E30"/><stop offset=".16" stop-color="#B47456"/>
+    <stop offset=".28" stop-color="#E6B296"/><stop offset=".32" stop-color="#F8D8C3"/>
+    <stop offset=".37" stop-color="#BB7C5A"/><stop offset=".56" stop-color="#8A4D36"/>
+    <stop offset=".69" stop-color="#D69B77"/><stop offset=".75" stop-color="#F2C9AA"/>
+    <stop offset=".81" stop-color="#B87956"/><stop offset="1" stop-color="#713F30"/>
+  </linearGradient>
+  <linearGradient id="gallery-sun" x1="172" y1="82" x2="201" y2="112" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#8D513A"/><stop offset=".33" stop-color="#DDA581"/>
+    <stop offset=".47" stop-color="#F7D8B8"/><stop offset=".53" stop-color="#D69B74"/>
+    <stop offset="1" stop-color="#925439"/>
+  </linearGradient>
+  <linearGradient id="gallery-mountain" x1="44" y1="148" x2="186" y2="218" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#D9C9FA"/><stop offset="1" stop-color="#A582E9"/>
+  </linearGradient>
+  <linearGradient id="gallery-far-mountain" x1="142" y1="152" x2="211" y2="216" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#E8B4EB"/><stop offset="1" stop-color="#BB7BD7"/>
+  </linearGradient>
+  <clipPath id="gallery-photo-clip"><rect x="28" y="54" width="194" height="172" rx="24"/></clipPath>
+</defs>
+<!-- Canonical vector artwork; regenerate platform assets with scripts/render-branding.py. -->
+<g id="mark">
+<rect x="48" y="34" width="180" height="182" rx="24" fill="url(#gallery-copper)" stroke="#7D4936" stroke-width=".8"/>
+<rect x="42" y="40" width="180" height="182" rx="24" fill="url(#gallery-rear)" stroke="#6740C4" stroke-width=".8"/>
+<rect x="34" y="48" width="194" height="172" rx="24" fill="url(#gallery-copper)" stroke="#7D4936" stroke-width=".8"/>
+<rect x="28" y="54" width="194" height="172" rx="24" fill="url(#gallery-face)"/>
+<g clip-path="url(#gallery-photo-clip)">
+  <path d="M108 226L167 154Q173 147 180 154L229 205V230Z" fill="url(#gallery-far-mountain)"/>
+  <path d="M24 199L81 136Q88 128 95 136L178 226H24Z" fill="url(#gallery-mountain)"/>
+  <path d="M32 195L83 139Q88 133 93 139L170 222" fill="none" stroke="#F1E8FF" stroke-opacity=".55" stroke-width="1.5" stroke-linejoin="round"/>
+</g>
+<rect x="28" y="54" width="194" height="172" rx="24" fill="none" stroke="#5936B7" stroke-width=".9"/>
+<path d="M32 78Q32 58 52 58H198Q218 58 218 78" fill="none" stroke="#F3DDF9" stroke-opacity=".52" stroke-width="1.5" stroke-linecap="round"/>
+<circle cx="186" cy="99" r="17" fill="#693D40" opacity=".2"/>
+<circle cx="185" cy="97" r="16" fill="url(#gallery-sun)" stroke="#9A6045" stroke-width=".8"/>
+<path d="M172 95A13 13 0 0 1 189 85" fill="none" stroke="#FFE6CD" stroke-opacity=".8" stroke-width="1" stroke-linecap="round"/>
+</g>
 </svg>

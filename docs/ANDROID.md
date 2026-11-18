@@ -65,7 +65,7 @@ Each album has local settings (catalog schema v5, `album_settings` and `album_ta
 - Name and description. The folder keeps its Drive name.
 - Cover: a chosen photo or video from the album or one of its subalbums. By default, the album uses its newest item.
 - Tags (up to 20, case-insensitive). The Drive tab filters by tag across all galleries.
-- Pin to top, and hide. Hidden albums stay out of every album list until the phone's fingerprint, face or screen lock confirms the user (platform `BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`); they lock again whenever the app leaves the screen, and an open hidden album closes then too. Without a screen lock the app offers to set one up. Hiding an album does not hide its photos from the Photos timeline or the system picker.
+- Pin to top, and hide. Hidden albums stay out of every album list until the phone's fingerprint, face or screen lock confirms the user (platform `BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`); they lock again whenever the app leaves the screen, and an open hidden album closes then too. Without a screen lock the app offers to set one up. Photos in a hidden album also leave the Photos timeline and the system photo picker, on this phone only. "Hide" in the selection bar or the viewer asks which hidden album to use, or creates one.
 
 The interface shows everything newest first, and the grid's zoom sets the date headings. The catalog still stores grouping and order per album (`album_settings.grouping`, `sort_order`, with a case-insensitive name index), but the app no longer offers them.
 
@@ -98,7 +98,7 @@ The Proton-style theme uses violet actions, lavender surfaces, plum text/dark ch
 
 Android's sans-serif family supplies native language coverage. Font scaling remains enabled. Photo tiles have square corners and 2dp gutters, so the grid reads as one sheet of photographs; album cards keep 12dp corners. Row heights adapt to photo shapes, width and zoom. Solid action colors keep photographs prominent; gradients are reserved for the app mark.
 
-The icon uses Proton Stream's violet tile, darker lower edge, pale glyph, and three-piece rhythm. The original gallery glyph is a landscape/photo frame cut into three strips. Its canonical [SVG](../images/logo.svg) and [512px PNG](../images/icon-512.png) can be reused by desktop packaging. Android has a vector in-app icon, safe-zone foreground/background layers, and a themed monochrome layer. Attribution is in [NOTICE](../NOTICE.md).
+The icon uses frontal violet–pink photo plates with shallow metallic copper depth, simple mountains, and a copper sun. Its canonical [SVG](../images/logo.svg) and [512px PNG](../images/icon-512.png) share the same vector artwork as the Android account-screen logo, adaptive foreground, and themed monochrome layer. Run `python scripts/render-branding.py` to regenerate them together, or add `--check` to verify the outputs. Earlier artwork is preserved in `images/branding-archive/`; the [branding guide](../images/BRANDING.md) describes platform sizing. Attribution is in [NOTICE](../NOTICE.md).
 
 ```text
 ( Photos | Drive )                 [+] (N)
@@ -116,7 +116,7 @@ See [current product direction](PRODUCT.md) for the distinction between native P
 
 ## Performance and storage boundaries
 
-Reviewed screenshots use procedural test images, not a signed-in Proton account: [phone library, light theme](images/android-library-light.png) and [appearance sheet, dark theme](images/android-appearance-dark.png). The fixtures are not bundled with the application. The [nested Drive album](images/android-nested-album-light.png) illustrates the same smart grid and breadcrumbs.
+Historical prototype screenshots use procedural test images, not a signed-in Proton account, and show the earlier interface and branding: [phone library, light theme](images/android-library-light.png) and [appearance sheet, dark theme](images/android-appearance-dark.png). The fixtures are not bundled with the application. The [nested Drive album](images/android-nested-album-light.png) illustrates the same smart grid and breadcrumbs.
 
 - Paging requests 90 records, prefetches 18, and targets a 360-record working set. Both directions use Rust/SQLite keyset seeks. Paging can discard/reload old pages; its size bound is best effort during in-flight work.
 - Storage/query FFI calls run on `Dispatchers.IO`; pure Rust layout runs on `Dispatchers.Default`. Rust uses the bounded SQLite actor, with batched paths/shapes. Only server thumbnails (at most 4MiB) cross FFI; originals stay outside this bridge. Source-specific indexes avoid scanning the global timeline for an album.
@@ -131,12 +131,12 @@ Reviewed screenshots use procedural test images, not a signed-in Proton account:
 
 ## Build
 
-Requirements: Linux host for the script, JDK 17, Rust 1.96+, `cargo-ndk` 4.x, SDK platform 36/build tools 37.0.0, NDK 30.0.16248370, and Rust targets `aarch64-linux-android` and `x86_64-linux-android`. Minimum Android API is 31. Windows host script support remains to be added; Windows is also a separate desktop target.
+Requirements: Linux host for the script, JDK 21, Rust 1.96+, `cargo-ndk` 4.x, SDK platform 36/build tools 37.0.0, NDK 30.0.16248370, and Rust targets `aarch64-linux-android` and `x86_64-linux-android`. Minimum Android API is 31. Windows host script support remains to be added; Windows is also a separate desktop target.
 
 ```bash
 rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk --locked
-export JAVA_HOME=/path/to/jdk-17
+export JAVA_HOME=/path/to/jdk-21
 export ANDROID_HOME=/path/to/android-sdk
 export ANDROID_NDK_HOME=/path/to/android-ndk
 bash scripts/build-android.sh debug
@@ -155,11 +155,11 @@ This builds the APK and runs Android lint and Robolectric interaction/layout tes
 ## Next integration gates
 
 1. Live-account acceptance: password, TOTP, CAPTCHA, mailbox-password, refresh rotation, restart, offline sign-out, and expired-session recovery. The native implementation exists; real-account validation requires user sign-in.
-2. A real Drive folder chooser and encrypted persistent revision-specific preview delivery. Photos metadata and memory-only thumbnails are wired up; very large-library behavior remains to be measured.
+2. Encrypted persistent revision-specific preview delivery. The Drive folder chooser, Photos sync, and memory-only thumbnails are implemented; very large-library behavior remains to be measured.
 3. Shared priorities and byte budgets; cancel obsolete viewport requests.
 4. Media3 `DataSource` over Rust ranges, followed by real seek/airplane-mode checks before selecting the final Proton player.
 5. Durable item/folder offline jobs, references, quotas, and background execution.
-6. Upload queue, capture-date extraction, deletion controls, accessibility/device performance, and release signing.
+6. Further backup recovery, accessibility, device performance, and release validation. Uploads, capture dates, deletion controls, and release signing are implemented.
 
 ## Primary references
 
@@ -180,7 +180,7 @@ The limits above describe the implementation, not Android device measurements.
 A dedicated variant uses the persistent key in `~/Keys/proton-gallery/testing.p12` and private profile `~/Keys/proton-gallery/testing.json`. The alias is `proton-gallery-testing`. The directory is mode 700; both files are mode 600. Credentials are not stored in the checkout, printed, or passed on command lines.
 
 ```bash
-JAVA_HOME=/path/to/jdk-17 python3 scripts/build-signed-android.py
+JAVA_HOME=/path/to/jdk-21 python3 scripts/build-signed-android.py
 ```
 
 The helper also accepts `--signing-config /path/to/private/profile.json`. Its private JSON keys are `keystore` (relative to the profile), `alias`, `store_password`, and `key_password`. The Android Gradle config reads credentials only from the helper's environment; native build tools do not inherit the passwords. The helper disables Gradle configuration caching and long-lived compiler/build daemons for this invocation.

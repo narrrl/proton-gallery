@@ -7,8 +7,10 @@ and contributors. The gallery implements its own domain model, SQLite schema,
 bounded catalog worker, and authenticated local object format.
 
 The shared justified-grid math is adapted from `pdfs-gui`'s Photos page in
-proton-drive-linux. The gallery icon references the gradient tile and segmented
-rhythm of proton-stream's MIT `images/logo.svg`, with an original photo glyph.
+proton-drive-linux. The gallery icon now uses an original vector photo stack
+within the suite's violet–pink and metallic copper identity. The earlier icon,
+which referenced the gradient tile and segmented rhythm of proton-stream's MIT
+`images/logo.svg`, is retained in `images/branding-archive/`.
 Copyright (c) 2026 Nils Pukropp. The full upstream MIT notice is retained in
 [third-party/NILS-PUKROPP-MIT.txt](third-party/NILS-PUKROPP-MIT.txt).
 

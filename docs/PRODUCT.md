@@ -51,7 +51,7 @@ Discovery commits the current album before walking its children. A failed/cancel
 
 | Area | Current implementation | Remaining |
 | --- | --- | --- |
-| Branding | Proton-style violet/plum themes and a segmented gallery icon related to Proton Stream | Final platform/device visual pass |
+| Branding | Proton-style violet/plum themes and the suite’s frontal violet–pink photo stack with metallic copper depth | Final platform/device visual pass |
 | Main Photos | Distinct SDK Photos adapter, server capture chronology, Android sign-in/sync, account-scoped local queries, memory-only server thumbnails | Incremental SDK timeline pages, persistent encrypted previews, original viewer |
 | Drive galleries | Recursive metadata crawler, persisted nested/overlapping album trees, CLI addition, Android catalog browsing and breadcrumbs | Android remote folder picker, event reconciliation, background crawl jobs |
 | Smart grid | Shared Rust geometry, Android lazy rows, known dimensions, compact density | Remote preview shape learning, real-device scroll/anchor measurements |

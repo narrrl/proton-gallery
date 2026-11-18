@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"
+    role="img" aria-label="Proton Gallery" data-app="gallery">
+  <title>Proton Gallery</title>
+  <desc>Two photographs and a copper sun, in the shared violet material.</desc>
+  <!-- Canonical artwork. Regenerate platform assets with scripts/render-branding.py. -->
+  <defs>
+    <linearGradient id="face" x1="18" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F6F2FC"/>
+      <stop offset="1" stop-color="#E5DDEE"/>
+    </linearGradient>
+    <linearGradient id="material" x1="35" y1="35" x2="93" y2="96" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9170E2"/>
+      <stop offset=".38" stop-color="#6D4AFF"/>
+      <stop offset=".6" stop-color="#7044D1"/>
+      <stop offset=".82" stop-color="#A66598"/>
+      <stop offset="1" stop-color="#B56D51"/>
+    </linearGradient>
+    <linearGradient id="back" x1="26" y1="28" x2="80" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9875C8"/>
+      <stop offset="1" stop-color="#9669DD"/>
+    </linearGradient>
+    <linearGradient id="ember" x1="78" y1="51" x2="85" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B67750"/>
+      <stop offset="1" stop-color="#A45D43"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="104" height="104" rx="27" fill="url(#face)"/>
+  <rect x="12.75" y="12.75" width="102.5" height="102.5" rx="26.25"
+      fill="none" stroke="#A18CB7" stroke-width="1.5"/>
+  <g id="mark">
+    <path d="M 35.8 33.92 L 75.28 29.22 C 80.45 28.562 85.15 32.228 85.808 37.398 L 86.09 39.56 H 78.57 L 78.382 38.338 C 78.194 37.304 77.254 36.552 76.22 36.646 L 36.74 41.346 C 35.706 41.44 34.954 42.474 35.048 43.508 L 39.56 81.86 H 33.92 C 32.416 81.86 31.1 80.732 30.912 79.228 L 27.246 44.26 C 26.682 38.996 30.536 34.578 35.8 33.92 Z" fill="url(#back)" fill-rule="nonzero"/>
+    <path d="M 44.26 41.44 H 86.56 C 92.294 41.44 96.9 46.046 96.9 51.78 V 81.86 C 96.9 87.594 92.294 92.2 86.56 92.2 H 44.26 C 38.526 92.2 33.92 87.594 33.92 81.86 V 51.78 C 33.92 46.046 38.526 41.44 44.26 41.44 Z M 44.26 48.02 C 42.192 48.02 40.5 49.712 40.5 51.78 V 78.1 L 53.66 63.06 L 65.88 76.22 L 76.22 65.88 L 90.32 79.98 V 51.78 C 90.32 49.712 88.628 48.02 86.56 48.02 Z" fill="url(#material)" fill-rule="evenodd"/>
+    <path d="M 85.15 56.48 A 4.23 4.23 0 1 1 76.69 56.48 A 4.23 4.23 0 1 1 85.15 56.48 Z" fill="url(#ember)" fill-rule="nonzero"/>
+  </g>
+</svg>

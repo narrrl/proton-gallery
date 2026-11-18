@@ -1,11 +1,11 @@
 # Development and current implementation
 
-This is an early Rust implementation with a CLI and native Android gallery. Android now opens a dedicated Photos view, has nested Drive gallery browsing over the Rust catalog, and keeps device imports separate. Native Android sign-in, Keystore-protected resumable sessions, Photos metadata sync, and memory-only server thumbnails are connected. The CLI has Photos and recursive Drive-gallery indexing adapters. Desktop UI/session persistence, recursive offline folders, uploads, remote originals/video, and a native Drive folder chooser remain to be implemented. See [Android development](ANDROID.md) for its build, storage boundaries, and limitations.
+The native Android gallery provides a combined phone/Proton Photos timeline, automatic phone-folder backup, Proton Photos album management, nested Drive galleries with a folder chooser, photo/video viewing, sharing, and Android picker integration. Rust owns the local catalog, indexing, Proton operations, and media services; Kotlin/Compose owns the interface and Android integration. The desktop UI, encrypted persistent remote previews, range-backed remote video playback, and full remote offline retention remain under development. The CLI is a headless diagnostic client with its own narrower account and storage behavior. See [Android development](ANDROID.md) for current app behavior and [the README](../README.md) for the user overview.
 
 ## Implemented
 
-- Independent Rust workspace: `pg-core`, `pg-drive`, `pg-cli`, and `pg-mobile`. Registry SDK dependencies are pinned to **0.12.0** in both the manifest and lockfile; no sibling checkout is a build dependency.
-- Typed UniFFI mobile bridge, bidirectional keyset paging, durable content-addressed device imports, and forward migrations through schema 4, typed source scopes, nested album trees, and stored media shapes. Kotlin supplies native Compose UI and platform media/picker integration.
+- Independent Rust workspace: `pg-core`, `pg-drive`, `pg-cli`, and `pg-mobile`. Registry SDK dependencies are pinned in the manifest and lockfile; no sibling checkout is a build dependency.
+- Typed UniFFI mobile bridge, bidirectional keyset paging, durable content-addressed device imports, and forward-only schema migrations, typed source scopes, nested album trees, and stored media shapes. Kotlin supplies native Compose UI and platform media/picker integration.
 - A bounded async catalog facade over a dedicated SQLite thread. WAL, forward-only schema initialization, application identity checks, and refusal to open a newer or unrelated database.
 - Persistent source membership and timeline assets with full-key pagination, including tied timestamps. Queries can run while a remote scan is waiting for its next page.
 - Atomic metadata-page/checkpoint commits, restart/resume, scan generations that reject stale workers, and cooperative cancellation. A scan does not infer deletion from absent results.
@@ -99,4 +99,4 @@ Source-filtered pages now seek the `memberships_timeline` covering index and joi
 
 The app-private metadata database is plaintext. Unix file/directory permissions are restricted for new catalog/object files, but Windows directory ACL setup and full power-loss publication semantics need platform validation. Stored objects are authenticated; startup does not hash/scan every retained block. Missing/corrupt objects fail on read and can be repaired when an online source is attached.
 
-Next integration work: incremental SDK timeline delivery, desktop secret-store adapters, a Drive folder chooser, encrypted persistent remote previews, shared priority scheduling, Android remote original/range viewing, and a desktop thumbnail grid. The [roadmap](IMPLEMENTATION_PLAN.md) retains the device acceptance gates.
+Next integration work: incremental SDK timeline delivery, desktop secret-store adapters, encrypted persistent remote previews, shared priority scheduling, range-backed Android video playback, and a desktop thumbnail grid. The [roadmap](IMPLEMENTATION_PLAN.md) retains the device acceptance gates.
