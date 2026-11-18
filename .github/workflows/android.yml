@@ -109,17 +109,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: proton-gallery-apk
       - uses: actions/download-artifact@v4
         with:
           name: proton-gallery-linux-packages
+      - name: Install RPM signing tools
+        run: sudo apt-get update && sudo apt-get install -y rpm gnupg
+      - name: Sign and verify RPMs
+        env:
+          RPM_SIGNING_SUBKEY: ${{ secrets.RPM_SIGNING_SUBKEY }}
+          RPM_SIGNING_PASSPHRASE: ${{ secrets.RPM_SIGNING_PASSPHRASE }}
+        run: bash scripts/sign-rpm.sh proton-gallery-*.rpm
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk proton-gallery_*.deb proton-gallery-*.rpm \
+          gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk proton-gallery_*.deb proton-gallery-*.rpm packaging/RPM-GPG-KEY-proton-gallery \
             --repo "$GITHUB_REPOSITORY" \
             --title "Proton Gallery ${GITHUB_REF_NAME#v}" --generate-notes \
             --notes "Android 12 or newer (arm64-v8a and x86_64). Linux desktop packages for x86_64 (Debian/Ubuntu and Fedora)."

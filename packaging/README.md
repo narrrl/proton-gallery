@@ -44,9 +44,20 @@ dependencies:
 # Ubuntu 24.04 or Debian 13
 sudo apt install ./proton-gallery_*_amd64.deb
 
-# Fedora
+# Fedora. Compare the downloaded public key's fingerprint before importing.
+gpg --show-keys --fingerprint RPM-GPG-KEY-proton-gallery
+sudo rpmkeys --import RPM-GPG-KEY-proton-gallery
+rpmkeys --checksig ./proton-gallery-*.x86_64.rpm
 sudo dnf install ./proton-gallery-*.x86_64.rpm
 ```
+
+The release key fingerprint is `1E28 F055 A4B3 EC28 7675 F101 28B9 DC0E 6A5C 9C52`.
+Tagged releases include the public key beside the RPM. Standalone workflow
+artifacts and local builds are unsigned. The release workflow signs and verifies
+the RPM with `RPM_SIGNING_SUBKEY` and `RPM_SIGNING_PASSPHRASE` from Actions
+secrets. Keep the primary private key outside CI. When rotating the signing
+subkey, update the checked-in public key and signer fingerprint before the next
+release.
 
 From the repository root, build both archives with `scripts/package-linux.sh`.
 Pass `deb` or `rpm` to build one format. The script needs the normal Rust build
