@@ -12,3 +12,6 @@
 *.keystore
 __pycache__/
 
+
+# The global *.jar ignore must not drop the Gradle wrapper.
+!/android/gradle/wrapper/gradle-wrapper.jar
