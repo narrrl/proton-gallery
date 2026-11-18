@@ -37,7 +37,7 @@ import io.narl.protongallery.bridge.AlbumGrouping
 import io.narl.protongallery.bridge.AlbumTag
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.GalleryItem
-import io.narl.protongallery.bridge.planSmartGrid
+import io.narl.protongallery.bridge.planGrid
 import io.narl.protongallery.icons.FolderOpen
 import io.narl.protongallery.icons.PhotoLibrary
 import io.narl.protongallery.icons.VisibilityOff
@@ -104,7 +104,7 @@ fun groupLabel(time: Long, grouping: AlbumGrouping): String? {
 }
 
 /** The group of a capture time; items of one group share a heading. */
-private fun groupOf(time: Long, grouping: AlbumGrouping, zone: ZoneId): Long = if (grouping == AlbumGrouping.NONE) 0L else {
+internal fun groupOf(time: Long, grouping: AlbumGrouping, zone: ZoneId): Long = if (grouping == AlbumGrouping.NONE) 0L else {
     val date = Instant.ofEpochSecond(time).atZone(zone).toLocalDate()
     when (grouping) {
         AlbumGrouping.YEAR -> date.year.toLong()
@@ -113,39 +113,43 @@ private fun groupOf(time: Long, grouping: AlbumGrouping, zone: ZoneId): Long = i
     }
 }
 
-/** Plan the rows of items `from` until `until` of `outline`: a heading where
- * the group changes, then its photos justified to the width. Unknown shapes
- * are square, so the rows only change with the outline. */
+/** Plan the rows of items `from` until `until` of `outline` in one call: a
+ * heading where the group changes, then its photos justified to the width.
+ * Unknown shapes are square, so the rows only change with the outline. */
 private fun planRows(
     outline: GalleryOutline, grouping: AlbumGrouping, width: Int, target: Int, gap: Int,
     from: Int = 0, until: Int = outline.count,
 ): List<GalleryRow> {
-    val zone = ZoneId.systemDefault()
-    fun group(time: Long) = groupOf(time, grouping, zone)
-    val rows = ArrayList<GalleryRow>()
-    var start = from
-    while (start < until) {
-        val section = group(outline.times[start])
-        var end = start + 1
-        while (end < until && group(outline.times[end]) == section) end++
-        groupLabel(outline.times[start], grouping)?.let { rows += GalleryRow.Heading("group-${outline.ids[start]}", it) }
-        // The planner takes a bounded number of items. Its rows only look
-        // ahead, so planning in pieces and keeping all but each piece's last
-        // row gives the same rows as planning the whole section at once.
-        var piece = start
-        while (piece < end) {
-            val pieceEnd = minOf(end, piece + 1024)
-            val planned = planSmartGrid((piece until pieceEnd).map(outline::ratio), width.toUInt(), target.toUInt(), gap.toUInt())
-            val keep = if (pieceEnd == end) planned else planned.dropLast(1).ifEmpty { planned }
-            for (row in keep) {
-                val first = piece + row.start.toInt()
-                rows += GalleryRow.Media("row-${outline.ids[first]}", first, IntArray(row.tiles.size) { row.tiles[it].width.toInt() }, row.tiles.first().height.toInt())
-            }
-            piece = keep.last().let { piece + it.start.toInt() + it.tiles.size }
+    if (from >= until) return emptyList()
+    val sections = outline.sections(grouping, from, until)
+    val plan = planGrid(
+        FloatList(until - from) { outline.ratios[from + it] },
+        UIntList(sections.size) { (sections[it] - from).toUInt() },
+        width.toUInt(), target.toUInt(), gap.toUInt(),
+    )
+    val rows = ArrayList<GalleryRow>(plan.rowStarts.size + sections.size)
+    var section = 0
+    var item = 0
+    for (index in plan.rowStarts.indices) {
+        val first = from + plan.rowStarts[index].toInt()
+        if (section < sections.size && sections[section] == first) {
+            section++
+            groupLabel(outline.times[first], grouping)?.let { rows += GalleryRow.Heading("group-${outline.ids[first]}", it) }
         }
-        start = end
+        val next = if (index + 1 < plan.rowStarts.size) plan.rowStarts[index + 1].toInt() else until - from
+        val count = from + next - first
+        rows += GalleryRow.Media("row-${outline.ids[first]}", first, IntArray(count) { plan.widths[item + it].toInt() }, plan.rowHeights[index].toInt())
+        item += count
     }
     return rows
+}
+
+// Lists the planner reads without boxing every value first.
+private class FloatList(override val size: Int, val get: (Int) -> Float) : AbstractList<Float>() {
+    override fun get(index: Int) = get.invoke(index)
+}
+private class UIntList(override val size: Int, val get: (Int) -> UInt) : AbstractList<UInt>() {
+    override fun get(index: Int) = get.invoke(index)
 }
 
 /** While pinching, only the rows around `anchor` are planned, on the spot, so
@@ -272,10 +276,12 @@ fun SmartMediaGrid(
                     if (event.changes.count { it.pressed } >= 2) {
                         if (!pinching) {
                             pinching = true; start = currentZoom; scale = 1f
+                            // The first photo row from the top; the top row may
+                            // be a heading, or above the photos altogether.
                             val shown = currentLayout
-                            val first = shown?.rows?.getOrNull(scroll.firstVisibleItemIndex - currentLeading)
-                                ?: shown?.rows?.firstOrNull { it is GalleryRow.Media }
-                            anchor = (first as? GalleryRow.Media)?.let { row -> shown?.outline?.ids?.getOrNull(row.start) }
+                            val top = (scroll.firstVisibleItemIndex - currentLeading).coerceAtLeast(0)
+                            val first = shown?.rows?.let { rows -> (top until rows.size).firstNotNullOfOrNull { rows[it] as? GalleryRow.Media } }
+                            anchor = first?.let { row -> shown.outline.ids.getOrNull(row.start) }
                         }
                         scale *= event.calculateZoom()
                         val next = (start * scale).coerceIn(ZOOM_MIN, ZOOM_MAX)

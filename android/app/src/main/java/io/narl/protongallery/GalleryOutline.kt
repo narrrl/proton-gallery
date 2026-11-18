@@ -1,6 +1,7 @@
 package io.narl.protongallery
 
 import androidx.compose.runtime.mutableStateMapOf
+import io.narl.protongallery.bridge.AlbumGrouping
 import io.narl.protongallery.bridge.GalleryItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,36 @@ class GalleryOutline(
     // Pages by last use, oldest first.
     private val used = LinkedHashSet<Int>()
     private val positions by lazy { HashMap<String, Int>(ids.size * 2).apply { ids.forEachIndexed { index, id -> put(id, index) } } }
+
+    // Section starts of the whole outline by grouping; worked out once, as
+    // every zoom step plans again. Planning runs off the main thread.
+    private val allSections = java.util.concurrent.ConcurrentHashMap<AlbumGrouping, IntArray>()
+
+    /** The items of `from` until `until` where a new group starts, `from` first. */
+    fun sections(grouping: AlbumGrouping, from: Int = 0, until: Int = count): IntArray {
+        if (from == 0 && until == count) allSections[grouping]?.let { return it }
+        val zone = java.time.ZoneId.systemDefault()
+        val starts = IntArrayList()
+        var last = 0L
+        for (index in from until until) {
+            val group = groupOf(times[index], grouping, zone)
+            if (index == from || group != last) starts.add(index)
+            last = group
+        }
+        val result = starts.toArray()
+        if (from == 0 && until == count) allSections[grouping] = result
+        return result
+    }
+
+    private class IntArrayList {
+        private var values = IntArray(16)
+        private var size = 0
+        fun add(value: Int) {
+            if (size == values.size) values = values.copyOf(size * 2)
+            values[size++] = value
+        }
+        fun toArray() = values.copyOf(size)
+    }
 
     /** The shape the grid plans with: unknown shapes are square. */
     fun ratio(index: Int): Double = ratios[index].takeIf { it.isFinite() && it > 0f }?.toDouble() ?: 1.0

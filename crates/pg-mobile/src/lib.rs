@@ -138,6 +138,37 @@ pub fn plan_smart_grid(
         .collect())
 }
 
+/// Every row of a view: see [`plan_grid`].
+#[derive(uniffi::Record)]
+pub struct GridPlan {
+    /// The first item of each row.
+    pub row_starts: Vec<u32>,
+    /// The height of each row in pixels.
+    pub row_heights: Vec<u32>,
+    /// The width of each item in pixels, in item order.
+    pub widths: Vec<u32>,
+}
+
+/// Plan the justified rows of a whole view in one call. `ratios` are the
+/// items' width divided by height (0 when unknown, planned square);
+/// `sections` are the items where a new heading starts.
+#[uniffi::export]
+pub fn plan_grid(
+    ratios: Vec<f32>,
+    sections: Vec<u32>,
+    width: u32,
+    target: u32,
+    gap: u32,
+) -> Result<GridPlan, GalleryError> {
+    let ratios: Vec<f64> = ratios.into_iter().map(f64::from).collect();
+    let grid = pg_core::grid::plan_sections(&ratios, &sections, width, target, gap)?;
+    Ok(GridPlan {
+        row_starts: grid.row_starts,
+        row_heights: grid.row_heights,
+        widths: grid.widths,
+    })
+}
+
 #[derive(uniffi::Record)]
 pub struct GalleryPage {
     pub items: Vec<GalleryItem>,
