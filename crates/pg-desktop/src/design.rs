@@ -116,19 +116,6 @@ pub fn soft(theme: &Theme) -> container::Style {
     }
 }
 
-pub fn selected(theme: &Theme) -> container::Style {
-    let c = colors(theme);
-    container::Style {
-        background: Some(c.selected.into()),
-        text_color: Some(c.accent),
-        border: Border {
-            radius: 9.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
     let c = colors(theme);
     button::Style {
@@ -184,6 +171,8 @@ pub enum Icon {
     Exit,
     Image,
     Play,
+    Heart,
+    Albums,
 }
 
 // Small native SVGs share a 24px grid and 1.7px stroke; no icon font required.
@@ -199,6 +188,10 @@ pub fn icon<'a>(kind: Icon, size: f32) -> svg::Svg<'a> {
         Icon::Exit => "<path d='M9 4H4v16h5m4-12 4 4-4 4m-5-4h12'/>",
         Icon::Image => {
             "<rect x='3' y='4' width='18' height='16' rx='3'/><path d='m3 16 5-5 4 4 3-3 6 6'/><circle cx='15' cy='8' r='1'/>"
+        }
+        Icon::Heart => "<path d='M20 5c-3-3-6-1-8 1-2-2-5-4-8-1-4 4 1 9 8 15 7-6 12-11 8-15Z'/>",
+        Icon::Albums => {
+            "<rect x='6' y='7' width='15' height='14' rx='3'/><path d='M17 3H6a3 3 0 0 0-3 3v11'/>"
         }
         Icon::Play => "<path d='m9 5 10 7-10 7Z'/>",
     };
@@ -220,4 +213,17 @@ pub fn logo(size: f32) -> iced::widget::Image {
         )
     });
     iced::widget::image(HANDLE.clone()).width(size).height(size)
+}
+
+pub fn navigation(theme: &Theme, _status: button::Status) -> button::Style {
+    let c = colors(theme);
+    button::Style {
+        background: Some(c.selected.into()),
+        text_color: c.accent,
+        border: Border {
+            radius: 9.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }

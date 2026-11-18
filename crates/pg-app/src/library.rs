@@ -16,6 +16,8 @@ pub enum View {
     Photos,
     /// Media saved in the app's own library.
     Device,
+    /// An album belonging to the signed-in Proton Photos account.
+    PhotoAlbum(String),
     /// One album of a Drive folder gallery.
     DriveAlbum { gallery: String, album: String },
     /// Any other catalog source, such as the synthetic demo library.
@@ -126,6 +128,18 @@ impl App {
         Ok(match view {
             View::Device => Some(LocalLibrary::source()?.id),
             View::Photos => self.photo_source().await?,
+            View::PhotoAlbum(id) => {
+                let account = self.auth.account_id().ok_or(pg_core::Error::NotFound)?;
+                let id = SourceId::new(id)?;
+                self.catalog
+                    .photo_album(account, id.clone())
+                    .await?
+                    .ok_or(pg_core::Error::NotFound)?;
+                if self.catalog.album_settings(id.clone()).await?.hidden {
+                    return Err(pg_core::Error::NotFound.into());
+                }
+                Some(id)
+            }
             View::DriveAlbum { gallery, album } => Some(self.checked_album(gallery, album).await?),
             View::Source(id) => Some(SourceId::new(id)?),
         })
@@ -149,15 +163,30 @@ impl App {
 
     /// The outline of `view`.
     pub async fn outline(&self, view: View) -> Result<Outline> {
+        self.outline_filtered(view, false).await
+    }
+
+    /// Filter compact identities in SQLite, without reading every media record.
+    pub async fn outline_filtered(&self, view: View, favorites: bool) -> Result<Outline> {
         let entries = if matches!(view, View::Photos) {
-            self.catalog
-                .timeline_outline(self.photo_source().await?, self.auth.account_id())
-                .await?
+            if favorites {
+                self.catalog
+                    .timeline_favorites_outline(self.photo_source().await?, self.auth.account_id())
+                    .await?
+            } else {
+                self.catalog
+                    .timeline_outline(self.photo_source().await?, self.auth.account_id())
+                    .await?
+            }
         } else {
             match self.view_source(view).await? {
                 Some(source) => {
                     let order = self.catalog.album_settings(source.clone()).await?.order;
-                    self.catalog.source_outline(source, order).await?
+                    if favorites {
+                        self.catalog.source_favorites_outline(source, order).await?
+                    } else {
+                        self.catalog.source_outline(source, order).await?
+                    }
                 }
                 None => vec![],
             }
@@ -326,5 +355,55 @@ mod tests {
                 .is_empty()
         );
         assert!(app.outline_items(&outline, 0, 100_000).await.unwrap().len() <= PageSize::MAX);
+    }
+
+    #[tokio::test]
+    async fn favorite_outlines_follow_catalog_changes_and_exclude_hidden_photos() {
+        let (_dir, app) = app(Arc::default()).await;
+        let source = SyntheticSource::new(20).unwrap();
+        app.index_source(&source, app.generation(), &CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+        crate::fixtures::seed_collections(&app).await.unwrap();
+        let demo = View::Source("demo".into());
+        let album = SourceId::new("demo-album").unwrap();
+        let outline = app.outline_filtered(demo.clone(), true).await.unwrap();
+        assert_eq!(outline.len(), 1);
+        assert_eq!(
+            app.outline(View::Source(album.to_string()))
+                .await
+                .unwrap()
+                .len(),
+            12
+        );
+        let account = AccountId::new("synthetic").unwrap();
+        let photos = SourceId::new("demo").unwrap();
+        assert_eq!(
+            app.catalog
+                .timeline_favorites_outline(Some(photos.clone()), Some(account.clone()))
+                .await
+                .unwrap()[0]
+                .key,
+            outline.keys[0]
+        );
+        app.catalog
+            .set_album_settings(
+                album,
+                pg_core::library::AlbumSettings {
+                    hidden: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            app.catalog
+                .timeline_favorites_outline(Some(photos), Some(account))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        app.catalog.set_favorite(outline.keys, false).await.unwrap();
+        assert!(app.outline_filtered(demo, true).await.unwrap().is_empty());
     }
 }

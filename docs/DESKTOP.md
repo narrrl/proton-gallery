@@ -1,7 +1,8 @@
 # Desktop browser: Iced on Linux and Windows
 
 The desktop milestone is a native Rust/Iced application in `crates/pg-desktop`.
-It covers account access, the Photos timeline and still-photo viewing. The earlier
+It covers account access, the Photos timeline, Proton Photos album browsing,
+favorite management and still-photo viewing. The earlier
 Compose desktop skeleton remains in `desktop/` until Iced acceptance is complete;
 it is not the Photos browser. Android keeps Kotlin/Compose and its UniFFI interface.
 
@@ -17,7 +18,7 @@ makepkg -fi
 
 Use `makepkg -sfi` if dependencies are missing. Launch **Proton Gallery** from the
 application menu or run `proton-gallery`. See [packaging details](../packaging/README.md)
-for prerequisites and Secret Service setup.
+for Debian/Ubuntu and Fedora installers, prerequisites and Secret Service setup.
 
 Install Rust (workspace minimum 1.96) and the platform development libraries. On
 Debian/Ubuntu the CI dependencies are `libdbus-1-dev libxkbcommon-dev libwayland-dev
@@ -59,6 +60,10 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
 - Sync updates preserve the viewport anchor and keyboard focus by asset identity.
   Decoded shapes and resizing replan around the current anchor. Below 760 logical pixels,
   the sidebar collapses into a toolbar; account sign-out remains available.
+- Albums lists the account's synced Proton Photos albums. Open an album to browse
+  its photos. The Albums button or Escape returns to the list.
+- Choose Favorite or Unfavorite in the viewer, or press F. Favorites shows tagged
+  photos from the timeline. The Size slider and +/− keys adjust the grid density.
 - Arrow keys, Page Up/Down, Home/End and Tab move visible grid focus. Enter/Space opens;
   Escape closes; Left/Right navigate the viewer. R/F5 retries the viewer; F5 refreshes the grid. Tiles are buttons with a visible focus
   border. This does **not** establish screen-reader accessibility; see acceptance gaps.
@@ -70,7 +75,7 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
 
 ## Desktop presentation
 
-The library uses a quiet navigation rail, a single Photos heading with the item count,
+The library uses a navigation rail for Photos, Favorites and Albums, a heading with the item count,
 and a justified timeline with 24-pixel outer margins and six-pixel gutters. Violet marks
 selection and keyboard focus; photos carry the color. Native outline icons and the existing
 Gallery branding are embedded in the executable, with no icon-font dependency. The system
@@ -116,13 +121,15 @@ is not proven bounded by the application limit.
 
 ## Shared ownership and validation
 
-`pg-app` owns account transitions, library queries, Photos/album sync and media retrieval.
+`pg-app` owns account transitions, library queries, Photos/album sync, favorite updates
+and media retrieval.
 `pg-drive` owns SDK protocol/session adaptation; `pg-core` owns catalog/indexing and geometry.
 `pg-desktop` owns presentation state, decoding, viewport scheduling, OS keyring adaptation and
 input. Android continues through the existing `pg-mobile` UniFFI API and its platform adapters.
 The demo's `FixtureMedia` implements the same `MediaProvider` contract as `App`: encoded
 still images, absent bytes, unsupported bytes and failed downloads all use the regular loading
-and decoding path. Synthetic videos use the normal video placeholder path.
+and decoding path. Synthetic videos use the normal video placeholder path. The
+fixture catalog also includes a Weekend photos album and an initial favorite.
 
 ```sh
 bash scripts/check.sh

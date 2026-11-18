@@ -1,4 +1,11 @@
-# Arch Linux local package
+# Linux packages
+
+The packages target x86_64 and install `proton-gallery`, the **Proton Gallery**
+launcher and PNG and SVG icons. The launcher uses the packaged PNG directly,
+including in sessions with a cached icon theme. Package removal leaves per-user
+app data intact.
+
+## Arch Linux
 
 Build and install the desktop app from this checkout, following the local-build
 package convention used by Proton Drive for Linux and Proton Stream:
@@ -26,9 +33,29 @@ proton-gallery
 proton-gallery --demo 100000
 ```
 
-The package installs the desktop binary, menu entry, existing SVG/PNG branding,
-license, notices and desktop documentation. It does not install the Android app
-or the diagnostic CLI. Package removal leaves per-user app data untouched.
+## Debian, Ubuntu and Fedora
+
+The Linux packages workflow builds `.deb` and `.rpm` files on Ubuntu 24.04.
+Download the matching package from a GitHub Actions run or a release that includes
+Linux assets. Install it through the native package manager so it can resolve
+dependencies:
+
+```sh
+# Ubuntu 24.04 or Debian 13
+sudo apt install ./proton-gallery_*_amd64.deb
+
+# Fedora
+sudo dnf install ./proton-gallery-*.x86_64.rpm
+```
+
+From the repository root, build both archives with `scripts/package-linux.sh`.
+Pass `deb` or `rpm` to build one format. The script needs the normal Rust build
+dependencies, `readelf` from binutils, and `dpkg-deb` or `rpmbuild` for each
+requested format. Pass `--binary path/to/proton-gallery` to package an existing
+x86_64 Linux build. Output defaults to `dist/`. Packages built locally inherit
+the binary's minimum glibc version.
+
+## Runtime requirements
 
 A working Wayland or X11 session, graphics driver and fonts are needed. Saved
 sessions require a running Secret Service provider, such as GNOME Keyring or

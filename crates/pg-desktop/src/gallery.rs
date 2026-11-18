@@ -10,8 +10,8 @@ use crate::thumbs::{self, Decoded};
 use crate::vault;
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{
-    Space, button, center, checkbox, column, container, image, operation, row, scrollable, text,
-    text_input,
+    Space, button, center, checkbox, column, container, image, operation, pick_list, row,
+    scrollable, slider, text, text_input,
 };
 use iced::{
     Alignment, Color, ContentFit, Element, Length, Size, Subscription, Task, Theme, window,
@@ -86,6 +86,22 @@ struct Viewer {
     message: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    Photos,
+    Favorites,
+    Albums,
+}
+impl std::fmt::Display for Section {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Photos => "Photos",
+            Self::Favorites => "Favorites",
+            Self::Albums => "Albums",
+        })
+    }
+}
+
 pub struct Gallery {
     options: Options,
     mode: iced::theme::Mode,
@@ -95,6 +111,14 @@ pub struct Gallery {
     form: SignInForm,
     sync: SyncState,
     view: View,
+    section: Section,
+    album_open: bool,
+    albums: Vec<pg_core::library::Album>,
+    albums_request: u64,
+    albums_loading: bool,
+    row_target: u32,
+    favorite_request: u64,
+    favorite_busy: bool,
     /// Answers to older outline requests are ignored.
     outline_request: u64,
     outline: Option<Arc<Outline>>,
@@ -177,6 +201,22 @@ pub enum Message {
     Step(i32),
     ViewerLoaded(u64, Generation, Result<Box<Loaded>, String>),
     Key(keyboard::Event),
+    Navigate(Section),
+    OpenAlbum(String),
+    AlbumsLoaded(
+        u64,
+        Generation,
+        Result<Vec<pg_core::library::Album>, String>,
+    ),
+    GridSize(u32),
+    ToggleFavorite,
+    FavoriteDone(
+        u64,
+        Generation,
+        pg_core::model::AssetKey,
+        bool,
+        Result<pg_app::favorites::FavoriteOutcome, String>,
+    ),
     Ignored,
 }
 
@@ -227,6 +267,14 @@ impl Gallery {
             } else {
                 View::Photos
             },
+            section: Section::Photos,
+            album_open: false,
+            albums: Vec::new(),
+            albums_request: 0,
+            albums_loading: false,
+            row_target: ROW_TARGET,
+            favorite_request: 0,
+            favorite_busy: false,
             outline_request: 0,
             outline: None,
             ratios: Vec::new(),
@@ -381,13 +429,20 @@ impl Gallery {
                                 .index_source(&source, app.generation(), &cancel, |_| {})
                                 .await
                                 .map_err(shown)?;
+                            pg_app::fixtures::seed_collections(&app)
+                                .await
+                                .map_err(shown)?;
                             Ok(done.indexed as usize)
                         },
                         Message::DemoReady,
                     );
                 }
                 if self.browsing() {
-                    return Task::batch([self.load_outline(), self.start_sync()]);
+                    return Task::batch([
+                        self.load_outline(),
+                        self.load_albums(),
+                        self.start_sync(),
+                    ]);
                 }
                 Task::none()
             }
@@ -400,7 +455,7 @@ impl Gallery {
                 if let Err(error) = result {
                     self.sync.error = Some(error);
                 }
-                self.load_outline()
+                Task::batch([self.load_outline(), self.load_albums()])
             }
             Message::RetryStart => {
                 let (next, task) = Self::boot(self.options.clone());
@@ -594,7 +649,11 @@ impl Gallery {
                                 temporary: self.form.temporary,
                                 ..SignInForm::default()
                             };
-                            return Task::batch([self.load_outline(), self.start_sync()]);
+                            return Task::batch([
+                                self.load_outline(),
+                                self.load_albums(),
+                                self.start_sync(),
+                            ]);
                         }
                     }
                     Err(error) => {
@@ -643,7 +702,7 @@ impl Gallery {
                 self.pages_failed.clear();
                 self.thumbs_failed.clear();
                 if self.demo() {
-                    self.load_outline()
+                    Task::batch([self.load_outline(), self.load_albums()])
                 } else {
                     self.start_sync()
                 }
@@ -676,7 +735,7 @@ impl Gallery {
                     Err(pg_app::Error::Cancelled | pg_app::Error::Stale) => {}
                     Err(error) => self.sync.error = Some(error.to_string()),
                 }
-                self.load_outline()
+                Task::batch([self.load_outline(), self.load_albums()])
             }
             Message::OutlineLoaded(request, generation, result) => {
                 if request != self.outline_request || !self.current(generation) {
@@ -801,6 +860,96 @@ impl Gallery {
                 }
                 Task::none()
             }
+            Message::Navigate(section) => {
+                if !self.browsing() || (self.section == section && !self.album_open) {
+                    return Task::none();
+                }
+                self.clear_media();
+                self.section = section;
+                self.album_open = false;
+                self.view = if self.demo() {
+                    View::Source("demo".into())
+                } else {
+                    View::Photos
+                };
+                if section == Section::Albums {
+                    self.load_albums()
+                } else {
+                    self.load_outline()
+                }
+            }
+            Message::OpenAlbum(id) => {
+                if !self.browsing()
+                    || !self
+                        .albums
+                        .iter()
+                        .any(|a| a.source.id.as_str() == id && !a.settings.hidden)
+                {
+                    return Task::none();
+                }
+                self.clear_media();
+                self.section = Section::Albums;
+                self.album_open = true;
+                self.view = if self.demo() {
+                    View::Source(id)
+                } else {
+                    View::PhotoAlbum(id)
+                };
+                self.load_outline()
+            }
+            Message::AlbumsLoaded(request, generation, result) => {
+                if request != self.albums_request || !self.current(generation) {
+                    return Task::none();
+                }
+                self.albums_loading = false;
+                match result {
+                    Ok(albums) => self.albums = albums,
+                    Err(error) => self.sync.error = Some(error),
+                }
+                Task::none()
+            }
+            Message::GridSize(target) => {
+                self.row_target = target.clamp(100, 320);
+                self.replan()
+            }
+            Message::ToggleFavorite => self.toggle_favorite(),
+            Message::FavoriteDone(request, generation, key, favorite, result) => {
+                if request != self.favorite_request || !self.current(generation) {
+                    return Task::none();
+                }
+                self.favorite_busy = false;
+                let error = match result {
+                    Ok(outcome) if outcome.failed == 0 => None,
+                    Ok(_) => Some("Couldn’t change this favorite. Try again.".to_owned()),
+                    Err(error) => Some(error),
+                };
+                if let Some(error) = error {
+                    if let Some(viewer) = self
+                        .viewer
+                        .as_mut()
+                        .filter(|viewer| viewer.item.as_ref().is_some_and(|item| item.key == key))
+                    {
+                        viewer.message = Some(error);
+                    } else {
+                        self.sync.error = Some(error);
+                    }
+                    return Task::none();
+                }
+                for item in self.pages.values_mut().flatten().flatten() {
+                    if item.key == key {
+                        item.favorite = favorite;
+                    }
+                }
+                if let Some(item) = self
+                    .viewer
+                    .as_mut()
+                    .and_then(|v| v.item.as_mut())
+                    .filter(|item| item.key == key)
+                {
+                    item.favorite = favorite;
+                }
+                self.load_outline()
+            }
             Message::Key(event) => self.key(event),
             Message::Ignored => Task::none(),
         }
@@ -834,8 +983,87 @@ impl Gallery {
         )
     }
 
-    fn load_outline(&mut self) -> Task<Message> {
+    fn load_albums(&mut self) -> Task<Message> {
         if !self.browsing() {
+            return Task::none();
+        }
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        self.albums_request += 1;
+        self.albums_loading = true;
+        let request = self.albums_request;
+        let generation = app.generation();
+        let demo = self.demo();
+        spawn(
+            &app,
+            move |app| async move {
+                if demo {
+                    app.catalog
+                        .photo_albums(
+                            pg_core::model::AccountId::new("synthetic")
+                                .map_err(|e| e.to_string())?,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())
+                } else {
+                    app.photo_albums().await.map_err(shown)
+                }
+            },
+            move |result| Message::AlbumsLoaded(request, generation, result),
+        )
+    }
+
+    fn toggle_favorite(&mut self) -> Task<Message> {
+        if !self.browsing() || self.favorite_busy {
+            return Task::none();
+        }
+        let Some(item) = self
+            .viewer
+            .as_ref()
+            .filter(|viewer| !viewer.loading)
+            .and_then(|viewer| viewer.item.as_ref())
+        else {
+            return Task::none();
+        };
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        if !item.in_proton {
+            return Task::none();
+        }
+        self.favorite_busy = true;
+        self.favorite_request += 1;
+        let request = self.favorite_request;
+        let generation = app.generation();
+        let favorite = !item.favorite;
+        let key = item.key.clone();
+        let done_key = key.clone();
+        let demo = self.demo();
+        spawn(
+            &app,
+            move |app| async move {
+                if demo {
+                    app.catalog
+                        .set_favorite(vec![key], favorite)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(pg_app::favorites::FavoriteOutcome {
+                        changed: 1,
+                        failed: 0,
+                    })
+                } else {
+                    app.set_favorite(vec![key], favorite).await.map_err(shown)
+                }
+            },
+            move |result| {
+                Message::FavoriteDone(request, generation, done_key.clone(), favorite, result)
+            },
+        )
+    }
+
+    fn load_outline(&mut self) -> Task<Message> {
+        if !self.browsing() || (self.section == Section::Albums && !self.album_open) {
             return Task::none();
         }
         let Some(app) = self.app().cloned() else {
@@ -846,9 +1074,15 @@ impl Gallery {
         let request = self.outline_request;
         let generation = app.generation();
         let view = self.view.clone();
+        let favorites = self.section == Section::Favorites;
         let (task, handle) = spawn(
             &app,
-            move |app| async move { app.outline(view).await.map(Arc::new).map_err(shown) },
+            move |app| async move {
+                app.outline_filtered(view, favorites)
+                    .await
+                    .map(Arc::new)
+                    .map_err(shown)
+            },
             move |result| Message::OutlineLoaded(request, generation, result),
         )
         .abortable();
@@ -926,7 +1160,7 @@ impl Gallery {
             &self.ratios,
             &self.outline.as_ref().map_or(vec![], |o| o.times.clone()),
             self.grid_width() as u32,
-            ROW_TARGET,
+            self.row_target,
         );
         let scroll = self.restore(anchor);
         Task::batch([scroll, self.request_visible()])
@@ -958,7 +1192,7 @@ impl Gallery {
             return Task::none();
         };
         let anchor = self.layout.anchor(self.scroll_top);
-        self.layout = Layout::plan(&self.ratios, &outline.times, width as u32, ROW_TARGET);
+        self.layout = Layout::plan(&self.ratios, &outline.times, width as u32, self.row_target);
         let scroll = self.restore(anchor);
         Task::batch([scroll, self.request_visible()])
     }
@@ -1089,7 +1323,7 @@ impl Gallery {
     }
 
     fn open(&mut self, index: usize) -> Task<Message> {
-        if !self.browsing() {
+        if (self.section == Section::Albums && !self.album_open) || !self.browsing() {
             return Task::none();
         }
         let Some(app) = self.app().cloned() else {
@@ -1178,18 +1412,35 @@ impl Gallery {
                     self.update(Message::RetryViewer)
                 }
                 Key::Named(Named::F5) => self.update(Message::RetryViewer),
+                Key::Character(value) if value.eq_ignore_ascii_case("f") => {
+                    self.update(Message::ToggleFavorite)
+                }
                 _ => Task::none(),
             };
         }
         if self.browsing() && key == Key::Named(Named::F5) {
             return self.update(Message::Sync);
         }
+        if self.browsing() {
+            match &key {
+                Key::Named(Named::Escape) if self.album_open => {
+                    return self.update(Message::Navigate(Section::Albums));
+                }
+                Key::Character(value) if value == "+" || value == "=" => {
+                    return self.update(Message::GridSize(self.row_target + 20));
+                }
+                Key::Character(value) if value == "-" => {
+                    return self.update(Message::GridSize(self.row_target.saturating_sub(20)));
+                }
+                _ => {}
+            }
+        }
         let count = self.ratios.len();
         if count == 0 || !self.browsing() {
             return Task::none();
         }
         let focus = self.focus.unwrap_or(0).min(count - 1);
-        let page_rows = (self.viewport_height / ROW_TARGET as f32).max(1.0) as i32;
+        let page_rows = (self.viewport_height / self.row_target as f32).max(1.0) as i32;
         let next = match key {
             Key::Named(Named::Enter | Named::Space) => return self.update(Message::Open(focus)),
             Key::Named(Named::Tab) => {
@@ -1223,6 +1474,22 @@ impl Gallery {
 
     /// Drop everything shown of the library.
     fn forget_library(&mut self) {
+        self.albums.clear();
+        self.albums_request += 1;
+        self.albums_loading = false;
+        self.favorite_request += 1;
+        self.favorite_busy = false;
+        self.section = Section::Photos;
+        self.album_open = false;
+        self.view = if self.demo() {
+            View::Source("demo".into())
+        } else {
+            View::Photos
+        };
+        self.clear_media();
+    }
+
+    fn clear_media(&mut self) {
         self.outline_request += 1;
         self.library_request += 1;
         self.outline_work = None;
@@ -1506,32 +1773,24 @@ impl Gallery {
     }
 
     fn sidebar(&self) -> Element<'_, Message> {
-        let count = self.ratios.len();
         let brand = row![
             design::logo(36.0),
             text("Gallery").font(design::MEDIUM).size(22)
         ]
         .spacing(10)
         .align_y(Alignment::Center);
-        let selected = container(
-            row![
-                design::icon(Icon::Photos, 19.0),
-                text("All photos").font(design::MEDIUM).size(14),
-                Space::new().width(Length::Fill),
-                text(compact_count(count)).size(12),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        )
-        .padding([12, 14])
-        .width(Length::Fill)
-        .style(design::selected);
+        let navigation = column![
+            self.navigation(Section::Photos, Icon::Photos, "All photos"),
+            self.navigation(Section::Favorites, Icon::Heart, "Favorites"),
+            self.navigation(Section::Albums, Icon::Albums, "Albums"),
+        ]
+        .spacing(6);
         let mut side = column![
             container(brand).padding([12, 8]),
             Space::new().height(28),
             container(text("Library").size(12).style(design::muted)).padding([0, 14]),
             Space::new().height(8),
-            selected,
+            navigation,
             Space::new().height(Length::Fill),
         ]
         .width(SIDEBAR)
@@ -1588,6 +1847,51 @@ impl Gallery {
         container(side).style(design::sidebar).into()
     }
 
+    fn navigation<'a>(&self, section: Section, icon: Icon, label: &'a str) -> Element<'a, Message> {
+        button(
+            row![
+                design::icon(icon, 19.0),
+                text(label).font(design::MEDIUM).size(14)
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([12, 14])
+        .on_press(Message::Navigate(section))
+        .style(if self.section == section {
+            design::navigation
+        } else {
+            button::text
+        })
+        .into()
+    }
+
+    fn section_title(&self) -> &str {
+        if self.album_open {
+            let id = match &self.view {
+                View::PhotoAlbum(id) | View::Source(id) => Some(id.as_str()),
+                _ => None,
+            };
+            if let Some(album) = self
+                .albums
+                .iter()
+                .find(|a| Some(a.source.id.as_str()) == id)
+            {
+                return album
+                    .settings
+                    .title
+                    .as_deref()
+                    .unwrap_or(&album.source.label);
+            }
+        }
+        match self.section {
+            Section::Photos => "Photos",
+            Section::Favorites => "Favorites",
+            Section::Albums => "Albums",
+        }
+    }
+
     fn toolbar(&self) -> Element<'_, Message> {
         let status = if self.sync.running {
             if self.demo() {
@@ -1595,11 +1899,15 @@ impl Gallery {
             } else {
                 format!("Syncing your library… {} indexed", self.sync.indexed)
             }
+        } else if self.section == Section::Albums && !self.album_open {
+            count_label(self.albums.len(), "album", "albums")
         } else {
-            format!("{} items", formatted_count(self.ratios.len()))
+            count_label(self.ratios.len(), "item", "items")
         };
         let title = column![
-            text("Photos").font(design::MEDIUM).size(30),
+            text(self.section_title())
+                .font(design::MEDIUM)
+                .size(if self.window.width < 760.0 { 22 } else { 30 }),
             text(status).size(13).style(design::muted),
         ]
         .spacing(4);
@@ -1619,7 +1927,39 @@ impl Gallery {
         .padding([10, 14])
         .on_press_maybe((!self.sync.running).then_some(Message::Sync))
         .style(design::secondary);
-        let mut bar = row![title, Space::new().width(Length::Fill), refresh]
+        let mut controls = row![].spacing(12).align_y(Alignment::Center);
+        if self.album_open {
+            controls = controls.push(
+                button(
+                    row![design::icon(Icon::Back, 16.0), text("Albums").size(13)]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                )
+                .padding([10, 12])
+                .on_press(Message::Navigate(Section::Albums))
+                .style(design::secondary),
+            );
+        } else if self.window.width < 760.0 {
+            controls = controls.push(
+                pick_list(
+                    [Section::Photos, Section::Favorites, Section::Albums],
+                    Some(self.section),
+                    Message::Navigate,
+                )
+                .text_size(13)
+                .padding(8),
+            );
+        }
+        if self.window.width >= 950.0 && !(self.section == Section::Albums && !self.album_open) {
+            controls = controls
+                .push(text("Size").size(12).style(design::muted))
+                .push(
+                    slider(100..=320, self.row_target, Message::GridSize)
+                        .step(20u32)
+                        .width(90),
+                );
+        }
+        let mut bar = row![container(title).width(Length::Fill), controls, refresh]
             .spacing(12)
             .align_y(Alignment::Center)
             .padding([20, GUTTER as u16])
@@ -1635,29 +1975,99 @@ impl Gallery {
         bar.into()
     }
 
-    fn content(&self) -> Element<'_, Message> {
-        if self.outline.as_ref().is_none_or(|o| o.is_empty()) {
-            let message = if self.sync.running {
-                "Your photos are on their way…"
-            } else {
-                "No photos yet."
-            };
+    fn albums_view(&self) -> Element<'_, Message> {
+        if self.albums.is_empty() {
             return center(
                 column![
-                    design::icon(Icon::Photos, 40.0),
-                    text(message).font(design::MEDIUM).size(22),
-                    text(if self.sync.running {
-                        "You can browse as soon as the first photos arrive."
+                    design::icon(Icon::Albums, 40.0),
+                    text(if self.albums_loading {
+                        "Loading your albums…"
                     } else {
-                        "Refresh to look for photos in your Proton library."
+                        "No albums yet"
                     })
-                    .size(14)
-                    .style(design::muted),
+                    .size(22)
+                    .font(design::MEDIUM),
+                    text("Your Proton Photos albums appear after refreshing the library.")
+                        .size(14)
+                        .style(design::muted),
                 ]
                 .spacing(16)
                 .align_x(Alignment::Center),
             )
             .into();
+        }
+        let mut list = column![].spacing(10).width(Length::Fill);
+        for album in &self.albums {
+            let title = album
+                .settings
+                .title
+                .as_deref()
+                .unwrap_or(&album.source.label);
+            list = list.push(
+                button(
+                    row![
+                        container(design::icon(Icon::Albums, 28.0))
+                            .padding(16)
+                            .style(design::soft),
+                        column![
+                            text(title).font(design::MEDIUM).size(17),
+                            text(count_label(album.direct_items as usize, "item", "items"))
+                                .size(13)
+                                .style(design::muted)
+                        ]
+                        .spacing(6)
+                        .width(Length::Fill),
+                        design::icon(Icon::Next, 20.0),
+                    ]
+                    .spacing(18)
+                    .align_y(Alignment::Center),
+                )
+                .padding(12)
+                .width(Length::Fill)
+                .on_press(Message::OpenAlbum(album.source.id.to_string()))
+                .style(design::secondary),
+            );
+        }
+        scrollable(container(list).padding([0, GUTTER as u16]))
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn content(&self) -> Element<'_, Message> {
+        if self.section == Section::Albums && !self.album_open {
+            return self.albums_view();
+        }
+        if self.outline.as_ref().is_none_or(|o| o.is_empty()) {
+            let (message, hint) = if self.sync.running {
+                (
+                    "Your photos are on their way…",
+                    "You can browse as soon as the first photos arrive.",
+                )
+            } else if self.outline_work.is_some() {
+                ("Loading photos…", "")
+            } else if self.album_open {
+                ("This album is empty", "")
+            } else if self.section == Section::Favorites {
+                (
+                    "No favorites yet",
+                    "Open a photo and choose Favorite to find it here.",
+                )
+            } else {
+                (
+                    "No photos yet",
+                    "Refresh to look for photos in your Proton library.",
+                )
+            };
+            let mut empty = column![
+                design::icon(Icon::Photos, 40.0),
+                text(message).font(design::MEDIUM).size(22),
+            ]
+            .spacing(16)
+            .align_x(Alignment::Center);
+            if !hint.is_empty() {
+                empty = empty.push(text(hint).size(14).style(design::muted));
+            }
+            return center(empty).into();
         }
         let rows = self.layout.visible(self.scroll_top, self.viewport_height);
         let mut grid = column![].width(Length::Fill);
@@ -1784,7 +2194,7 @@ impl Gallery {
                     design::icon(Icon::Back, 18.0).style(|_, _| iced::widget::svg::Style {
                         color: Some(Color::WHITE)
                     }),
-                    text("Photos").size(13)
+                    text(self.section_title()).size(13)
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -1849,9 +2259,31 @@ impl Gallery {
                 .into(),
         )])
         .height(Length::Fill);
+        let favorite = viewer.item.as_ref().is_some_and(|item| item.favorite);
+        let available = !self.favorite_busy
+            && !viewer.loading
+            && viewer.item.as_ref().is_some_and(|item| item.in_proton);
+        let metadata = row![
+            container(text(name).size(14).font(design::MEDIUM)).width(Length::Fill),
+            button(
+                text(if self.favorite_busy {
+                    "Saving…"
+                } else if favorite {
+                    "Unfavorite"
+                } else {
+                    "Favorite"
+                })
+                .size(13)
+            )
+            .on_press_maybe(available.then_some(Message::ToggleFavorite))
+            .style(viewer_button),
+        ]
+        .align_y(Alignment::Center)
+        .padding([0, 28])
+        .spacing(12);
         let mut page = column![
             bar,
-            container(text(name).size(14).font(design::MEDIUM)).padding([0, 28]),
+            metadata,
             container(body)
                 .padding([16, 24])
                 .width(Length::Fill)
@@ -1895,6 +2327,11 @@ impl Gallery {
     }
 }
 
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    let label = if count == 1 { singular } else { plural };
+    format!("{} {label}", formatted_count(count))
+}
+
 fn formatted_count(count: usize) -> String {
     let digits = count.to_string();
     digits
@@ -1907,14 +2344,6 @@ fn formatted_count(count: usize) -> String {
             out.push(ch);
             out
         })
-}
-
-fn compact_count(count: usize) -> String {
-    if count >= 10_000 {
-        format!("{}k", count / 1000)
-    } else {
-        formatted_count(count)
-    }
 }
 
 fn viewer_button(theme: &Theme, status: button::Status) -> button::Style {

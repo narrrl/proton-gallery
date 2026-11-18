@@ -15,6 +15,7 @@
 /packaging/pkg/
 /packaging/*.pkg.tar.*
 /packaging/*.log
+/packaging/*.log.*
 /packaging/logpipe.*
 *.p12
 *.jks
@@ -24,3 +25,5 @@ __pycache__/
 
 # The global *.jar ignore must not drop the Gradle wrapper.
 !/android/gradle/wrapper/gradle-wrapper.jar
+
+/dist/

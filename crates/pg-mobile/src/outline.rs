@@ -75,73 +75,23 @@ impl GalleryEngine {
         asset_keys: Vec<String>,
         favorite: bool,
     ) -> Result<FavoriteOutcome, GalleryError> {
-        if asset_keys.len() > 5_000 {
+        if asset_keys.len() > pg_app::favorites::MAX_FAVORITE_ITEMS {
             return Err(pg_core::Error::Invalid("too many items to change at once".into()).into());
         }
-        self.runtime.block_on(async {
-            let account = self.auth.account().await?;
-            let photos_volume = self
-                .catalog
-                .account_sources(SourceKind::Photos, account.id.clone())
-                .await?
-                .first()
-                .map(|s| s.volume.clone());
-            let mut keys = Vec::with_capacity(asset_keys.len());
-            let mut failed = 0;
-            for key in &asset_keys {
-                let key: AssetKey =
-                    serde_json::from_str(key).map_err(|_| GalleryError::Operation {
-                        detail: "Invalid photo identity".into(),
-                    })?;
-                if key.account != account.id {
-                    return Err(pg_core::Error::NotFound.into());
-                }
-                if Some(&key.volume) == photos_volume.as_ref() {
-                    keys.push(key);
-                } else {
-                    failed += 1;
-                }
-            }
-            let photos =
-                proton_drive_rs::ProtonPhotosClient::from_drive_client(account.drive.clone());
-            let tag = vec![proton_drive_rs::PhotoTag::Favorite];
-            let work = async {
-                let mut changed = Vec::new();
-                for batch in keys.chunks(50) {
-                    let updates: Vec<_> = batch
-                        .iter()
-                        .map(|key| proton_drive_rs::PhotoTagsUpdate {
-                            node_uid: pg_drive::node_uid(key),
-                            tags_to_add: if favorite { tag.clone() } else { vec![] },
-                            tags_to_remove: if favorite { vec![] } else { tag.clone() },
-                        })
-                        .collect();
-                    let outcomes = photos.update_photos(&updates).await.map_err(|e| {
-                        tracing::warn!("favorite failed: {}", pg_drive::auth::cause_chain(&e));
-                        GalleryError::Operation {
-                            detail: "Couldn’t change the favorites. Check your connection and try again.".into(),
-                        }
-                    })?;
-                    for (key, update) in batch.iter().zip(&updates) {
-                        match outcomes.iter().find(|(uid, _)| *uid == update.node_uid) {
-                            Some((_, Ok(()))) => changed.push(key.clone()),
-                            Some((_, Err(e))) => {
-                                tracing::warn!("favorite of one photo failed: {}", pg_drive::auth::cause_chain(e));
-                                failed += 1;
-                            }
-                            None => failed += 1,
-                        }
-                    }
-                }
-                Ok::<_, GalleryError>(changed)
-            };
-            let changed = tokio::select! { biased;
-                _ = account.cancel.cancelled() => return Err(pg_core::Error::Cancelled.into()),
-                result = work => result?,
-            };
-            let count = changed.len() as u64;
-            self.catalog.set_favorite(changed, favorite).await?;
-            Ok(FavoriteOutcome { changed: count, failed })
+        let keys = asset_keys
+            .iter()
+            .map(|key| {
+                serde_json::from_str(key).map_err(|_| GalleryError::Operation {
+                    detail: "Invalid photo identity".into(),
+                })
+            })
+            .collect::<Result<Vec<AssetKey>, _>>()?;
+        let outcome = self
+            .runtime
+            .block_on(self.app.set_favorite(keys, favorite))?;
+        Ok(FavoriteOutcome {
+            changed: outcome.changed,
+            failed: outcome.failed,
         })
     }
 }

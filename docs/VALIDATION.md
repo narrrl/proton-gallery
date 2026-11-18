@@ -1,5 +1,26 @@
 # Validation
 
+## Desktop collections and launcher packaging — 2026-11-18
+
+- An X11 fixture run opened the Albums list and a 12-item album, returned with
+  Escape, removed the seeded favorite in the viewer and added it back from Photos.
+  The run checked the catalog after each change, verified density changes, and
+  captured the compact section menu at 640×480.
+- A second X11 run browsed 100,000 fixture items at 125% scaling, including viewer
+  navigation, zoom, pan, unavailable-media retry and window resizing. It exited
+  normally and preserved the supplied data directory. Peak RSS was 288.4 MiB,
+  widget construction p95 was 0.757 ms, and outstanding page and thumbnail work
+  peaked at one and twelve respectively. Other builds ran during the smoke test.
+- Arch's `makepkg -f` produced the `0.1.0-2` package. The extracted launcher
+  passed `desktop-file-validate` and its icon path resolved to the bundled PNG.
+  Quickshell rendered that PNG directly, and the extracted executable passed
+  the album, favorites and density smoke test.
+- Built the x86_64 `.deb` and `.rpm` on Ubuntu 24.04 with a glibc 2.39
+  floor. Package-manager installs passed in Ubuntu 24.04, Debian 13 and
+  Fedora 44 containers. Each installed launcher pointed to its bundled PNG.
+- A catalog test checks that Favorites follows tag changes and that the Photos
+  timeline omits favorites in hidden albums. Desktop feature tests used fixtures.
+
 ## Arch packaging, desktop design and Android CI follow-up — 2026-11-18
 
 - Added the checkout-based `packaging/PKGBUILD`, menu launcher and existing SVG/PNG

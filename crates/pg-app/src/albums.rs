@@ -1,6 +1,5 @@
 //! Proton Photos albums, brought in line with Proton after each Photos sync.
-//! Changing albums (create, rename, add, remove, delete) stays in the
-//! frontend adapters for now.
+//! Album browsing is shared; create/rename/membership editing remains in the mobile adapter.
 use super::*;
 use pg_core::model::{AccountId, Asset, AssetKey, NodeId, SourceId, SourceSpec, VolumeId};
 use proton_drive_rs::ProtonPhotosClient;
@@ -42,6 +41,21 @@ pub fn album_failure(what: &'static str) -> impl Fn(proton_sdk::error::ProtonErr
 }
 
 impl App {
+    /// Visible albums of the active account; hidden mobile albums stay hidden.
+    pub async fn photo_albums(&self) -> Result<Vec<pg_core::library::Album>> {
+        let generation = self.generation();
+        let _operations = self.operations.read().await;
+        let Some(account) = self.auth.account_id() else {
+            return Ok(vec![]);
+        };
+        let albums = self.catalog.photo_albums(account).await?;
+        self.ensure_current(generation)?;
+        Ok(albums
+            .into_iter()
+            .filter(|album| !album.settings.hidden)
+            .collect())
+    }
+
     /// Bring every album and its photos in line with Proton. Best effort:
     /// a failure leaves the albums as they were.
     pub(crate) async fn sync_albums(&self, photos: &ProtonPhotosClient, account: &AccountId) {

@@ -71,6 +71,11 @@ fn main() -> iced::Result {
     let _demo_dir = prepare_demo(&mut options).expect("create demo directory");
     let window = iced::window::Settings {
         size: (1280.0, 820.0).into(),
+        icon: iced::window::icon::from_file_data(
+            include_bytes!("../../../images/icon-512.png"),
+            None,
+        )
+        .ok(),
         #[cfg(target_os = "linux")]
         platform_specific: iced::window::settings::PlatformSpecific {
             application_id: "io.narl.proton-gallery".into(),

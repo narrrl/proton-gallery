@@ -84,3 +84,37 @@ impl MediaProvider for FixtureMedia {
         Err(crate::Error::message("This fixture’s original is missing."))
     }
 }
+
+/// Small deterministic collections for exercising album navigation and favorites.
+pub async fn seed_collections(app: &App) -> Result<()> {
+    use pg_core::model::{AccountId, NodeId, SourceId, SourceSpec, VolumeId};
+    let album_id = SourceId::new("demo-album")?;
+    let account = AccountId::new("synthetic")?;
+    let fresh = app.catalog.photo_albums(account.clone()).await?.is_empty();
+    let page = app
+        .catalog
+        .window(
+            Some(SourceId::new("demo")?),
+            None,
+            false,
+            pg_core::model::PageSize::new(12)?,
+        )
+        .await?;
+    let mut assets = page.items;
+    if let Some(asset) = assets.first_mut().filter(|_| fresh) {
+        asset.favorite = true;
+    }
+    app.catalog
+        .sync_photo_album(
+            SourceSpec {
+                id: album_id,
+                account,
+                volume: VolumeId::new("demo-volume")?,
+                root: NodeId::new("demo-album")?,
+                label: "Weekend photos".into(),
+            },
+            assets,
+        )
+        .await?;
+    Ok(())
+}

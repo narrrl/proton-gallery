@@ -96,17 +96,18 @@ source using the steps below.
 | --- | --- |
 | Android app | Native Compose gallery, connected to Proton Photos and Drive |
 | Rust core and CLI | Local catalog, indexing, and headless diagnostics |
-| Linux and Windows desktop apps | Native Rust/Iced Photos browser in `crates/pg-desktop`; account access, virtualized timeline and still viewer ([instructions and acceptance gaps](docs/DESKTOP.md)) |
+| Linux and Windows desktop apps | Native Rust/Iced Photos browser in `crates/pg-desktop` with account access, a virtualized timeline, albums, favorites and a still-photo viewer ([instructions and acceptance gaps](docs/DESKTOP.md)) |
 
 Run the desktop browser with `cargo run -p pg-desktop --bin proton-gallery --locked`,
 or browse account-free fixtures with `-- --demo 100000`. Android retains its Compose
 interface and UniFFI bridge; both frontends share application workflows in `pg-app`.
 The Compose desktop skeleton is retained while Iced runtime acceptance remains open.
 
-On Arch Linux, build and install the desktop app from this checkout with
+Linux packages install the **Proton Gallery** application-menu entry and
+`proton-gallery` command. Build and install from this checkout on Arch with
 `cd packaging && makepkg -fi` (or `makepkg -sfi` to install missing dependencies).
-This installs a **Proton Gallery** application-menu entry and the `proton-gallery`
-command. See the [Arch packaging guide](packaging/README.md).
+See the [Linux packaging guide](packaging/README.md) for Debian/Ubuntu and Fedora
+installers and local build instructions.
 
 ## Getting started
 

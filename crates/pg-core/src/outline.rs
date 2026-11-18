@@ -34,10 +34,28 @@ impl Catalog {
         photos: Option<SourceId>,
         account: Option<AccountId>,
     ) -> Result<Vec<OutlineEntry>> {
+        self.timeline_outline_filtered(photos, account, false).await
+    }
+
+    pub async fn timeline_favorites_outline(
+        &self,
+        photos: Option<SourceId>,
+        account: Option<AccountId>,
+    ) -> Result<Vec<OutlineEntry>> {
+        self.timeline_outline_filtered(photos, account, true).await
+    }
+
+    async fn timeline_outline_filtered(
+        &self,
+        photos: Option<SourceId>,
+        account: Option<AccountId>,
+        favorites: bool,
+    ) -> Result<Vec<OutlineEntry>> {
+        let filter = favorite_filter(favorites);
         let sql = format!(
             "SELECT m.account,m.volume,m.node,m.sort_time,s.width,s.height FROM memberships m
              LEFT JOIN media_shapes s ON (s.account,s.volume,s.node)=(m.account,m.volume,m.node)
-             WHERE {VISIBLE}
+             WHERE ({VISIBLE}) {filter}
              ORDER BY m.sort_time DESC,m.account DESC,m.volume DESC,m.node DESC LIMIT ?3"
         );
         let values = vec![
@@ -54,6 +72,24 @@ impl Catalog {
         source: SourceId,
         order: SortOrder,
     ) -> Result<Vec<OutlineEntry>> {
+        self.source_outline_filtered(source, order, false).await
+    }
+
+    pub async fn source_favorites_outline(
+        &self,
+        source: SourceId,
+        order: SortOrder,
+    ) -> Result<Vec<OutlineEntry>> {
+        self.source_outline_filtered(source, order, true).await
+    }
+
+    async fn source_outline_filtered(
+        &self,
+        source: SourceId,
+        order: SortOrder,
+        favorites: bool,
+    ) -> Result<Vec<OutlineEntry>> {
+        let filter = favorite_filter(favorites);
         let first = if order.by_name() {
             "sort_name"
         } else {
@@ -63,7 +99,7 @@ impl Catalog {
         let sql = format!(
             "SELECT m.account,m.volume,m.node,m.sort_time,s.width,s.height FROM memberships m
              LEFT JOIN media_shapes s ON (s.account,s.volume,s.node)=(m.account,m.volume,m.node)
-             WHERE m.source=?1
+             WHERE m.source=?1 {filter}
              ORDER BY m.{first} {direction},m.account {direction},m.volume {direction},m.node {direction} LIMIT ?2"
         );
         let values = vec![
@@ -71,6 +107,14 @@ impl Catalog {
             ((OUTLINE_MAX + 1) as i64).into(),
         ];
         self.run(move |conn| read(conn, &sql, values)).await
+    }
+}
+
+fn favorite_filter(enabled: bool) -> &'static str {
+    if enabled {
+        "AND EXISTS(SELECT 1 FROM assets a WHERE (a.account,a.volume,a.node)=(m.account,m.volume,m.node) AND json_extract(a.payload,'$.favorite')=1)"
+    } else {
+        ""
     }
 }
 

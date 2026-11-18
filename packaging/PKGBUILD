@@ -5,14 +5,14 @@
 
 pkgname=proton-gallery
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc='Unofficial Proton Photos browser with a native desktop timeline and still-photo viewer'
 arch=('x86_64')
 url='https://github.com/narrrl/proton-gallery'
 license=('MIT')
 depends=('dbus' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11'
          'libx11' 'libxcursor' 'libxi' 'libxrandr' 'wayland' 'libglvnd'
-         'vulkan-icd-loader' 'hicolor-icon-theme' 'xdg-utils')
+         'vulkan-icd-loader' 'hicolor-icon-theme' 'xdg-utils' 'ca-certificates')
 makedepends=('cargo' 'pkgconf')
 optdepends=('gnome-keyring: save sessions using Secret Service'
             'kwallet: save sessions using KDE Secret Service'
@@ -39,23 +39,5 @@ build() {
 }
 
 package() {
-  cd "$_workspace"
-  install -Dm755 target/release/proton-gallery "$pkgdir/usr/bin/proton-gallery"
-  install -Dm644 packaging/io.narl.proton-gallery.desktop \
-    "$pkgdir/usr/share/applications/io.narl.proton-gallery.desktop"
-  install -Dm644 images/logo.svg \
-    "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.narl.proton-gallery.svg"
-  install -Dm644 images/icon-512.png \
-    "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.narl.proton-gallery.png"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-  install -Dm644 third-party/NILS-PUKROPP-MIT.txt \
-    "$pkgdir/usr/share/licenses/$pkgname/NILS-PUKROPP-MIT.txt"
-  install -Dm644 NOTICE.md "$pkgdir/usr/share/doc/$pkgname/NOTICE.md"
-  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-  install -Dm644 docs/DESKTOP.md "$pkgdir/usr/share/doc/$pkgname/docs/DESKTOP.md"
-  install -Dm644 packaging/README.md "$pkgdir/usr/share/doc/$pkgname/packaging/README.md"
-  for preview in light dark; do
-    install -Dm644 "docs/images/desktop-gallery-$preview.png" \
-      "$pkgdir/usr/share/doc/$pkgname/docs/images/desktop-gallery-$preview.png"
-  done
+  bash "$_workspace/packaging/install.sh" "$pkgdir"
 }

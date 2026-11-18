@@ -22,6 +22,7 @@ use std::sync::{
 
 pub mod account;
 pub mod albums;
+pub mod favorites;
 pub mod fixtures;
 pub mod library;
 pub mod media;
