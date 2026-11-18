@@ -7,6 +7,18 @@ it is not the Photos browser. Android keeps Kotlin/Compose and its UniFFI interf
 
 ## Build and run
 
+On Arch Linux, the local package builds this checkout in release mode and installs
+the executable, launcher and icons:
+
+```sh
+cd packaging
+makepkg -fi
+```
+
+Use `makepkg -sfi` if dependencies are missing. Launch **Proton Gallery** from the
+application menu or run `proton-gallery`. See [packaging details](../packaging/README.md)
+for prerequisites and Secret Service setup.
+
 Install Rust (workspace minimum 1.96) and the platform development libraries. On
 Debian/Ubuntu the CI dependencies are `libdbus-1-dev libxkbcommon-dev libwayland-dev
 libudev-dev libegl1-mesa-dev`. A functioning Wayland or X11 display and graphics driver
@@ -53,8 +65,28 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
 - The still viewer uses Proton's preview, falling back to a streamed original when absent.
   Scroll to zoom, drag to pan. Retry reloads an unsuccessful item. Video shows a preview
   and an explicit playback-unavailable message; desktop video is outside this milestone.
-- The default theme follows Iced's system-theme notifications. `PG_SCALE_FACTOR=1.25`
+- The light and dark Gallery palettes follow Iced's system-theme notifications. `PG_SCALE_FACTOR=1.25`
   adds an application scaling override for reproducible layout checks (default 1).
+
+## Desktop presentation
+
+The library uses a quiet navigation rail, a single Photos heading with the item count,
+and a justified timeline with 24-pixel outer margins and six-pixel gutters. Violet marks
+selection and keyboard focus; photos carry the color. Native outline icons and the existing
+Gallery branding are embedded in the executable, with no icon-font dependency. The system
+sans-serif font uses a 12/14/17/22/30-pixel type scale and semibold headings.
+
+Sign-in has labeled fields, consistent rounded controls, and a centered form that scrolls on
+small windows. The still viewer keeps a dark canvas in either system theme, with inset
+images, visible navigation labels, and a compact zoom/pan hint. Sync errors appear below the
+toolbar without replacing the library count. The sidebar hides below 760 logical pixels.
+
+The light and dark library previews below use deterministic fixture media, including
+unavailable thumbnails; they do not show a real account.
+
+![Desktop Photos library in the light theme](images/desktop-gallery-light.png)
+
+![Desktop Photos library in the dark theme](images/desktop-gallery-dark.png)
 
 ## Work and memory bounds
 

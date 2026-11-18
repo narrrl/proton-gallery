@@ -4,6 +4,7 @@
 //! `proton-gallery --demo [COUNT]` browses a synthetic library of COUNT items
 //! (100,000 by default) in a throwaway directory, without an account.
 mod captcha;
+mod design;
 mod gallery;
 mod grid;
 mod metrics;
@@ -68,6 +69,15 @@ fn main() -> iced::Result {
         }
     };
     let _demo_dir = prepare_demo(&mut options).expect("create demo directory");
+    let window = iced::window::Settings {
+        size: (1280.0, 820.0).into(),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "io.narl.proton-gallery".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     iced::application(
         move || Gallery::boot(options.clone()),
         Gallery::update,
@@ -77,7 +87,7 @@ fn main() -> iced::Result {
     .theme(Gallery::theme)
     .subscription(Gallery::subscription)
     .scale_factor(Gallery::scale_factor)
-    .window_size((1280.0, 820.0))
+    .window(window)
     .run()
 }
 

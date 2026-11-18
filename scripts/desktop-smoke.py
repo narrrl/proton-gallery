@@ -143,6 +143,8 @@ def percentile(samples, fraction):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=["x11", "wayland"], required=True)
+    parser.add_argument("--binary", type=Path, default=Path("target/debug/proton-gallery"),
+                        help="Executable to exercise, including an extracted Arch package")
     parser.add_argument("--cycles", type=int, default=3, choices=range(1, 21), help="Repeated browsing/viewer cycles (1–20)")
     parser.add_argument("--check-theme", action="store_true", help="Temporarily toggle and restore the desktop color-scheme preference")
     parser.add_argument("--scale", type=float, default=1.0)
@@ -165,7 +167,7 @@ def main():
         sentinel.write_text("preserve me")
         log = evidence / "app.log"
         with log.open("w") as output:
-            app = sp.Popen(["target/debug/proton-gallery", "--demo", "100000", "--data-dir", data], env=env, stdout=output, stderr=output)
+            app = sp.Popen([str(args.binary.resolve()), "--demo", "100000", "--data-dir", data], env=env, stdout=output, stderr=output)
             def sample():
                 assert app.poll() is None, log.read_text()[-2000:]
                 status = Path(f"/proc/{app.pid}/status").read_text()
@@ -282,7 +284,7 @@ def main():
         contents = log.read_text()
         frames = [int(n) for n in re.findall(r"frame_us=(\d+)", contents)]
         views = [int(n) for n in re.findall(r"view_us=(\d+)", contents)]
-        summary = dict(cycles=args.cycles, outline_ready_seconds=outline_ready_seconds, backend=args.backend, scale=args.scale, evidence=str(evidence),
+        summary = dict(binary=str(args.binary.resolve()), cycles=args.cycles, outline_ready_seconds=outline_ready_seconds, backend=args.backend, scale=args.scale, evidence=str(evidence),
                        rss_peak_kib=max(rss), rss_after_browsing_kib=rss[-1], cycle_rss_kib=cycle_rss,
                        theme_pixels=theme_pixels, explicit_directory_preserved=sentinel.exists(),
                        redraw_interval_us={"samples": len(frames), "p50": percentile(frames, .5), "p95": percentile(frames, .95), "max": max(frames, default=None)},

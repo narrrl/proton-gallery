@@ -11,6 +11,11 @@
 /desktop/.gradle/
 /desktop/.kotlin/
 /desktop/**/build/
+/packaging/src/
+/packaging/pkg/
+/packaging/*.pkg.tar.*
+/packaging/*.log
+/packaging/logpipe.*
 *.p12
 *.jks
 *.keystore

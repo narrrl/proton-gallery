@@ -238,7 +238,10 @@ fun SmartMediaGrid(
                 val item = kept?.let(outline::indexOf) ?: -1
                 if (item >= 0 && (anchor != null || topRow >= 0)) {
                     val row = next.rowOf(item)
-                    if (row >= 0) scroll.scrollToItem(currentLeading + row, offset)
+                    // The rows just changed. Restore the anchor in the next
+                    // measure, after Compose applies that layout; scrollToItem
+                    // forces a remeasure here and can reenter a pending composition.
+                    if (row >= 0) scroll.requestScrollToItem(currentLeading + row, offset)
                 }
                 if (!pinching) anchor = null
             } catch (cancel: CancellationException) { throw cancel }

@@ -103,6 +103,11 @@ or browse account-free fixtures with `-- --demo 100000`. Android retains its Com
 interface and UniFFI bridge; both frontends share application workflows in `pg-app`.
 The Compose desktop skeleton is retained while Iced runtime acceptance remains open.
 
+On Arch Linux, build and install the desktop app from this checkout with
+`cd packaging && makepkg -fi` (or `makepkg -sfi` to install missing dependencies).
+This installs a **Proton Gallery** application-menu entry and the `proton-gallery`
+command. See the [Arch packaging guide](packaging/README.md).
+
 ## Getting started
 
 1. Open **Proton Gallery** and allow access to the phone photos and videos you want to see.

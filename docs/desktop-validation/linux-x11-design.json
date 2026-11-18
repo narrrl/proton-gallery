@@ -1,0 +1,40 @@
+{
+  "cycles": 1,
+  "outline_ready_seconds": 35.704,
+  "backend": "x11",
+  "scale": 1.0,
+  "evidence": "/tmp/pg-x11-1.0-rx9cfaq6",
+  "rss_peak_kib": 321644,
+  "rss_after_browsing_kib": 321644,
+  "cycle_rss_kib": [
+    291324
+  ],
+  "theme_pixels": {
+    "prefer-light": [
+      246,
+      246,
+      249
+    ],
+    "prefer-dark": [
+      36,
+      36,
+      44
+    ]
+  },
+  "explicit_directory_preserved": true,
+  "redraw_interval_us": {
+    "samples": 1708,
+    "p50": 23431,
+    "p95": 44485,
+    "max": 539300
+  },
+  "widget_construction_us": {
+    "samples": 1736,
+    "p50": 64,
+    "p95": 362,
+    "max": 9237
+  },
+  "page_work_peak": 3,
+  "thumbnail_work_peak": 12,
+  "exit_code": 0
+}

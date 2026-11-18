@@ -1,5 +1,45 @@
 # Validation
 
+## Arch packaging, desktop design and Android CI follow-up — 2026-11-18
+
+- Added the checkout-based `packaging/PKGBUILD`, menu launcher and existing SVG/PNG
+  branding. `bash -n`, `makepkg --printsrcinfo`, `desktop-file-validate`, installed dependency
+  checks and a complete optimized `makepkg -f --log` build passed on Arch x86_64.
+  The final package also built after the desktop design changes. Archive inspection verified
+  all twelve installed files, launcher validity, executable permissions and shared-library
+  linkage. Installation through pacman has not been exercised.
+- Workspace tests passed: **108 passed, two live-account diagnostics intentionally ignored**.
+  Workspace/all-target/all-feature Clippy with warnings denied and formatting passed.
+- The redesigned development executable passed an X11/Xvfb smoke run with 100,000 fixture
+  items: navigation, still viewing, zoom/pan, unavailable-media retry, refresh, live light/dark
+  changes, 640×480 resizing and normal shutdown. The explicit data directory was preserved.
+  Outline preparation took 35.704 s including fixture indexing; peak RSS was 314.1 MiB;
+  widget construction p95 was 0.362 ms, and outstanding page/thumbnail peaks were 3/12.
+  Redraw intervals p50/p95 were 23.431/44.485 ms under concurrent build load; this is
+  smoke evidence, not release performance acceptance. Full-size and small sign-in screens
+  were also opened without credentials and visually inspected.
+- The latest failed GitHub Android run (`44333891068`) failed resolving the Kotlin 2.2.21
+  plugin. Repository routing now resolves Kotlin through Maven Central and limits Google's
+  repository to Android/Google/AndroidX groups. **An empty Gradle user home using the exact
+  pinned Gradle 8.14.5 wrapper and JDK 21 passed `help`**, downloading the Kotlin and Compose
+  plugin markers and implementations from Maven Central.
+- A full local Android run exposed a pinch-layout composition error in `SmartMediaGrid`.
+  Replacing immediate `scrollToItem` with `requestScrollToItem` restores the anchor at the
+  next measure after the new rows are applied. The existing pinch regression passed after
+  this fix. The full `testDebugUnitTest lintDebug assembleDebug` invocation then passed:
+  **36 tests, zero failures/errors/skips**, lint and debug APK assembly.
+
+The executable extracted from `proton-gallery-0.1.0-1-x86_64.pkg.tar.zst` then passed
+that same smoke flow at **125% scaling**, including live themes and the 640×480 physical
+window. It exited normally and preserved the explicit data directory. Fixture outline
+preparation took 19.200 s; peak RSS was 300.5 MiB; widget construction p95 was 0.197 ms;
+page/thumbnail peaks were 2/12; redraw intervals p50/p95 were 28.434/47.123 ms.
+Sign-in was also opened from the extracted package at normal and small sizes, without
+credentials. Final package screenshots are `docs/images/desktop-gallery-*`; the development
+and package summaries are `linux-x11-design.json` and `linux-x11-arch-package.json` in
+`docs/desktop-validation/`. This follow-up adds no Windows-runtime, screen-reader or
+real-account acceptance claim. The earlier measured platform gaps below still apply.
+
 ## Iced desktop completion — 2026-11-18
 
 The desktop implementation covers account access, Photos browsing and still-photo viewing.

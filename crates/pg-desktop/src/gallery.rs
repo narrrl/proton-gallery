@@ -4,6 +4,7 @@
 //! forms) lives here; the library, account and media come from `pg-app`.
 //! Every asynchronous result carries the generation it started under and
 //! the request it answers, and is dropped when either is out of date.
+use crate::design::{self, Icon};
 use crate::grid::{self, Layout, RowKind};
 use crate::thumbs::{self, Decoded};
 use crate::vault;
@@ -33,8 +34,9 @@ const ORIGINAL_LIMIT: u64 = 32 * 1024 * 1024;
 const THUMBS_IN_FLIGHT: usize = 12;
 /// Target row height of the timeline.
 const ROW_TARGET: u32 = 200;
-const SIDEBAR: f32 = 220.0;
-const TOOLBAR: f32 = 56.0;
+const SIDEBAR: f32 = 224.0;
+const TOOLBAR: f32 = 104.0;
+const GUTTER: f32 = 24.0;
 /// Room for the vertical scrollbar beside the grid.
 const SCROLLBAR: f32 = 14.0;
 
@@ -86,6 +88,7 @@ struct Viewer {
 
 pub struct Gallery {
     options: Options,
+    mode: iced::theme::Mode,
     phase: Phase,
     keyring: bool,
     account: AccountState,
@@ -127,6 +130,7 @@ pub struct Gallery {
 pub enum Message {
     Started(Result<Started, String>),
     RetryStart,
+    SystemTheme(iced::theme::Mode),
     Frame(std::time::Instant),
     Restore,
     Verification(String),
@@ -207,6 +211,7 @@ impl Gallery {
         let demo = options.demo.is_some();
         let gallery = Self {
             options,
+            mode: iced::theme::Mode::Light,
             phase: Phase::Starting,
             keyring: true,
             account: AccountState {
@@ -278,7 +283,10 @@ impl Gallery {
         let size = window::latest()
             .and_then(window::size)
             .map(Message::WindowSize);
-        (gallery, Task::batch([start, size]))
+        (
+            gallery,
+            Task::batch([start, size, iced::system::theme().map(Message::SystemTheme)]),
+        )
     }
 
     pub fn scale_factor(&self) -> f32 {
@@ -300,12 +308,12 @@ impl Gallery {
     }
 
     pub fn theme(&self) -> Option<Theme> {
-        // Follow the system's light or dark setting.
-        None
+        Some(design::theme(self.mode))
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
+            iced::system::theme_changes().map(Message::SystemTheme),
             window::resize_events().map(|(_, size)| Message::WindowSize(size)),
             keyboard::listen().map(Message::Key),
         ];
@@ -340,6 +348,10 @@ impl Gallery {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::SystemTheme(mode) => {
+                self.mode = mode;
+                Task::none()
+            }
             Message::Frame(now) => {
                 if let Some(last) = self.last_frame.replace(now) {
                     eprintln!(
@@ -686,8 +698,8 @@ impl Gallery {
             Message::Scrolled(viewport) => {
                 self.scroll_top = viewport.absolute_offset().y;
                 self.viewport_height = viewport.bounds().height;
-                // The content is padded by one gap on each side.
-                let width = viewport.bounds().width - 2.0 * grid::GAP as f32;
+                // Subtract the fixed outer gutter from the measured viewport.
+                let width = viewport.bounds().width - 2.0 * GUTTER;
                 if width > 0.0 && self.measured_width != Some(width) {
                     self.measured_width = Some(width);
                     if (width - self.layout.width as f32).abs() >= 1.0 {
@@ -932,7 +944,7 @@ impl Gallery {
                         SIDEBAR
                     })
                     - SCROLLBAR
-                    - 2.0 * grid::GAP as f32,
+                    - 2.0 * GUTTER,
             )
             .max(200.0)
     }
@@ -1249,8 +1261,21 @@ impl Gallery {
             Phase::Ready(_) if !self.browsing() => self.sign_in_view(),
             Phase::Ready(_) => match &self.viewer {
                 Some(viewer) => self.viewer_view(viewer),
-                None if self.window.width < 760.0 => column![self.toolbar(), self.content()].into(),
-                None => row![self.sidebar(), column![self.toolbar(), self.content()]].into(),
+                None => {
+                    let mut page = column![self.toolbar()];
+                    if let Some(error) = &self.sync.error {
+                        page = page.push(
+                            container(text(error.as_str()).size(13).style(text::danger))
+                                .padding([8, GUTTER as u16]),
+                        );
+                    }
+                    page = page.push(self.content());
+                    if self.window.width < 760.0 {
+                        page.into()
+                    } else {
+                        row![self.sidebar(), page].into()
+                    }
+                }
             },
         }
     }
@@ -1268,7 +1293,10 @@ impl Gallery {
                                 .as_deref()
                                 .unwrap_or("The system keyring or cache could not be cleared.")
                         ),
-                        button("Retry cleanup").on_press_maybe((!busy).then_some(Message::SignOut)),
+                        button("Retry cleanup")
+                            .on_press_maybe((!busy).then_some(Message::SignOut))
+                            .padding([10, 14])
+                            .style(design::primary),
                     ]
                     .spacing(14),
                 )
@@ -1276,10 +1304,16 @@ impl Gallery {
             )
             .into();
         }
-        let mut card = column![text("Sign in to Proton").size(24)]
-            .spacing(14)
-            .width(Length::Fill)
-            .max_width(360);
+        let mut card = column![
+            text("Welcome back").font(design::MEDIUM).size(30),
+            text("Sign in to browse your Proton Photos.")
+                .size(14)
+                .style(design::muted),
+            Space::new().height(8),
+        ]
+        .spacing(14)
+        .width(Length::Fill)
+        .max_width(368);
         match self.account.stage {
             SignInStage::SecondFactor => {
                 card = card.push(text("Enter the code from your authenticator app."));
@@ -1287,14 +1321,20 @@ impl Gallery {
                     text_input("Two-factor code", &self.form.code)
                         .on_input(Message::Code)
                         .on_submit_maybe((!busy).then_some(Message::SubmitCode))
-                        .padding(10),
+                        .padding(14)
+                        .size(14)
+                        .style(design::input),
                 );
                 card = card.push(row![
                     button("Cancel")
                         .on_press(Message::CancelSignIn)
-                        .style(button::secondary),
+                        .padding([10, 14])
+                        .style(design::secondary),
                     Space::new().width(Length::Fill),
-                    button("Continue").on_press_maybe((!busy).then_some(Message::SubmitCode)),
+                    button("Continue")
+                        .on_press_maybe((!busy).then_some(Message::SubmitCode))
+                        .padding([10, 14])
+                        .style(design::primary),
                 ]);
             }
             SignInStage::MailboxPassword => {
@@ -1304,35 +1344,53 @@ impl Gallery {
                         .secure(true)
                         .on_input(Message::Mailbox)
                         .on_submit_maybe((!busy).then_some(Message::SubmitMailbox))
-                        .padding(10),
+                        .padding(14)
+                        .size(14)
+                        .style(design::input),
                 );
                 card = card.push(row![
                     button("Cancel")
                         .on_press(Message::CancelSignIn)
-                        .style(button::secondary),
+                        .padding([10, 14])
+                        .style(design::secondary),
                     Space::new().width(Length::Fill),
-                    button("Continue").on_press_maybe((!busy).then_some(Message::SubmitMailbox)),
+                    button("Continue")
+                        .on_press_maybe((!busy).then_some(Message::SubmitMailbox))
+                        .padding([10, 14])
+                        .style(design::primary),
                 ]);
             }
             SignInStage::Verification => {
                 card = card.push(text("Open the verification page, complete the CAPTCHA, then copy the displayed token and paste it here."));
                 if let Some(url) = &self.account.verification_url {
                     card = card.push(text(url.as_str()).size(12));
-                    card = card
-                        .push(button("Open verification page").on_press(Message::OpenVerification));
                     card = card.push(
-                        button("Copy verification page URL").on_press(Message::CopyVerificationUrl),
+                        button("Open verification page")
+                            .on_press(Message::OpenVerification)
+                            .padding([10, 14])
+                            .style(design::secondary),
+                    );
+                    card = card.push(
+                        button("Copy verification page URL")
+                            .on_press(Message::CopyVerificationUrl)
+                            .padding([10, 14])
+                            .style(design::secondary),
                     );
                 }
                 card = card.push(
                     text_input("Verification token", &self.form.verification)
                         .on_input(Message::Verification)
                         .on_submit_maybe((!busy).then_some(Message::SubmitVerification))
-                        .padding(10),
+                        .padding(14)
+                        .size(14)
+                        .style(design::input),
                 );
                 card = card.push(
                     row![
-                        button("Cancel").on_press(Message::CancelSignIn),
+                        button("Cancel")
+                            .on_press(Message::CancelSignIn)
+                            .padding([10, 14])
+                            .style(design::secondary),
                         button("Continue").on_press_maybe(
                             (!busy && !self.form.verification.trim().is_empty())
                                 .then_some(Message::SubmitVerification)
@@ -1361,115 +1419,218 @@ impl Gallery {
                     && (self.keyring || self.form.temporary)
                     && !self.form.username.trim().is_empty()
                     && !self.form.password.is_empty();
+                card = card.push(text("Email or username").font(design::MEDIUM).size(13));
                 card = card.push(
                     text_input("Email or username", &self.form.username)
                         .on_input(Message::Username)
-                        .padding(10),
+                        .padding(14)
+                        .size(14)
+                        .style(design::input),
                 );
+                card = card.push(text("Password").font(design::MEDIUM).size(13));
                 card = card.push(
                     text_input("Password", &self.form.password)
                         .secure(true)
                         .on_input(Message::Password)
                         .on_submit_maybe(ready.then_some(Message::SignIn))
-                        .padding(10),
+                        .padding(14)
+                        .size(14)
+                        .style(design::input),
                 );
                 card = card.push(
-                    button(if busy { "Signing in…" } else { "Sign in" })
-                        .on_press_maybe(ready.then_some(Message::SignIn)),
+                    button(
+                        text(if busy { "Signing in…" } else { "Sign in" })
+                            .font(design::MEDIUM)
+                            .size(14)
+                            .width(Length::Fill)
+                            .align_x(Alignment::Center),
+                    )
+                    .on_press_maybe(ready.then_some(Message::SignIn))
+                    .width(Length::Fill)
+                    .padding(14)
+                    .style(design::primary),
                 );
             }
         }
         if busy && self.account.stage == SignInStage::SignedOut {
-            card = card.push(button("Cancel sign-in").on_press(Message::CancelSignIn));
+            card = card.push(
+                button("Cancel sign-in")
+                    .on_press(Message::CancelSignIn)
+                    .padding([10, 14])
+                    .style(design::secondary),
+            );
         }
         if let Some(error) = &self.form.error {
             card = card.push(text(error.as_str()).style(text::danger));
             if self.account.stage == SignInStage::SignedOut {
                 card = card.push(
                     button("Retry saved sign-in")
-                        .on_press_maybe((!busy).then_some(Message::Restore)),
+                        .on_press_maybe((!busy).then_some(Message::Restore))
+                        .padding([10, 14])
+                        .style(design::primary),
                 );
             }
         }
-        center(scrollable(
-            container(card).padding(24).style(container::rounded_box),
-        ))
+        let brand = row![
+            design::logo(40.0),
+            text("Proton Gallery").font(design::MEDIUM).size(21)
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
+        let page = column![
+            brand,
+            Space::new().height(24),
+            container(card)
+                .padding(if self.window.width < 760.0 { 24 } else { 36 })
+                .style(design::panel),
+            container(
+                row![
+                    design::icon(Icon::Shield, 16.0),
+                    text("Your photos stay yours.")
+                        .size(12)
+                        .style(design::muted)
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+            )
+            .padding(20),
+        ]
+        .align_x(Alignment::Center)
+        .max_width(480)
+        .width(Length::Fill);
+        container(center(scrollable(
+            center(page).padding(24).height(Length::Fill),
+        )))
+        .style(design::sidebar)
         .into()
     }
 
     fn sidebar(&self) -> Element<'_, Message> {
-        let label = if self.demo() {
-            "Demo library"
-        } else {
-            "Photos"
-        };
-        let mut side = column![
-            text("Proton Gallery").size(18),
-            Space::new().height(12),
-            button(text(label))
-                .width(Length::Fill)
-                .style(button::primary),
+        let count = self.ratios.len();
+        let brand = row![
+            design::logo(36.0),
+            text("Gallery").font(design::MEDIUM).size(22)
         ]
-        .spacing(6)
-        .padding(14)
+        .spacing(10)
+        .align_y(Alignment::Center);
+        let selected = container(
+            row![
+                design::icon(Icon::Photos, 19.0),
+                text("All photos").font(design::MEDIUM).size(14),
+                Space::new().width(Length::Fill),
+                text(compact_count(count)).size(12),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        )
+        .padding([12, 14])
+        .width(Length::Fill)
+        .style(design::selected);
+        let mut side = column![
+            container(brand).padding([12, 8]),
+            Space::new().height(28),
+            container(text("Library").size(12).style(design::muted)).padding([0, 14]),
+            Space::new().height(8),
+            selected,
+            Space::new().height(Length::Fill),
+        ]
         .width(SIDEBAR)
-        .height(Length::Fill);
-        side = side.push(Space::new().height(Length::Fill));
-        if !self.demo() {
-            side = side.push(text(self.account.username.as_str()).size(13));
+        .height(Length::Fill)
+        .padding(16);
+        if self.demo() {
+            side = side.push(
+                container(
+                    column![
+                        text("Demo library").font(design::MEDIUM).size(13),
+                        text("Sample media. Your account is not connected.")
+                            .size(12)
+                            .style(design::muted),
+                    ]
+                    .spacing(6),
+                )
+                .padding(12)
+                .style(design::soft),
+            );
+        } else {
+            side = side.push(
+                container(
+                    row![
+                        design::icon(Icon::Shield, 18.0),
+                        text("Your private library").size(12).style(design::muted),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                )
+                .padding([12, 8]),
+            );
+            side = side.push(
+                container(
+                    text(self.account.username.as_str())
+                        .size(13)
+                        .font(design::MEDIUM),
+                )
+                .padding([8, 8]),
+            );
             if self.account.persistence_failed || !self.keyring {
-                side = side.push(text("Signed in until the app closes").size(12));
+                side = side.push(
+                    text("Signed in until the app closes")
+                        .size(12)
+                        .style(design::muted),
+                );
             }
             side = side.push(
-                button("Sign out")
+                button(row![design::icon(Icon::Exit, 16.0), text("Sign out").size(13)].spacing(8))
+                    .padding([9, 12])
                     .on_press(Message::SignOut)
-                    .style(button::secondary),
+                    .style(design::secondary),
             );
         }
-        container(side).style(container::secondary).into()
+        container(side).style(design::sidebar).into()
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
-        let count = self.ratios.len();
-        let status: String = if self.sync.running {
+        let status = if self.sync.running {
             if self.demo() {
-                "Building the demo library…".into()
+                "Preparing sample media…".into()
             } else {
-                format!("Syncing… {} indexed", self.sync.indexed)
+                format!("Syncing your library… {} indexed", self.sync.indexed)
             }
-        } else if let Some(error) = &self.sync.error {
-            error.clone()
         } else {
-            format!("{count} items")
+            format!("{} items", formatted_count(self.ratios.len()))
         };
-        let mut bar = row![
-            text(if self.demo() {
-                "Demo library"
-            } else {
-                "Photos"
-            })
-            .size(20),
-            Space::new().width(Length::Fill),
-            text(status).size(13).width(Length::Fill),
+        let title = column![
+            text("Photos").font(design::MEDIUM).size(30),
+            text(status).size(13).style(design::muted),
         ]
-        .spacing(12)
-        .align_y(Alignment::Center)
-        .padding([0, 16])
-        .height(TOOLBAR);
-        {
-            let label = if self.sync.error.is_some() {
-                "Retry"
-            } else {
-                "Refresh"
-            };
-            bar = bar.push(
-                button(label)
-                    .on_press_maybe((!self.sync.running).then_some(Message::Sync))
-                    .style(button::secondary),
-            );
-        }
+        .spacing(4);
+        let refresh = button(
+            row![
+                design::icon(Icon::Refresh, 16.0),
+                text(if self.sync.error.is_some() {
+                    "Retry"
+                } else {
+                    "Refresh"
+                })
+                .size(13),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .padding([10, 14])
+        .on_press_maybe((!self.sync.running).then_some(Message::Sync))
+        .style(design::secondary);
+        let mut bar = row![title, Space::new().width(Length::Fill), refresh]
+            .spacing(12)
+            .align_y(Alignment::Center)
+            .padding([20, GUTTER as u16])
+            .height(TOOLBAR);
         if self.window.width < 760.0 && !self.demo() {
-            bar = bar.push(button("Sign out").on_press(Message::SignOut));
+            bar = bar.push(
+                button("Sign out")
+                    .padding([10, 12])
+                    .on_press(Message::SignOut)
+                    .style(design::secondary),
+            );
         }
         bar.into()
     }
@@ -1481,7 +1642,22 @@ impl Gallery {
             } else {
                 "No photos yet."
             };
-            return center(text(message)).into();
+            return center(
+                column![
+                    design::icon(Icon::Photos, 40.0),
+                    text(message).font(design::MEDIUM).size(22),
+                    text(if self.sync.running {
+                        "You can browse as soon as the first photos arrive."
+                    } else {
+                        "Refresh to look for photos in your Proton library."
+                    })
+                    .size(14)
+                    .style(design::muted),
+                ]
+                .spacing(16)
+                .align_x(Alignment::Center),
+            )
+            .into();
         }
         let rows = self.layout.visible(self.scroll_top, self.viewport_height);
         let mut grid = column![].width(Length::Fill);
@@ -1491,11 +1667,13 @@ impl Gallery {
                 grid = grid.push(Space::new().height(row.y - cursor));
             }
             grid = grid.push(match &row.kind {
-                RowKind::Heading(label) => container(text(label.as_str()).size(16))
-                    .height(row.height)
-                    .align_y(Alignment::End)
-                    .padding([8, 4])
-                    .into(),
+                RowKind::Heading(label) => {
+                    container(text(label.as_str()).font(design::MEDIUM).size(17))
+                        .height(row.height)
+                        .align_y(Alignment::End)
+                        .padding([12, 0])
+                        .into()
+                }
                 RowKind::Tiles(range) => self.tile_row(range.clone(), row.height),
             });
             cursor = row.y + row.height;
@@ -1503,8 +1681,14 @@ impl Gallery {
         if self.layout.height > cursor {
             grid = grid.push(Space::new().height(self.layout.height - cursor));
         }
-        scrollable(container(grid).padding([0, grid::GAP as u16]))
+        scrollable(container(grid).padding([0, GUTTER as u16]))
             .id(grid_id())
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(6)
+                    .scroller_width(6)
+                    .margin(4),
+            ))
             .on_scroll(Message::Scrolled)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -1523,6 +1707,7 @@ impl Gallery {
             let video = self.item(index).is_some_and(|item| item.is_video);
             let body: Element<'_, Message> = match thumb {
                 Some(decoded) => image(decoded.handle.clone())
+                    .border_radius(5)
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -1531,7 +1716,15 @@ impl Gallery {
                     .and_then(|ids| ids.get(index))
                     .is_some_and(|id| self.thumbs_failed.contains(id)) =>
                 {
-                    center(text("Preview unavailable").size(12)).into()
+                    center(
+                        column![
+                            design::icon(Icon::Image, 24.0),
+                            text("No preview").size(12).style(design::muted)
+                        ]
+                        .spacing(8)
+                        .align_x(Alignment::Center),
+                    )
+                    .into()
                 }
                 None => Space::new().width(Length::Fill).height(Length::Fill).into(),
             };
@@ -1540,19 +1733,23 @@ impl Gallery {
                 .height(Length::Fill);
             if video {
                 layers = layers.push(
-                    container(text("▶").size(14).color(Color::WHITE))
-                        .padding(6)
-                        .align_right(Length::Fill),
+                    container(design::icon(Icon::Play, 18.0).style(|_, _| {
+                        iced::widget::svg::Style {
+                            color: Some(Color::WHITE),
+                        }
+                    }))
+                    .padding(6)
+                    .align_right(Length::Fill),
                 );
             }
             let tile = container(layers)
-                .padding(3)
+                .padding(if focused { 3 } else { 0 })
                 .width(width)
                 .height(height)
                 .style(move |theme: &Theme| {
                     let palette = theme.extended_palette();
                     container::Style {
-                        background: Some(palette.background.weak.color.into()),
+                        background: Some(design::colors(theme).placeholder.into()),
                         border: iced::Border {
                             color: if focused {
                                 palette.primary.strong.color
@@ -1560,7 +1757,7 @@ impl Gallery {
                                 Color::TRANSPARENT
                             },
                             width: if focused { 3.0 } else { 0.0 },
-                            radius: 2.0.into(),
+                            radius: 5.0.into(),
                         },
                         ..container::Style::default()
                     }
@@ -1582,24 +1779,56 @@ impl Gallery {
             .as_ref()
             .map_or("Loading photo…", |item| item.name.as_str());
         let bar = row![
-            button("Back").on_press(Message::Close).style(viewer_button),
+            button(
+                row![
+                    design::icon(Icon::Back, 18.0).style(|_, _| iced::widget::svg::Style {
+                        color: Some(Color::WHITE)
+                    }),
+                    text("Photos").size(13)
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            )
+            .padding([10, 12])
+            .on_press(Message::Close)
+            .style(viewer_button),
             Space::new().width(Length::Fill),
             text(if viewer.loading {
                 "Loading…".to_string()
             } else {
-                format!("{} of {count}", viewer.index + 1)
+                format!(
+                    "{} of {}",
+                    formatted_count(viewer.index + 1),
+                    formatted_count(count)
+                )
             })
             .size(13),
-            button("Previous")
-                .on_press_maybe((viewer.index > 0).then_some(Message::Step(-1)))
-                .style(viewer_button),
-            button("Next")
-                .on_press_maybe((viewer.index + 1 < count).then_some(Message::Step(1)))
-                .style(viewer_button),
+            button(
+                row![
+                    design::icon(Icon::Back, 18.0).style(|_, _| iced::widget::svg::Style {
+                        color: Some(Color::WHITE)
+                    }),
+                    text("Previous").size(13)
+                ]
+                .spacing(4)
+            )
+            .on_press_maybe((viewer.index > 0).then_some(Message::Step(-1)))
+            .style(viewer_button),
+            button(
+                row![
+                    text("Next").size(13),
+                    design::icon(Icon::Next, 18.0).style(|_, _| iced::widget::svg::Style {
+                        color: Some(Color::WHITE)
+                    })
+                ]
+                .spacing(4)
+            )
+            .on_press_maybe((viewer.index + 1 < count).then_some(Message::Step(1)))
+            .style(viewer_button),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
-        .padding([8, 12]);
+        .padding([12, 16]);
         let body: Element<'_, Message> = match &viewer.image {
             Some(decoded) => image::viewer(decoded.handle.clone())
                 .min_scale(1.0)
@@ -1622,9 +1851,22 @@ impl Gallery {
         .height(Length::Fill);
         let mut page = column![
             bar,
-            container(text(name).size(16)).padding([0, 12]),
-            body,
-            text("Scroll to zoom • Drag to pan • ← / → to navigate • Esc to close").size(12)
+            container(text(name).size(14).font(design::MEDIUM)).padding([0, 28]),
+            container(body)
+                .padding([16, 24])
+                .width(Length::Fill)
+                .height(Length::Fill),
+            container(
+                text(if self.window.width < 760.0 {
+                    "Scroll to zoom   /   Drag to pan"
+                } else {
+                    "Scroll to zoom   /   Drag to pan   /   ← → Navigate   /   Esc Close"
+                })
+                .size(12)
+                .color(Color::from_rgb8(166, 166, 180))
+            )
+            .padding([14, 24])
+            .center_x(Length::Fill)
         ];
         if let Some(message) = &viewer.message {
             page = page.push(
@@ -1645,11 +1887,33 @@ impl Gallery {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_| container::Style {
-                background: Some(Color::from_rgb8(16, 14, 22).into()),
+                background: Some(design::VIEWER.into()),
                 text_color: Some(Color::WHITE),
                 ..container::Style::default()
             })
             .into()
+    }
+}
+
+fn formatted_count(count: usize) -> String {
+    let digits = count.to_string();
+    digits
+        .chars()
+        .enumerate()
+        .fold(String::new(), |mut out, (i, ch)| {
+            if i > 0 && (digits.len() - i).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(ch);
+            out
+        })
+}
+
+fn compact_count(count: usize) -> String {
+    if count >= 10_000 {
+        format!("{}k", count / 1000)
+    } else {
+        formatted_count(count)
     }
 }
 

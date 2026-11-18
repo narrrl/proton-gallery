@@ -1,10 +1,30 @@
 pluginManagement {
-    repositories { google(); mavenCentral(); gradlePluginPortal() }
+    repositories {
+        // Kotlin is published to Maven Central. Do not ask Google for its
+        // plugin marker or implementation: a Google repository failure must
+        // not prevent resolving an unrelated Kotlin plugin on fresh runners.
+        mavenCentral()
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx\\..*")
+            }
+        }
+        gradlePluginPortal()
+    }
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google(); mavenCentral()
+        mavenCentral()
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx\\..*")
+            }
+        }
         // Resolve the Kotlin verifier bundled with the exact locked Rust crate.
         // Not --offline: a fresh checkout (or CI) has not downloaded the crate yet,
         // and cargo only goes to the network for crates missing locally.

@@ -5,9 +5,9 @@ use chrono::{Datelike, Local, TimeZone};
 use std::ops::Range;
 
 /// Space between tiles and between rows, in logical pixels.
-pub const GAP: u32 = 4;
+pub const GAP: u32 = 6;
 /// Height of a month heading.
-pub const HEADING: f32 = 48.0;
+pub const HEADING: f32 = 56.0;
 /// Rows built above and below the viewport.
 pub const OVERSCAN: f32 = 800.0;
 

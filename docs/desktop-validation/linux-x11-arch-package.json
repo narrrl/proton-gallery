@@ -1,0 +1,41 @@
+{
+  "binary": "/tmp/pg-arch-package/usr/bin/proton-gallery",
+  "cycles": 1,
+  "outline_ready_seconds": 19.2,
+  "backend": "x11",
+  "scale": 1.25,
+  "evidence": "/tmp/pg-x11-1.25-g03ju2_z",
+  "rss_peak_kib": 307668,
+  "rss_after_browsing_kib": 307668,
+  "cycle_rss_kib": [
+    284068
+  ],
+  "theme_pixels": {
+    "prefer-light": [
+      246,
+      246,
+      249
+    ],
+    "prefer-dark": [
+      36,
+      36,
+      44
+    ]
+  },
+  "explicit_directory_preserved": true,
+  "redraw_interval_us": {
+    "samples": 1143,
+    "p50": 28434,
+    "p95": 47123,
+    "max": 200501
+  },
+  "widget_construction_us": {
+    "samples": 1175,
+    "p50": 50,
+    "p95": 197,
+    "max": 2013
+  },
+  "page_work_peak": 2,
+  "thumbnail_work_peak": 12,
+  "exit_code": 0
+}
