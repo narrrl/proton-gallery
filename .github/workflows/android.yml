@@ -62,9 +62,11 @@ jobs:
         with:
           targets: aarch64-linux-android, x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
+      # The action's default package list includes "tools", which the SDK
+      # repository no longer offers, so name the packages explicitly.
       - uses: android-actions/setup-android@v3
-      - name: Android SDK packages
-        run: sdkmanager --install "ndk;${NDK_VERSION}" "build-tools;${BUILD_TOOLS}" "platforms;android-36"
+        with:
+          packages: platform-tools ndk;${{ env.NDK_VERSION }} build-tools;${{ env.BUILD_TOOLS }} platforms;android-36
       - name: cargo-ndk
         run: cargo install cargo-ndk --version "${CARGO_NDK_VERSION}" --locked
       - uses: gradle/actions/setup-gradle@v4
