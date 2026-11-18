@@ -7,6 +7,7 @@ import io.narl.protongallery.bridge.GalleryEngine
 import io.narl.protongallery.bridge.GalleryException
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.VideoStream
 import io.narl.protongallery.bridge.LibraryView
 import io.narl.protongallery.bridge.AlbumOptions
 import io.narl.protongallery.bridge.MediaReader
@@ -116,6 +117,12 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun downloadOriginal(item: GalleryItem, directory: File): File = withContext(Native) {
         val key = item.remoteKey ?: throw GalleryException.Operation("This item isn’t in Proton.")
         File(engine.downloadOriginal(key, item.name, directory.path))
+    }
+
+    /** A Proton video, opened for playback while it downloads. */
+    suspend fun openVideo(item: GalleryItem): VideoStream = withContext(Native) {
+        val key = item.remoteKey ?: throw GalleryException.Operation("This item isn’t in Proton.")
+        engine.openVideo(key)
     }
 
     suspend fun totals() = withContext(Native) { engine.totals() }

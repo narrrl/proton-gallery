@@ -1,0 +1,41 @@
+{
+  "outline_ready_seconds": 30.366,
+  "backend": "x11",
+  "scale": 1.25,
+  "evidence": "/tmp/pg-x11-1.25-mru0fynr",
+  "rss_peak_kib": 347804,
+  "rss_after_browsing_kib": 347804,
+  "cycle_rss_kib": [
+    271108,
+    288268,
+    327764
+  ],
+  "theme_pixels": {
+    "prefer-light": [
+      150,
+      150,
+      150
+    ],
+    "prefer-dark": [
+      136,
+      138,
+      144
+    ]
+  },
+  "explicit_directory_preserved": true,
+  "redraw_interval_us": {
+    "samples": 1255,
+    "p50": 34451,
+    "p95": 76449,
+    "max": 1147367
+  },
+  "widget_construction_us": {
+    "samples": 1299,
+    "p50": 71,
+    "p95": 648,
+    "max": 2941
+  },
+  "page_work_peak": 3,
+  "thumbnail_work_peak": 12,
+  "exit_code": 0
+}

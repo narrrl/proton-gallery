@@ -54,8 +54,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.VideoStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -227,31 +229,59 @@ private fun VideoPlayer(item: GalleryItem, media: MediaActions, private: Boolean
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var failed by remember(item.id) { mutableStateOf(false) }
+    // The open Proton stream, stopped and released with the player.
+    val opened = remember(item.id) { arrayOfNulls<VideoStream>(1) }
     val player = remember(item.id) {
         ExoPlayer.Builder(context).build().apply {
             addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) { failed = true }
+                // Waiting for Proton blocks shows as work in the top bar.
+                override fun onPlaybackStateChanged(state: Int) { onLoading(state == Player.STATE_BUFFERING) }
             })
             playWhenReady = false
         }
     }
-    // Proton videos are downloaded and decrypted first; phone videos play in place.
+    // Phone videos play in place. Proton videos stream; when a stream can't be
+    // opened, the whole file is downloaded and decrypted first, as before.
     LaunchedEffect(player) {
-        val source = PhoneLibrary.uri(item) ?: item.localPath.takeIf { it.isNotEmpty() }?.let { Uri.fromFile(File(it)) } ?: run {
-            onLoading(true)
-            try { media.original(item, private)?.let(Uri::fromFile) }
-            catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { null }
-            finally { onLoading(false) }
+        val local = PhoneLibrary.uri(item) ?: item.localPath.takeIf { it.isNotEmpty() }?.let { Uri.fromFile(File(it)) }
+        if (local != null) {
+            player.setMediaItem(MediaItem.fromUri(local))
+            player.prepare()
+            return@LaunchedEffect
         }
-        if (source == null) { failed = true; return@LaunchedEffect }
-        player.setMediaItem(MediaItem.fromUri(source))
-        player.prepare()
+        onLoading(true)
+        try {
+            val stream = try { media.stream(item) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
+            if (stream != null) {
+                opened[0] = stream
+                val source = ProgressiveMediaSource.Factory { ProtonDataSource(stream) }
+                    .createMediaSource(MediaItem.fromUri(Uri.Builder().scheme("proton-gallery").authority("video").appendPath(item.id).build()))
+                player.setMediaSource(source)
+                player.prepare()
+                return@LaunchedEffect
+            }
+            val file = try { media.original(item, private) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
+            if (file == null) { failed = true; return@LaunchedEffect }
+            player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            player.prepare()
+        } finally {
+            onLoading(false)
+        }
     }
     DisposableEffect(player, lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) player.pause() }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); player.release() }
+        onDispose {
+            lifecycle.removeObserver(observer)
+            // Stop first, so a read blocked on the network returns and the
+            // player's loading thread can finish.
+            opened[0]?.stop()
+            player.release()
+            opened[0]?.destroy()
+            opened[0] = null
+            onLoading(false)
+        }
     }
     Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
         // The player's own controls and the viewer's bars come and go together.

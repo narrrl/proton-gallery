@@ -9,6 +9,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.text.format.Formatter
 import io.narl.protongallery.bridge.FreeUpSummary
+import io.narl.protongallery.bridge.VideoStream
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
@@ -895,6 +896,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (location.value.private) privateFiles += file
         return withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(file, 2560) }
     }
+
+    /** A Proton video to stream; nothing of it is written to disk. */
+    suspend fun videoStream(item: GalleryItem): VideoStream? =
+        if (item.remoteKey == null) null else repository.value?.openVideo(item)
 
     /** A playable file for a Proton video. */
     suspend fun original(item: GalleryItem, private: Boolean = false): File? =

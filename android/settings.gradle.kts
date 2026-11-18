@@ -6,9 +6,11 @@ dependencyResolutionManagement {
     repositories {
         google(); mavenCentral()
         // Resolve the Kotlin verifier bundled with the exact locked Rust crate.
+        // Not --offline: a fresh checkout (or CI) has not downloaded the crate yet,
+        // and cargo only goes to the network for crates missing locally.
         val metadata = providers.exec {
             workingDir(rootDir.parentFile)
-            commandLine("cargo", "metadata", "--locked", "--offline", "--format-version", "1", "--filter-platform", "aarch64-linux-android")
+            commandLine("cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", "aarch64-linux-android")
         }.standardOutput.asText.get()
         @Suppress("UNCHECKED_CAST")
         val packages = (groovy.json.JsonSlurper().parseText(metadata) as Map<String, Any>)["packages"] as List<Map<String, Any>>

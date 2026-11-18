@@ -46,6 +46,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Linux desktop build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev
       - name: Rust checks
         run: bash scripts/check.sh
 

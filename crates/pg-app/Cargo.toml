@@ -1,0 +1,29 @@
+[package]
+name = "pg-app"
+description = "Application services shared by the Android and desktop gallery frontends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pg-core.workspace = true
+async-trait.workspace = true
+pg-drive.workspace = true
+proton-drive-rs.workspace = true
+proton-sdk.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

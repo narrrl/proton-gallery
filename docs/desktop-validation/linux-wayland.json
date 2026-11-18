@@ -1,0 +1,30 @@
+{
+  "outline_ready_seconds": 20.99,
+  "backend": "wayland",
+  "scale": 1.0,
+  "evidence": "/tmp/pg-wayland-1.0-_zcd1v0u",
+  "rss_peak_kib": 316356,
+  "rss_after_browsing_kib": 316356,
+  "cycle_rss_kib": [
+    226864,
+    283508,
+    316356
+  ],
+  "theme_pixels": {},
+  "explicit_directory_preserved": true,
+  "redraw_interval_us": {
+    "samples": 2115,
+    "p50": 16665,
+    "p95": 19556,
+    "max": 164282
+  },
+  "widget_construction_us": {
+    "samples": 2781,
+    "p50": 48,
+    "p95": 988,
+    "max": 2229
+  },
+  "page_work_peak": 3,
+  "thumbnail_work_peak": 12,
+  "exit_code": 0
+}

@@ -1,4 +1,119 @@
-# Validation — 2026-11-17
+# Validation
+
+## Iced desktop completion — 2026-11-18
+
+The desktop implementation covers account access, Photos browsing and still-photo viewing.
+The Compose desktop skeleton is retained while platform/account/accessibility acceptance
+remains open. The following checks ran against this checkout, including the existing Android
+and desktop work; no real account credentials were used.
+
+### Build and regression checks
+
+| Check | Result |
+| --- | --- |
+| `env CARGO_NET_OFFLINE=true bash scripts/check.sh` | PASS: formatting, workspace/all-target/all-feature Clippy with warnings denied, then 108 tests passed, 2 live-account diagnostics intentionally ignored |
+| `cargo build -p pg-desktop --locked --offline` | PASS: actual Linux Iced executable |
+| `cargo check -p pg-core -p pg-drive -p pg-app -p pg-desktop --all-targets --target x86_64-pc-windows-gnu --locked --offline` | PASS: Windows compilation/type checking, including test targets; no Windows execution or executable link claim |
+| JDK 21: `/usr/bin/gradle8 -p android --no-daemon testDebugUnitTest lintDebug assembleDebug` | PASS: both native ABIs rebuilt and packaged; see forced execution below |
+| `python3 -m py_compile scripts/desktop-smoke.py`, `git diff --check` | PASS |
+
+The final Gradle invocation reused unit-test outputs. A second invocation with
+`--rerun-tasks -x buildRust` explicitly reruns Kotlin compilation, Android unit tests,
+lint and APK assembly against the native libraries just rebuilt for both ABIs. Result:
+**PASS, 36 tests executed, zero failures/errors/skips**, plus lint and debug APK assembly.
+This includes the Kotlin/JNA bridge integration tests. Skipping `buildRust` here avoids
+rebuilding the already-verified native outputs; it does not substitute for the preceding
+native build.
+
+New coverage includes queued sync messages after UI sign-out, stale page/thumbnail/viewer
+completion bookkeeping, failed/missing
+thumbnail and page suppression until Refresh, challenge credential cancellation, failed
+keyring deletion and late token refresh, cleanup surviving restart, original-cache account
+authorization, streaming byte limits, partial-file cleanup on cancellation/publication error,
+pre-allocation image limits, viewport/focus anchoring, and the placeholder/image widget-state
+transition found during actual runtime testing. The request stress test uses 100,000 records
+and 500 rapid scroll/viewer replacements. Cache accounting exercises 100,000 distinct tiny
+thumbnails through a small byte budget, keeping the recently touched item.
+
+### Linux runtime checks and measurements
+
+The actual Iced executable was exercised with 100,000 synthetic catalog records and encoded
+fixture media, not a separate demo renderer. The helper drives three repeated cycles of
+25 page-down moves, Home/End jumps, 50 viewer navigation steps per cycle, plus error retry
+and Refresh. It verifies that normal window closure preserves the explicitly supplied data
+directory. X11 additionally uses mouse-wheel zoom/drag pan, a 640×480 physical window at
+125% application scaling, and temporary light/dark preference changes with restoration.
+A longer Wayland run checks process-memory behavior as browsing continues.
+
+Runtime evidence and numerical summaries are archived in `docs/desktop-validation/`;
+selected app-only screenshots are in `docs/images/desktop-*`. The first final Wayland
+run completed with exit code 0 and preserved its explicit directory: first outline in
+20.990 seconds (including fixture creation), peak RSS 308.9 MiB, redraw intervals
+p50 16.665 ms / p95 19.556 ms / maximum 164.282 ms, widget construction p95 0.988 ms,
+peak three page reads and twelve thumbnail tasks. Additional final-run results follow below.
+
+| Final run | Outline ready (fixture indexing included) | Peak RSS | Redraw interval p50 / p95 / max | Widget construction p95 | Outstanding page / thumbnail peak |
+| --- | --- | --- | --- | --- | --- |
+| Wayland, three cycles | 20.990 s | 308.9 MiB | 16.665 / 19.556 / 164.282 ms | 0.988 ms | 3 / 12 |
+| Wayland, six cycles | 26.504 s | 327.4 MiB | 16.863 / 33.172 / 340.149 ms | 1.386 ms | 2 / 12 |
+| X11/Xvfb, 125%, three cycles plus theme changes | 30.366 s | 339.7 MiB | 34.451 / 76.449 / 1147.367 ms | 0.648 ms | 3 / 12 |
+
+All three runs exited normally with code 0 and preserved the explicit directory. Screenshots
+were visually inspected for grid focus, unavailable previews, still viewing, retry/error state,
+zoom/pan, the small window and light/dark changes. X11 preference samples changed from
+RGB (150,150,150) to (136,138,144), and the screenshots confirm the full light/dark palette
+change. The original desktop preference was restored. The six-cycle Wayland RSS samples
+were 207.7, 270.0, 304.7, 316.6, 323.0 and 327.4 MiB: growth slows as caches warm, but this
+short run does not prove a permanent process-memory plateau. The separate 100,000-entry
+cache regression establishes its decoded-byte accounting bound, not a GPU allocation bound.
+
+Host: Ryzen 7 PRO 3700U (4 cores/8 threads), integrated Radeon Vega (1002:15d8),
+about 14.5 GiB OS-visible RAM, Linux 7.3.4-zen2-2-zen, Rust 1.99.1.
+Development executable, dependencies optimized at level 2. Native Wayland used Hyprland
+on a 1920×1080, 60 Hz display; X11 used Xvfb. Other compilation/test activity overlapped
+some runs; thermal state and cache warmth were not controlled. These are instrumented smoke measurements, not release performance acceptance.
+`PG_METRICS` requests ongoing redraws; intervals include scheduling/idle stalls and exclude
+GPU presentation timing. RSS excludes separately allocated GPU memory. Initial fixture
+indexing is not a warm cached launch. The observed frame stalls remain a performance gap.
+
+Runtime investigation found and fixed an Iced keyed-child type transition crash when a
+stateless placeholder became a zoomable image. The stable child wrapper now has both a
+regression test and repeated native runtime coverage. Initial harness runs also exposed an
+X11 map/focus race and hidden grouped-window startup ordering; the helper maps/activates
+its own child before awaiting the UI outline and bounds startup waits. Timed-out/incomplete
+runs are not counted as acceptance passes. The system's default JDK 27 failed the pinned
+Gradle/Kotlin toolchain; JDK 21 succeeds. Existing SDK-XML and deprecation warnings remain
+warnings, not skipped failures.
+
+After the queued-sign-out regression fix, the rebuilt executable also passed one final
+Wayland cycle: exit 0, explicit directory preserved, 100,000-item outline ready in 9.288 s,
+peak RSS 232.6 MiB, redraw p50/p95 16.663/17.027 ms. This shorter run is a final functional
+smoke check, not a replacement for the longer cache/memory observations above; its summary
+is `docs/desktop-validation/linux-wayland-final-smoke.json`.
+
+### Explicit outstanding acceptance
+
+- Windows runtime, Credential Manager behavior, screen-reader/UI Automation, display
+  scaling and native GPU behavior need a Windows machine. The added CI matrix compiles
+  the executable and runs shared/desktop tests on Linux and Windows; no remote CI result
+  is claimed from adding the workflow.
+- Linux screen-reader/AT-SPI operation remains unvalidated. Tiles are buttons with visible
+  keyboard focus and keyboard opening/navigation; this does not prove native accessibility.
+- Real-account sign-in, saved-session refresh, authenticator/mailbox-password flows, hosted
+  CAPTCHA token continuation, Photos synchronization, real previews/originals, network error
+  recovery and live sign-out need account acceptance. Their local failure/state transitions
+  are regression-tested; fixture media is not real-account evidence.
+- Mixed-monitor fractional Wayland scaling, HDR/color management, Windows runtime and
+  real original-photo codec/memory behavior remain outside these smoke results. The X11
+  125% check is an application scaling override, not a mixed-DPI monitor test.
+- SDK encoded thumbnail limits are checked after its download buffer returns; application
+  decoding limits do not establish a bound on every internal SDK allocation. Per-decoder,
+  decoded-cache and original-stream limits do not imply a total-process/GPU memory cap.
+- The historical warm-launch/60 fps gates are not claimed met. Measure a release build
+  under controlled load before closing performance acceptance. Desktop video, Drive/album
+  controls, backup, offline retention and packaging are later milestones.
+
+## Earlier baseline — 2026-11-17
 
 ## Linux checks
 

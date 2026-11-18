@@ -1,14 +1,15 @@
 # Architecture
 
-Planning baseline: 2026-11-17. All components below are proposed unless explicitly identified as existing code.
+Planning baseline: 2026-11-17; application ownership updated 2026-11-18. `pg-core`, `pg-drive`, `pg-app`, `pg-mobile`, and `pg-desktop` exist. Named scheduler/media/transfer crate extractions below remain proposals.
 
 ## 1. System boundary
 
 ```mermaid
 flowchart TD
-    Desktop[Linux / Windows: Rust egui UI] --> Core[pg-core: application service]
-    Android[Android: Kotlin / Compose] --> FFI[pg-ffi: UniFFI]
-    FFI --> Core
+    Desktop[Linux / Windows: Rust / Iced] --> App[pg-app: shared application services]
+    Android[Android: Kotlin / Compose] --> FFI
+    FFI[pg-mobile: UniFFI] --> App
+    App --> Core
     Core --> Catalog[Local catalog and durable jobs]
     Core --> Scheduler[Priority scheduler]
     Core --> Media[pg-media: preview policy and media jobs]
@@ -29,7 +30,8 @@ Start with `pg-core`, `pg-drive`, and `pg-cli`, with internal modules for catalo
 
 | Boundary | Responsibility | Must not own |
 | --- | --- | --- |
-| `pg-core` | Application commands, queries, events, policies, typed IDs and errors | UI widgets or Android lifecycle |
+| `pg-app` | Account/session lifecycle, library queries, Photos/album sync, media retrieval | Frontend presentation state or platform credential implementation |
+| `pg-core` | Catalog, indexing, byte storage, geometry, typed IDs and errors | UI widgets or Android lifecycle |
 | `pg-drive` | SDK adaptation, account/source access, metadata pages, revision descriptions, remote writes | Product-specific offline policy |
 | Catalog module | Migrations, local queries, scan/event checkpoints, durable intent | Network calls while a transaction is open |
 | Scheduler module | Priority, cancellation, deduplication, resource permits | Unbounded task spawning |
@@ -135,7 +137,13 @@ Network calls need deadlines, exponential retry with jitter, `Retry-After` suppo
 
 ## 7. Platform boundaries
 
-Desktop: reuse the Rust/egui event-driven engine pattern and mpv callback integration. Prototype a virtualized thumbnail grid, keyboard navigation, accessibility, high DPI, image color handling, and Wayland/X11/Windows GPU behavior before committing to the renderer. Keep a fallback for software rendering and test workspace changes/minimize; the existing app documents a Wayland vsync stall.
+Desktop: Rust/Iced calls `pg-app` directly. It owns window/input state, viewport requests,
+visible focus, a bounded decoded-thumbnail cache and still-photo presentation. `pg-app`
+serializes account transitions and gates shared operations against sign-out cleanup;
+`pg-drive` cancels session work and guards refresh persistence. The Android UniFFI adapter
+also uses `pg-app`; it retains Android-specific player, Keystore, MediaStore and task hosting.
+The old Compose desktop skeleton remains until Iced acceptance is recorded. See
+[desktop instructions](DESKTOP.md) and [measured acceptance](VALIDATION.md).
 
 Android: Kotlin/Compose renders paged DTOs and handles gestures. Rust remains the source of truth for catalog and transfers. UniFFI exposes coarse queries, thumbnail batches, opaque reader handles, and explicit cancellation; avoid full decoded bitmaps, whole videos, or per-byte callbacks across FFI. Measure bounded copies before adding specialized JNI direct-buffer code. Test cancellation and teardown for the pinned UniFFI version; [UniFFI's async lifecycle documentation](https://mozilla.github.io/uniffi-rs/latest/internals/async-ffi.html) describes explicit future cleanup, but application job cancellation is still a separate contract.
 

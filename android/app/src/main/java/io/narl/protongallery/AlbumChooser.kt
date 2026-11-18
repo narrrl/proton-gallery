@@ -100,7 +100,10 @@ fun AlbumChooserSheet(
 @Composable
 fun AlbumThumb(album: FolderAlbum, loader: ThumbnailLoader, modifier: Modifier = Modifier) {
     val cover = album.cover
-    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, loader) { if (value == null) value = cover?.let { loader.load(it, album.hidden) } }
+    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, album.hidden, loader) {
+        // The state outlives its keys: replace it, or a slot keeps the previous album's cover.
+        value = cover?.let { loader.peek(it) ?: loader.load(it, album.hidden) }
+    }
     Box(modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
         val shown = bitmap
         if (shown != null) Image(shown.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

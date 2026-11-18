@@ -143,7 +143,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val albumChoices by model.albumChoices.collectAsStateWithLifecycle()
-            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, delete = model::delete,
+            val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, stream = model::videoStream, delete = model::delete,
                 favorite = model::favorite, forgetPrivate = model::forgetPrivate) }
             GalleryTheme(theme) {
                 GalleryApp(

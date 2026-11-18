@@ -5,8 +5,12 @@
 *.db-wal
 .env
 /android/.gradle/
+/android/.kotlin/
 /android/**/build/
 /android/local.properties
+/desktop/.gradle/
+/desktop/.kotlin/
+/desktop/**/build/
 *.p12
 *.jks
 *.keystore

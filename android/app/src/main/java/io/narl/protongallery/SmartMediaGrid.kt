@@ -315,7 +315,7 @@ fun SmartMediaGrid(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     for (album in albumRows[index]) {
                         if (album == null) NewAlbumCard(onNewAlbum ?: {}, Modifier.weight(1f))
-                        else AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.weight(1f))
+                        else key(album.gallery, album.id) { AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.weight(1f)) }
                     }
                     repeat(albumColumns - albumRows[index].size) { Spacer(Modifier.weight(1f)) }
                 }
@@ -369,7 +369,10 @@ fun albumCaption(album: FolderAlbum): String = buildList {
 @Composable
 private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cover = album.cover
-    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, loader) { if (value == null) value = cover?.let { loader.load(it, album.hidden) } }
+    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, album.hidden, loader) {
+        // The state outlives its keys: replace it, or a slot keeps the previous album's cover.
+        value = cover?.let { loader.peek(it) ?: loader.load(it, album.hidden) }
+    }
     Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
         .semantics(mergeDescendants = true) { contentDescription = "Album ${album.name}, ${albumCaption(album)}" }) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {

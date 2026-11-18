@@ -19,6 +19,7 @@ required-features = ["bindgen"]
 
 [dependencies]
 pg-core.workspace = true
+pg-app.workspace = true
 pg-drive.workspace = true
 proton-drive-rs.workspace = true
 proton-sdk.workspace = true

@@ -14,7 +14,7 @@ Before building the full interface:
 - [ ] Trace login/session rotation, Photos routing, per-block reads, cancellation, thumbnail batching, upload drafts, and signature outcomes. Produce a capability/gap matrix.
 - [ ] Verify random reads for Photos-volume media separately from ordinary Drive. Add Photos-aware revision-reader APIs in the SDK if ordinary link/key routing is insufficient.
 - [ ] Expose SDK folder/Photos pages or streams if current `Vec` enumeration waits for every page. First screen must not require full library enumeration.
-- [ ] Prototype virtualized egui grid with 100,000 synthetic records, realistic thumbnail sizes, high DPI, keyboard navigation, accessibility, and Windows/Wayland behavior.
+- [ ] Validate the Iced desktop browser ([desktop plan](DESKTOP.md)) with 100,000 synthetic records, realistic thumbnail sizes, high DPI, keyboard navigation, accessibility, and Windows/Wayland behavior.
 - [ ] Prototype Android Compose -> UniFFI -> Rust query/range read with cancellation and one thumbnail batch on an arm64 device. Compare Media3 and existing mpv integration with header/tail seeks.
 - [ ] Validate encrypted block-store seek cost, crash publication, and local key wrapping on Linux, Windows, and Android.
 - [ ] Audit player/codec/source licenses and select distribution approach before copying GPL components.
@@ -40,7 +40,7 @@ Depends on M1 and M0 player/storage choices.
 - [ ] Implement bounded priority scheduler, shared byte permits, single-flight with independent consumer lifetimes, and viewport generations.
 - [ ] Implement revision-aware range reader and encrypted object store with local-first opens.
 - [ ] Port relevant range, cancellation, cache, and player tests with attribution.
-- [ ] Show desktop virtualized grid, server thumbnails, photo preview-to-original transition, and next/previous navigation.
+- [x] Implement the Iced virtualized Photos grid, media-provider loading, still viewer and next/previous navigation. Real-account, Windows runtime and accessibility acceptance remain tracked in VALIDATION.md.
 - [ ] Play and seek one video through the Rust range reader, including an MP4 whose index is at the tail.
 - [ ] Implement durable single-item retention, basic storage/progress display, and crash/restart recovery.
 - [ ] Exercise the same core catalog and offline reader through the Android bridge, without a second Android transfer state machine.
@@ -134,3 +134,12 @@ Use deterministic fakes for correctness and explicit opt-in test accounts for li
 ## Deferred scope
 
 Automatic camera backup, remote deletion/organization tools, photo editing, face recognition, semantic search, maps, transcoding, shared/public libraries, synchronized favorites/settings, iOS, TV, system services, portable/external offline stores, and general two-way synchronization. Preserve extensible contracts without implementing these before the core gallery/offline experience is reliable.
+
+## Current desktop milestone (2026-11-18)
+
+The approved Iced completion plan narrows this desktop milestone to account access,
+Photos browsing and still-photo viewing. `pg-app` services and `pg-desktop` implement it;
+Android's existing UI/UniFFI/platform work and `desktop/` Compose skeleton are preserved.
+Implementation does not close the broader folder/video/offline/upload gates above.
+See DESKTOP.md for supported interactions, request/cache/decode limits and commands;
+VALIDATION.md records executed checks and the outstanding acceptance matrix.

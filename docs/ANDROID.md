@@ -10,7 +10,7 @@ Kotlin/Compose calls `pg-mobile` through generated UniFFI bindings. Rust owns th
 - A shared Rust smart grid lays out portraits and landscapes in justified, edge-to-edge rows with 2dp gaps and square corners. Pinch with two fingers to zoom (target row height 48–240dp, default 120dp, saved). Headings follow the zoom like the Linux app: days for large tiles, months below 104dp, years below 64dp. The first visible photo stays in view while zooming.
 - Pull down to refresh Photos, or the Drive gallery on screen.
 - Background work looks the same everywhere: a thin bar under the top bar, a ring around the account button, and one short line beside it saying what is happening ("Backing up 3 of 12", "Comparing with Proton: 1,204 left", "Updating Proton Photos: 4,120 found"). The bar and ring fill when the share done is known. There are no spinners.
-- The viewer shows the phone file, the local file, or Proton's large preview (the decrypted original when there is none); Proton videos are downloaded, then play. One tap hides the bars and the system bars; another brings them back.
+- The viewer shows the phone file, the local file, or Proton's large preview (the decrypted original when there is none); Proton videos stream: Media3 reads byte ranges through `ProtonDataSource`, which Rust (`open_video`) serves from the revision's blocks, decrypted in memory. About six blocks (24 MiB) stay cached around the play position and two are fetched ahead; nothing is written to disk, including for hidden albums. Range reads skip the whole-file manifest signature check that a full download does; each block is still decrypted and checked. If a stream can't be opened, the viewer falls back to downloading the whole file first. One tap hides the bars and the system bars; another brings them back.
 - Other apps can pick photos and videos here (`GET_CONTENT`, `PICK`), Proton-only ones included: the app opens in a picking mode and returns content URIs with read access, decrypting Proton originals into its cache first. Copies older than a day are removed.
 - The account button opens one sheet: account, refresh, **Backup**, and theme (device, light, dark). Backup chooses phone folders to upload automatically, with Wi‑Fi-only (default) and charging-only conditions, and frees up space.
 - Native adaptive and monochrome launcher icons accompany the SVG/PNG mark.
@@ -155,9 +155,9 @@ This builds the APK and runs Android lint and Robolectric interaction/layout tes
 ## Next integration gates
 
 1. Live-account acceptance: password, TOTP, CAPTCHA, mailbox-password, refresh rotation, restart, offline sign-out, and expired-session recovery. The native implementation exists; real-account validation requires user sign-in.
-2. Encrypted persistent revision-specific preview delivery. The Drive folder chooser, Photos sync, and memory-only thumbnails are implemented; very large-library behavior remains to be measured.
+2. Encrypted persistent revision-specific preview delivery. The Drive folder chooser, Photos sync, and an on-disk WebP thumbnail cache are implemented; very large-library behavior remains to be measured.
 3. Shared priorities and byte budgets; cancel obsolete viewport requests.
-4. Media3 `DataSource` over Rust ranges, followed by real seek/airplane-mode checks before selecting the final Proton player.
+4. Media3 `DataSource` over Rust ranges is implemented; measure start and seek times on slow networks, check airplane-mode behavior, and confirm range reads for Photos-volume videos on real accounts.
 5. Durable item/folder offline jobs, references, quotas, and background execution.
 6. Further backup recovery, accessibility, device performance, and release validation. Uploads, capture dates, deletion controls, and release signing are implemented.
 

@@ -1,12 +1,9 @@
 //! Thin synchronous ABI. Android calls it on Dispatchers.IO; Rust owns all
 //! catalog/file operations. Only bounded thumbnails cross the media ABI.
 use pg_core::model::AssetKey;
-use pg_drive::auth::{AuthError, AuthService, CredentialVault, Stage};
+use pg_drive::auth::{AuthError, CredentialVault};
 use std::path::PathBuf;
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 mod albums;
 #[cfg(target_os = "android")]
@@ -21,11 +18,10 @@ mod phone;
 mod photo_albums;
 mod picker;
 mod trash;
+mod video;
 
-use pg_core::catalog::Catalog;
 use pg_core::library::SourceKind;
-use pg_core::local::LocalLibrary;
-use pg_core::model::{MediaKind, NodeId, PageSize, SourceId, SourceSpec, TimelineCursor};
+use pg_core::model::{MediaKind, NodeId, PageSize, SourceId, SourceSpec};
 
 uniffi::setup_scaffolding!();
 
@@ -33,6 +29,14 @@ uniffi::setup_scaffolding!();
 pub enum GalleryError {
     #[error("{detail}")]
     Operation { detail: String },
+}
+
+impl From<pg_app::Error> for GalleryError {
+    fn from(error: pg_app::Error) -> Self {
+        Self::Operation {
+            detail: error.to_string(),
+        }
+    }
 }
 
 impl From<pg_core::Error> for GalleryError {
@@ -183,19 +187,59 @@ pub struct DeviceTotals {
     pub bytes: u64,
 }
 
+/// The Android-facing adapter over the shared application services. It
+/// blocks the calling thread (Android calls it on `Dispatchers.IO`) and
+/// converts records for UniFFI; the services themselves live in `pg-app`.
 #[derive(uniffi::Object)]
 pub struct GalleryEngine {
     runtime: tokio::runtime::Runtime,
-    catalog: Catalog,
-    local: LocalLibrary,
-    auth: AuthService,
-    photos: RwLock<Option<Arc<pg_drive::photos::ProtonPhotosSource>>>,
-    // Photos and Drive galleries sync independently; each has its own progress.
-    photos_sync: tokio::sync::Mutex<()>,
-    indexed: AtomicU64,
-    drive_sync: tokio::sync::Mutex<()>,
-    drive_indexed: AtomicU64,
-    backup_check: tokio::sync::Mutex<()>,
+    app: pg_app::App,
+}
+
+/// The adapter's modules reach the catalog, account and locks of the app.
+impl std::ops::Deref for GalleryEngine {
+    type Target = pg_app::App;
+    fn deref(&self) -> &pg_app::App {
+        &self.app
+    }
+}
+
+impl From<LibraryView> for pg_app::View {
+    fn from(view: LibraryView) -> Self {
+        match view {
+            LibraryView::Photos => Self::Photos,
+            LibraryView::Device => Self::Device,
+            LibraryView::DriveAlbum { gallery, album } => Self::DriveAlbum { gallery, album },
+        }
+    }
+}
+
+impl GalleryItem {
+    fn from_media(item: pg_app::MediaItem) -> Result<Self, GalleryError> {
+        let key = serde_json::to_string(&item.key).map_err(|_| GalleryError::Operation {
+            detail: "Invalid asset identity".into(),
+        })?;
+        Ok(Self {
+            id: item.id,
+            remote_key: item.remote.then(|| key.clone()),
+            asset_key: key,
+            revision: item.revision,
+            name: item.name,
+            mime: item.mime,
+            is_video: item.is_video,
+            size_bytes: item.size_bytes,
+            sort_time: item.sort_time,
+            local_path: item
+                .local_path
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            aspect_ratio: item.aspect_ratio,
+            phone_id: item.phone_id,
+            backed_up: item.backed_up,
+            in_proton: item.in_proton,
+            favorite: item.favorite,
+        })
+    }
 }
 
 #[uniffi::export]
@@ -227,52 +271,13 @@ impl GalleryEngine {
             .map_err(pg_core::Error::Io)?;
         let root = PathBuf::from(data_dir);
         diagnostics::set_panic_file(root.join("last-panic.txt"));
-        let (catalog, local) = runtime.block_on(async {
-            let catalog = Catalog::open(root.join("catalog.db")).await?;
-            let local = LocalLibrary::open(root.join("device"), catalog.clone()).await?;
-            catalog.register_source(LocalLibrary::source()?).await?;
-            catalog
-                .set_source_kind(LocalLibrary::source()?.id, SourceKind::Device)
-                .await?;
-            catalog
-                .register_source(pg_core::phone::phone_source()?)
-                .await?;
-            pg_core::Result::Ok((catalog, local))
-        })?;
-        Ok(Arc::new(Self {
-            runtime,
-            catalog,
-            local,
-            auth: AuthService::new(vault),
-            photos: RwLock::new(None),
-            photos_sync: tokio::sync::Mutex::new(()),
-            indexed: AtomicU64::new(0),
-            drive_sync: tokio::sync::Mutex::new(()),
-            drive_indexed: AtomicU64::new(0),
-            backup_check: tokio::sync::Mutex::new(()),
-        }))
+        let app = runtime.block_on(pg_app::App::open(root, vault))?;
+        Ok(Arc::new(Self { runtime, app }))
     }
 
-    async fn photo_source(&self) -> Result<Option<SourceId>, GalleryError> {
-        let Some(account) = self.auth.account_id() else {
-            return Ok(None);
-        };
-        Ok(self
-            .catalog
-            .account_sources(SourceKind::Photos, account)
-            .await?
-            .first()
-            .map(|s| s.id.clone()))
-    }
     /// The catalog source behind a view; `None` before Photos is first synced.
     async fn view_source(&self, view: LibraryView) -> Result<Option<SourceId>, GalleryError> {
-        Ok(match view {
-            LibraryView::Device => Some(LocalLibrary::source()?.id),
-            LibraryView::Photos => self.photo_source().await?,
-            LibraryView::DriveAlbum { gallery, album } => {
-                Some(self.checked_album(gallery, album).await?)
-            }
-        })
+        Ok(self.app.view_source(view.into()).await?)
     }
 
     /// Bridge records for catalog assets, with local files and known shapes.
@@ -280,48 +285,12 @@ impl GalleryEngine {
         &self,
         assets: Vec<pg_core::model::Asset>,
     ) -> Result<Vec<GalleryItem>, GalleryError> {
-        let paths = self
-            .local
-            .files_for(assets.iter().map(|asset| asset.key.clone()).collect())
-            .await?;
-        let ratios = self
-            .catalog
-            .aspect_ratios(assets.iter().map(|a| a.key.clone()).collect())
-            .await?;
-        let links = self
-            .catalog
-            .phone_links(
-                self.auth.account_id(),
-                assets.iter().map(|a| a.key.clone()).collect(),
-            )
-            .await?;
-        let mut items = Vec::with_capacity(assets.len());
-        for (((asset, path), ratio), link) in assets.into_iter().zip(paths).zip(ratios).zip(links) {
-            let phone = pg_core::phone::is_phone(&asset.key);
-            let key = serde_json::to_string(&asset.key).map_err(|_| GalleryError::Operation {
-                detail: "Invalid asset identity".into(),
-            })?;
-            items.push(GalleryItem {
-                id: outline::item_id(&asset.key)?,
-                remote_key: (path.is_none() && !phone).then(|| key.clone()),
-                asset_key: key,
-                revision: asset.revision.map(|revision| revision.to_string()),
-                name: asset.name,
-                mime: asset.mime,
-                is_video: asset.kind == MediaKind::Video,
-                size_bytes: asset.size_bytes.unwrap_or(0),
-                sort_time: asset.sort_time,
-                local_path: path
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                aspect_ratio: ratio,
-                phone_id: link.phone,
-                backed_up: link.backed_up,
-                in_proton: !phone && asset.key.account.as_str() != "local-device",
-                favorite: asset.favorite,
-            });
-        }
-        Ok(items)
+        self.app
+            .media_items(assets)
+            .await?
+            .into_iter()
+            .map(GalleryItem::from_media)
+            .collect()
     }
 
     async fn folder_albums(
@@ -353,25 +322,6 @@ impl GalleryEngine {
                 hidden: a.settings.hidden,
             })
             .collect())
-    }
-
-    async fn checked_album(
-        &self,
-        gallery: String,
-        album: String,
-    ) -> Result<SourceId, GalleryError> {
-        let account = self.auth.account_id().ok_or(pg_core::Error::NotFound)?;
-        let gallery = SourceId::new(gallery)?;
-        let album = SourceId::new(album)?;
-        if !self
-            .catalog
-            .source_belongs_to(album.clone(), account)
-            .await?
-            || !self.catalog.album_exists(gallery, album.clone()).await?
-        {
-            return Err(pg_core::Error::NotFound.into());
-        }
-        Ok(album)
     }
 }
 
@@ -413,42 +363,19 @@ impl GalleryEngine {
         backwards: bool,
         limit: u32,
     ) -> Result<GalleryPage, GalleryError> {
-        let cursor = cursor.as_deref().map(TimelineCursor::decode).transpose()?;
-        let size = PageSize::new(limit as usize)?;
         self.runtime.block_on(async {
-            if matches!(view, LibraryView::Photos) {
-                let page = self
-                    .catalog
-                    .timeline_window(
-                        self.photo_source().await?,
-                        self.auth.account_id(),
-                        cursor,
-                        backwards,
-                        size,
-                    )
-                    .await?;
-                return Ok(GalleryPage {
-                    items: self.items(page.items).await?,
-                    next: page.next.map(|c| c.encode()).transpose()?,
-                    previous: page.previous.map(|c| c.encode()).transpose()?,
-                });
-            }
-            let Some(source) = self.view_source(view).await? else {
-                return Ok(GalleryPage {
-                    items: vec![],
-                    next: None,
-                    previous: None,
-                });
-            };
-            let order = self.catalog.album_settings(source.clone()).await?.order;
             let page = self
-                .catalog
-                .window_ordered(Some(source), cursor, backwards, order, size)
+                .app
+                .page(view.into(), cursor.as_deref(), backwards, limit as usize)
                 .await?;
             Ok(GalleryPage {
-                items: self.items(page.items).await?,
-                next: page.next.map(|c| c.encode()).transpose()?,
-                previous: page.previous.map(|c| c.encode()).transpose()?,
+                items: page
+                    .items
+                    .into_iter()
+                    .map(GalleryItem::from_media)
+                    .collect::<Result<_, _>>()?,
+                next: page.next,
+                previous: page.previous,
             })
         })
     }
@@ -507,19 +434,7 @@ impl GalleryEngine {
     }
 
     pub fn count_at(&self, view: LibraryView) -> Result<u64, GalleryError> {
-        self.runtime.block_on(async {
-            if matches!(view, LibraryView::Photos) {
-                let photos = self.photo_source().await?;
-                return Ok(self
-                    .catalog
-                    .timeline_count(photos, self.auth.account_id())
-                    .await?);
-            }
-            match self.view_source(view).await? {
-                Some(source) => Ok(self.catalog.source_count(source).await?),
-                None => Ok(0),
-            }
-        })
+        Ok(self.runtime.block_on(self.app.count(view.into()))?)
     }
 }
 

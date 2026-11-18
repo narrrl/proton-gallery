@@ -64,70 +64,59 @@ pub struct AccountStatus {
     pub persistence_failed: bool,
 }
 
+impl From<pg_app::AccountState> for AccountStatus {
+    fn from(state: pg_app::AccountState) -> Self {
+        Self {
+            stage: match state.stage {
+                pg_app::SignInStage::SignedOut => SignInStage::SignedOut,
+                pg_app::SignInStage::SecondFactor => SignInStage::SecondFactor,
+                pg_app::SignInStage::MailboxPassword => SignInStage::MailboxPassword,
+                pg_app::SignInStage::Verification => SignInStage::Verification,
+                pg_app::SignInStage::Connected => SignInStage::Connected,
+            },
+            username: state.username,
+            verification_url: state.verification_url,
+            persistence_failed: state.persistence_failed,
+        }
+    }
+}
+
 #[uniffi::export]
 impl GalleryEngine {
     pub fn restore_session(&self) -> Result<(), GalleryError> {
-        self.runtime.block_on(self.auth.restore())?;
+        self.runtime.block_on(self.app.restore_session())?;
         Ok(())
     }
     pub fn account_status(&self) -> AccountStatus {
-        let s = self.auth.status();
-        AccountStatus {
-            stage: match s.stage {
-                Stage::SignedOut => SignInStage::SignedOut,
-                Stage::SecondFactor => SignInStage::SecondFactor,
-                Stage::MailboxPassword => SignInStage::MailboxPassword,
-                Stage::Verification => SignInStage::Verification,
-                Stage::Connected => SignInStage::Connected,
-            },
-            username: s.username,
-            verification_url: s.verification_url,
-            persistence_failed: s.persistence_failed,
-        }
+        self.app.account_state().into()
     }
     pub fn sign_in(&self, username: String, password: String) -> Result<(), GalleryError> {
         let password = zeroize::Zeroizing::new(password);
-        self.runtime.block_on(
-            self.auth
-                .begin(username, password.as_bytes().to_vec(), None),
-        )?;
+        self.runtime
+            .block_on(self.app.sign_in(username, password))?;
         Ok(())
     }
     pub fn submit_second_factor(&self, code: String) -> Result<(), GalleryError> {
-        self.runtime.block_on(self.auth.second_factor(code))?;
+        self.runtime.block_on(self.app.submit_second_factor(code))?;
         Ok(())
     }
     pub fn submit_mailbox_password(&self, password: String) -> Result<(), GalleryError> {
         let password = zeroize::Zeroizing::new(password);
         self.runtime
-            .block_on(self.auth.mailbox_password(password.as_bytes().to_vec()))?;
+            .block_on(self.app.submit_mailbox_password(password))?;
         Ok(())
     }
     pub fn submit_verification(&self, token: String) -> Result<(), GalleryError> {
-        self.runtime
-            .block_on(self.auth.begin(String::new(), vec![], Some(token)))?;
+        self.runtime.block_on(self.app.submit_verification(token))?;
         Ok(())
     }
     pub fn cancel_sign_in(&self) -> Result<(), GalleryError> {
-        self.runtime.block_on(self.auth.reset(false))?;
+        self.runtime.block_on(self.app.cancel_sign_in())?;
         Ok(())
     }
-    /// Sign out and forget what the catalog knew of the account: decrypted
-    /// names, album titles and backup state must not outlive the session.
+    /// Sign out and forget what the catalog knew of the account.
     pub fn sign_out(&self) -> Result<(), GalleryError> {
-        let account = self.auth.account_id();
-        self.runtime.block_on(self.auth.reset(true))?;
-        *self.photos.write().unwrap() = None;
-        if let Some(account) = account {
-            self.runtime.block_on(async {
-                // Running syncs stop with the session; wait so none writes after.
-                let _photos = self.photos_sync.lock().await;
-                let _drive = self.drive_sync.lock().await;
-                let _check = self.backup_check.lock().await;
-                self.catalog.forget_account(account).await
-            })?;
-        }
-        Ok(())
+        Ok(self.runtime.block_on(self.app.sign_out())?)
     }
     /// Media indexed so far by the running Photos sync.
     pub fn sync_progress(&self) -> u64 {
@@ -138,83 +127,12 @@ impl GalleryEngine {
         self.drive_indexed.load(Ordering::Relaxed)
     }
     pub fn sync_photos(&self) -> Result<u64, GalleryError> {
-        self.runtime.block_on(async {
-        let _guard=self.photos_sync.lock().await;
-        let account=self.auth.account().await?;
-        self.indexed.store(0,Ordering::Relaxed);
-        let photos=proton_drive_rs::ProtonPhotosClient::from_drive_client(account.drive);
-        let root=tokio::select! {biased;
-            _=account.cancel.cancelled()=>return Err(pg_core::Error::Cancelled.into()),
-            result=tokio::time::timeout(std::time::Duration::from_secs(60),photos.get_photos_root())=>result.map_err(|_|GalleryError::Operation{detail:"Proton took too long to respond. Try refreshing again.".into()})?.map_err(|e|{tracing::warn!("Photos root failed: {}",pg_drive::auth::cause_chain(&e));GalleryError::Operation{detail:"Couldn’t open Proton Photos. Check your connection, or sign in again if your session has expired.".into()}})?,
-        };
-        let Some(root)=root else {return Ok(0);};
-        let albums=photos.clone();
-        let source=Arc::new(pg_drive::photos::ProtonPhotosSource::new(photos,account.id.clone(),&root)?);
-        {
-            let mut cache=self.photos.write().unwrap();
-            if account.cancel.is_cancelled() {return Err(pg_core::Error::Cancelled.into());}
-            *cache=Some(source.clone());
-        }
-        let checkpoint=pg_core::indexer::scan(&self.catalog,source.as_ref(),true,&account.cancel,|p|{self.indexed.store(p.indexed,Ordering::Relaxed);}).await?;
-        // A complete listing is the truth: photos it no longer has were
-        // deleted elsewhere (or restored items return through the scan).
-        use pg_core::source::MediaSource;
-        if checkpoint.complete && let Some(listed)=source.listed_nodes() {
-            let removed=self.catalog.prune_source(source.spec().id.clone(),listed).await?;
-            if removed>0 { tracing::info!("{removed} photos are no longer in Proton Photos"); }
-        }
-        tokio::select!{biased; _=account.cancel.cancelled()=>{}, _=self.sync_albums(&albums,&account.id)=>{}}
-        Ok(checkpoint.indexed)
-    })
+        Ok(self.runtime.block_on(self.app.sync_photos(|_| {}))?)
     }
     /// Small decrypted previews stay in the caller's bounded memory cache.
     pub fn photo_thumbnail(&self, key: String) -> Result<Option<Vec<u8>>, GalleryError> {
-        self.runtime.block_on(async {
-            let key: AssetKey =
-                serde_json::from_str(&key).map_err(|_| GalleryError::Operation {
-                    detail: "Invalid photo identity".into(),
-                })?;
-            let account = self.auth.account().await?;
-            if account.id != key.account {
-                return Err(pg_core::Error::NotFound.into());
-            }
-            use pg_core::source::MediaSource;
-            let cached = self.photos.read().unwrap().as_ref().filter(|source|source.spec().account==account.id).cloned();
-            let photos_volume = match &cached {
-                Some(source) => Some(source.spec().volume.clone()),
-                None => self.catalog.account_sources(SourceKind::Photos, account.id.clone()).await?.first().map(|s| s.volume.clone()),
-            };
-            if photos_volume.as_ref() != Some(&key.volume) {
-                // Drive gallery media lives outside the Photos volume.
-                let uid = pg_drive::node_uid(&key);
-                return tokio::select! {biased;
-                    _=account.cancel.cancelled()=>Err(pg_core::Error::Cancelled.into()),
-                    result=account.drive.download_thumbnail(&uid,proton_drive_rs::ThumbnailType::Thumbnail)=>{
-                        let bytes=result.map_err(|e|{tracing::warn!("Drive thumbnail failed: {}",pg_drive::auth::cause_chain(&e));GalleryError::Operation{detail:"Couldn’t load this preview.".into()}})?;
-                        if bytes.as_ref().is_some_and(|b|b.len()>4*1024*1024) { return Err(pg_core::Error::Invalid("thumbnail exceeds budget".into()).into()); }
-                        Ok(bytes)
-                    }
-                };
-            }
-            let source = match cached {
-                Some(source) => source,
-                None => {
-                    let photos=proton_drive_rs::ProtonPhotosClient::from_drive_client(account.drive.clone());
-                    let root=tokio::select! {biased;
-                        _=account.cancel.cancelled()=>return Err(pg_core::Error::Cancelled.into()),
-                        result=photos.get_photos_root()=>result.map_err(|_|GalleryError::Operation{detail:"Couldn’t load Proton Photos previews.".into()})?.ok_or(pg_core::Error::NotFound)?,
-                    };
-                    let source=Arc::new(pg_drive::photos::ProtonPhotosSource::new(photos,account.id.clone(),&root)?);
-                    {
-                        let mut cache=self.photos.write().unwrap();
-                        if account.cancel.is_cancelled() {return Err(pg_core::Error::Cancelled.into());}
-                        *cache=Some(source.clone());
-                    }
-                    source
-                }
-            };
-            Ok(source.thumbnail(&key, &account.cancel).await?)
-        })
+        let key = parse_key(&key)?;
+        Ok(self.runtime.block_on(self.app.thumbnail(&key))?)
     }
     pub fn remember_photo_shape(
         &self,
@@ -222,16 +140,16 @@ impl GalleryEngine {
         width: u32,
         height: u32,
     ) -> Result<(), GalleryError> {
-        self.runtime.block_on(async {
-            let key: AssetKey =
-                serde_json::from_str(&key).map_err(|_| GalleryError::Operation {
-                    detail: "Invalid photo identity".into(),
-                })?;
-            if self.auth.account_id().as_ref() != Some(&key.account) {
-                return Err(pg_core::Error::NotFound.into());
-            }
-            self.catalog.remember_shape(key, width, height).await?;
-            Ok(())
-        })
+        let key = parse_key(&key)?;
+        Ok(self
+            .runtime
+            .block_on(self.app.remember_shape(key, width, height))?)
     }
+}
+
+/// An asset identity sent by the app as JSON.
+pub(crate) fn parse_key(key: &str) -> Result<AssetKey, GalleryError> {
+    serde_json::from_str(key).map_err(|_| GalleryError::Operation {
+        detail: "Invalid photo identity".into(),
+    })
 }

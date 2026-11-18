@@ -33,16 +33,24 @@ This is an independent, unofficial client and is not affiliated with or endorsed
   appear once, and the app uses the phone file when it is available.
 - **A grid that follows your photos.** Portraits and landscapes fit into justified rows with
   narrow gutters. Pinch to zoom; date headings adapt from days to months and years.
-- **Proton Photos albums.** Create and rename albums, add or remove photos, and delete an
-  album while keeping its photos in the timeline.
-- **View and share.** Open photos and videos, hide the controls with a tap, select multiple
-  items, and share phone or Proton originals with other apps.
+- **Proton Photos albums.** Albums have their own tab. Create and rename albums, add or
+  remove photos, and delete an album while keeping its photos in the timeline.
+- **Favorites.** Mark photos as favorites from the viewer or a selection. Proton media uses
+  Proton's Favorite tag; phone media uses Android's own favorites.
+- **View and share.** Open photos, stream Proton videos with seeking, page through the whole
+  view, hide the controls with a tap, select multiple items, and share phone or Proton
+  originals with other apps.
+- **Hidden albums.** Hide photos into a hidden album in one step. Hidden albums and their
+  photos stay out of the timeline, album lists, and Android's photo picker until the phone's
+  fingerprint, face, or screen lock confirms you.
 
 **Backup and storage**
 
 - **Automatic backup.** Choose phone folders, use Wi-Fi-only or charging-only conditions,
   and follow progress in the app or its notification. Start a backup manually or back up a
   selection immediately.
+- **Back up into albums.** Send each phone folder into a Proton album of its own (Camera
+  into "Camera"), and every backup into one more album, such as one named after the phone.
 - **Duplicate checks.** Existing copies are checked before upload. Different files with the
   same name get a new name instead of overwriting one another.
 - **Free up space.** Remove older phone copies after confirming they are backed up in Proton.
@@ -54,8 +62,8 @@ This is an independent, unofficial client and is not affiliated with or endorsed
 
 - **Any folder can be a gallery.** Choose a folder from My files; its subfolders become nested
   albums. Removing a gallery from the app leaves the Drive files untouched.
-- **Make albums easier to find.** Set local names, descriptions, covers, tags, and pins.
-  Hide albums behind the phone's fingerprint, face, or screen lock.
+- **Make albums easier to find.** Set local names, descriptions, covers, tags, and pins,
+  or hide an album behind the phone's lock.
 - **Keep Photos and Drive separate.** The top bar switches between the Photos timeline and
   your chosen folder galleries, while both use the same grid and viewer.
 
@@ -88,7 +96,12 @@ source using the steps below.
 | --- | --- |
 | Android app | Native Compose gallery, connected to Proton Photos and Drive |
 | Rust core and CLI | Local catalog, indexing, and headless diagnostics |
-| Linux and Windows desktop apps | Planned; a desktop gallery UI is not shipped yet |
+| Linux and Windows desktop apps | Native Rust/Iced Photos browser in `crates/pg-desktop`; account access, virtualized timeline and still viewer ([instructions and acceptance gaps](docs/DESKTOP.md)) |
+
+Run the desktop browser with `cargo run -p pg-desktop --bin proton-gallery --locked`,
+or browse account-free fixtures with `-- --demo 100000`. Android retains its Compose
+interface and UniFFI bridge; both frontends share application workflows in `pg-app`.
+The Compose desktop skeleton is retained while Iced runtime acceptance remains open.
 
 ## Getting started
 
@@ -98,9 +111,9 @@ source using the steps below.
 4. Switch to **Drive** and use **Add gallery** to choose a folder. Open its albums to browse
    photos and videos or customize their covers and tags.
 
-The Android app is usable and under active development. Proton videos currently download
-before playback; range streaming, persistent encrypted remote previews, and full remote
-offline retention are still being developed. The first sync of a large library can take time.
+The Android app is usable and under active development. Proton videos stream: playback and
+seeking start while the rest of the video downloads, and nothing is written to disk.
+Encrypted local caches and full offline copies of remote albums are still being developed. The first sync of a large library can take time.
 The [Android guide](docs/ANDROID.md) describes current behavior and platform limitations.
 
 ## Privacy and local storage
@@ -109,11 +122,16 @@ The [Android guide](docs/ANDROID.md) describes current behavior and platform lim
   mailbox passwords are not persisted.
 - **Browsing uses a local index.** The app stores photo metadata in a private SQLite database
   so navigation does not depend on reading the full remote library again.
-- **Viewing and sharing can create local copies.** Remote thumbnails are cached in memory;
-  original files and system-picker previews can be written to app-private cache storage.
-  The metadata database and these media caches are stored unencrypted within the app's private storage.
-- **Hidden albums are an app-level privacy control.** Hiding a Drive album does not hide its
-  photos from Proton Photos or Android's system photo picker.
+- **Viewing and sharing can create local copies.** Thumbnails are kept as small WebP files
+  (up to 256 MB) in the app's cache. Opened and shared originals and system-picker previews
+  are decrypted into app-private cache storage; copies older than a day are removed. The
+  metadata database and these caches are not encrypted beyond Android's app sandbox.
+- **Hidden albums are an app-level privacy control.** While a hidden album is open, the app
+  blocks screenshots and screen recording. Its thumbnails and originals stay in memory or
+  are deleted when hidden albums lock. Proton has no hidden albums, so the photos remain
+  visible in Proton Photos on other devices.
+- **Signing out removes the account's local data.** The catalog forgets decrypted names,
+  album titles, backup state, and photo-picker previews for that account.
 
 See [Android storage and account behavior](docs/ANDROID.md) and
 [architecture](docs/ARCHITECTURE.md) for the implementation details.
@@ -154,6 +172,7 @@ real-account indexing, diagnostics, and the core storage boundaries.
 | Guide | Contents |
 | --- | --- |
 | [Android](docs/ANDROID.md) | App behavior, sign-in, backup, picker integration, builds, and device testing |
+| [Desktop browser](docs/DESKTOP.md) | Iced launch commands, shared services, limits and acceptance gaps |
 | [Development](docs/DEVELOPMENT.md) | Rust workspace, CLI commands, local fixtures, and checks |
 | [Architecture](docs/ARCHITECTURE.md) | Data ownership, indexing, media storage, and platform boundaries |
 | [Validation](docs/VALIDATION.md) | Recorded checks, measurements, and device-testing results |
@@ -167,7 +186,7 @@ Issues and patches are welcome. Include the Android version, what you expected, 
 to reproduce a problem. Keep account credentials and private photo details out of reports.
 
 Run `bash scripts/check.sh` for the Rust checks and `bash scripts/build-android.sh check`
-for Android unit tests, lint, and a debug build. Core behavior belongs in Rust; Compose owns
+for Android unit tests, lint, and a debug build. Core behavior belongs in Rust; Compose and Iced own
 the Android interface and platform integration.
 
 ## License

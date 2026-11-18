@@ -92,6 +92,8 @@ class MediaActions(
     val largePhoto: suspend (GalleryItem) -> android.graphics.Bitmap? = { null },
     /** The full file; `private` ones are deleted again when hidden albums lock. */
     val original: suspend (GalleryItem, Boolean) -> java.io.File? = { _, _ -> null },
+    /** A Proton video to play while it downloads. */
+    val stream: suspend (GalleryItem) -> io.narl.protongallery.bridge.VideoStream? = { null },
     /** Move to the trash, after the user confirmed. */
     val delete: (List<GalleryItem>) -> Unit = {},
     val favorite: (List<GalleryItem>, Boolean) -> Unit = { _, _ -> },
@@ -580,7 +582,7 @@ private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
 fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier,
     selected: Boolean? = null, onLongClick: (() -> Unit)? = null, private: Boolean = false) {
     // A thumbnail already in memory shows in the first frame, without a placeholder.
-    val bitmap by produceState(loader.peek(item), item.id, item.revision, loader) { if (value == null) value = loader.load(item, private) }
+    val bitmap by produceState(loader.peek(item), item.id, item.revision, private, loader) { value = loader.peek(item) ?: loader.load(item, private) }
     val phoneOnly = item.phoneId != null && !item.backedUp
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
         .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)

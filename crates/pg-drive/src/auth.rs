@@ -243,8 +243,16 @@ impl AuthService {
     pub fn cancel(&self) {
         self.cancel.read().unwrap().cancel();
     }
+    /// Interrupt a challenge without racing a successful account commit.
+    pub fn cancel_pending(&self) {
+        let _gate = self.gate.lock().unwrap();
+        if self.status.read().unwrap().stage != Stage::Connected {
+            self.cancel();
+        }
+    }
     pub async fn reset(&self, sign_out: bool) -> Result<()> {
         // Serialize with refresh saves. A late refresh can never recreate a cleared session.
+        let mut cleanup_error = None;
         {
             let mut gate = self.gate.lock().unwrap();
             // Closing a dialog can race successful sign-in. A completed account
@@ -254,7 +262,7 @@ impl AuthService {
             }
             self.cancel();
             if sign_out {
-                self.vault.clear()?;
+                cleanup_error = self.vault.clear().err();
             }
             gate.generation += 1;
             gate.failed = false;
@@ -275,7 +283,7 @@ impl AuthService {
                 let _ = tokio::time::timeout(Duration::from_secs(8), session.end()).await;
             });
         }
-        Ok(())
+        cleanup_error.map_or(Ok(()), Err)
     }
     pub async fn begin(
         &self,
@@ -544,6 +552,7 @@ mod tests {
     struct Vault {
         bytes: Mutex<Option<Vec<u8>>>,
         fail: AtomicBool,
+        fail_clear: AtomicBool,
     }
     impl CredentialVault for Vault {
         fn load(&self) -> Result<Option<Vec<u8>>> {
@@ -557,6 +566,9 @@ mod tests {
             Ok(())
         }
         fn clear(&self) -> Result<()> {
+            if self.fail_clear.load(Ordering::Relaxed) {
+                return Err(AuthError("keyring locked"));
+            }
             *self.bytes.lock().unwrap() = None;
             Ok(())
         }
@@ -593,6 +605,7 @@ mod tests {
         assert!(payload.get("password").is_none());
         assert!(payload.get("mailbox_password").is_none());
         // A late dialog dismissal must not cancel a just-committed account.
+        auth.cancel_pending();
         auth.reset(false).await.unwrap();
         assert!(auth.account().await.is_ok());
         assert!(vault.load().unwrap().is_some());
@@ -657,5 +670,50 @@ mod tests {
             details: None,
         });
         assert!(!friendly(&e).to_string().contains("secret"));
+    }
+    #[tokio::test]
+    async fn cancelling_verification_drops_its_credentials_and_rejects_late_tokens() {
+        let auth = AuthService::new(Arc::new(Vault::default()));
+        auth.state.lock().await.verification =
+            Some(("user".into(), Zeroizing::new(b"password".to_vec())));
+        auth.publish(
+            Stage::Verification,
+            "user".into(),
+            Some("https://verify.proton.me/".into()),
+        );
+        let old = auth.cancel.read().unwrap().clone();
+        auth.reset(false).await.unwrap();
+        assert!(old.is_cancelled());
+        assert!(auth.state.lock().await.verification.is_none());
+        assert!(
+            auth.begin(String::new(), vec![], Some("late token".into()))
+                .await
+                .is_err()
+        );
+        assert_eq!(auth.status().stage, Stage::SignedOut);
+    }
+    #[tokio::test]
+    async fn failed_keyring_deletion_still_invalidates_old_refresh_writers() {
+        let vault = Arc::new(Vault::default());
+        let bytes = saved().encode().unwrap();
+        vault.save(&bytes).unwrap();
+        let auth = AuthService::new(vault.clone());
+        auth.restore().await.unwrap();
+        let old = auth.account().await.unwrap();
+        let writer = RefreshWriter {
+            vault: vault.clone(),
+            gate: auth.gate.clone(),
+            template: saved(),
+            generation: 0,
+        };
+        vault.fail_clear.store(true, Ordering::Relaxed);
+        assert!(auth.reset(true).await.is_err());
+        assert!(old.cancel.is_cancelled());
+        assert_eq!(auth.status().stage, Stage::SignedOut);
+        writer.write(tokens());
+        assert_eq!(vault.load().unwrap().unwrap().as_slice(), bytes.as_slice());
+        vault.fail_clear.store(false, Ordering::Relaxed);
+        auth.reset(true).await.unwrap();
+        assert!(vault.load().unwrap().is_none());
     }
 }

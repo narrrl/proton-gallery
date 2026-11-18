@@ -5,70 +5,32 @@
 //! stays put while records load, and only a new outline, made after media was
 //! added or removed, moves it.
 use super::*;
-use pg_core::outline::OutlineEntry;
 
 /// Every item of a view in display order. Taken once; later changes to the
 /// catalog need a new outline.
 #[derive(uniffi::Object)]
-pub struct ViewOutline {
-    keys: Vec<AssetKey>,
-    ids: Vec<String>,
-    times: Vec<i64>,
-    ratios: Vec<f32>,
-}
+pub struct ViewOutline(pg_app::Outline);
 
 #[uniffi::export]
 impl ViewOutline {
     pub fn count(&self) -> u32 {
-        self.ids.len() as u32
+        self.0.len() as u32
     }
 
     /// Each item's [`GalleryItem::id`].
     pub fn ids(&self) -> Vec<String> {
-        self.ids.clone()
+        self.0.ids.clone()
     }
 
     /// Each item's [`GalleryItem::sort_time`].
     pub fn times(&self) -> Vec<i64> {
-        self.times.clone()
+        self.0.times.clone()
     }
 
     /// Each item's width divided by its height, or 0 when not known yet.
     pub fn ratios(&self) -> Vec<f32> {
-        self.ratios.clone()
+        self.0.ratios.clone()
     }
-}
-
-impl ViewOutline {
-    fn new(entries: Vec<OutlineEntry>) -> Result<Self, GalleryError> {
-        let mut outline = Self {
-            keys: Vec::with_capacity(entries.len()),
-            ids: Vec::with_capacity(entries.len()),
-            times: Vec::with_capacity(entries.len()),
-            ratios: Vec::with_capacity(entries.len()),
-        };
-        for entry in entries {
-            outline.ids.push(item_id(&entry.key)?);
-            outline.times.push(entry.sort_time);
-            outline.ratios.push(if entry.height > 0 {
-                entry.width as f32 / entry.height as f32
-            } else {
-                0.0
-            });
-            outline.keys.push(entry.key);
-        }
-        Ok(outline)
-    }
-}
-
-/// The bridge id of an item: account, volume and node, so different sources
-/// cannot collide. Media saved in the app keeps its plain node id.
-pub(crate) fn item_id(key: &AssetKey) -> Result<String, GalleryError> {
-    Ok(if key.account.as_str() == "local-device" {
-        key.node.to_string()
-    } else {
-        key.stable_id()?
-    })
 }
 
 /// How many favorites changed, and how many could not.
@@ -82,22 +44,8 @@ pub struct FavoriteOutcome {
 impl GalleryEngine {
     /// The outline of `view`.
     pub fn outline_at(&self, view: LibraryView) -> Result<Arc<ViewOutline>, GalleryError> {
-        self.runtime.block_on(async {
-            let entries = if matches!(view, LibraryView::Photos) {
-                self.catalog
-                    .timeline_outline(self.photo_source().await?, self.auth.account_id())
-                    .await?
-            } else {
-                match self.view_source(view).await? {
-                    Some(source) => {
-                        let order = self.catalog.album_settings(source.clone()).await?.order;
-                        self.catalog.source_outline(source, order).await?
-                    }
-                    None => vec![],
-                }
-            };
-            Ok(Arc::new(ViewOutline::new(entries)?))
-        })
+        let outline = self.runtime.block_on(self.app.outline(view.into()))?;
+        Ok(Arc::new(ViewOutline(outline)))
     }
 
     /// The records of `count` items from `start` of `outline`. An item removed
@@ -108,28 +56,15 @@ impl GalleryEngine {
         start: u32,
         count: u32,
     ) -> Result<Vec<Option<GalleryItem>>, GalleryError> {
-        let start = (start as usize).min(outline.keys.len());
-        let end = start
-            .saturating_add((count as usize).min(PageSize::MAX))
-            .min(outline.keys.len());
-        let keys = outline.keys[start..end].to_vec();
-        self.runtime.block_on(async {
-            let found = self.catalog.assets_by_key(keys).await?;
-            let present: Vec<usize> = found
-                .iter()
-                .enumerate()
-                .filter_map(|(index, asset)| asset.as_ref().map(|_| index))
-                .collect();
-            let mut items = self
-                .items(found.iter().flatten().cloned().collect())
-                .await?
-                .into_iter();
-            let mut result = vec![None; found.len()];
-            for index in present {
-                result[index] = items.next();
-            }
-            Ok(result)
-        })
+        let items = self.runtime.block_on(self.app.outline_items(
+            &outline.0,
+            start as usize,
+            count as usize,
+        ))?;
+        items
+            .into_iter()
+            .map(|item| item.map(GalleryItem::from_media).transpose())
+            .collect()
     }
 
     /// Add Proton photos (their `asset_key`s) to the favorites, or take them

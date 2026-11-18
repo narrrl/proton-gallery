@@ -1,0 +1,30 @@
+[package]
+name = "pg-desktop"
+description = "Proton Gallery for Linux and Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "proton-gallery"
+path = "src/main.rs"
+
+[dependencies]
+pg-app.workspace = true
+pg-core.workspace = true
+pg-drive.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
+iced = { version = "=0.14.0", features = ["image", "tokio", "advanced"] }
+keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust", "windows-native"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+zeroize.workspace = true
+directories.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+
+[lints]
+workspace = true

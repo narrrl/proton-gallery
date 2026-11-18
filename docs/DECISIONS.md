@@ -14,8 +14,8 @@
 | --- | --- | --- |
 | Local SQLite catalog with incremental updates | Remote listing must not gate repeat browsing | Measure 100k-record queries and scan/event convergence |
 | Existing pure Rust Proton SDK | Existing authentication, Photos and revision streaming capabilities | Audit 0.9-to-0.12 differences and selected release availability |
-| egui desktop, Compose Android | Maximum reuse of Rust desktop/player work and native Android lifecycle integration | M0 must prove grid, accessibility, DPI, GPU integration and Android bridge |
-| libmpv desktop; Android backend after spike | Desktop integration exists; Android choice affects codec reach, battery and package size | Compare Media3 custom DataSource to current mpv/JNI using the same Rust bytes |
+| Compose on Android, Rust/Iced on desktop | Shared account/library/sync/media services now live in `pg-app`; Iced calls Rust directly while Android preserves its UniFFI/platform integrations | Complete the bounded Photos/still-viewer milestone first; retain the Compose desktop skeleton until Linux/Windows runtime, accessibility and real-account acceptance is recorded |
+| Media3 on Android, streaming through a custom `DataSource`; desktop player to be chosen | Android: Rust serves byte ranges from decrypted revision blocks, so playback and seeking start before the whole file arrives. Desktop: libmpv or VLC through a callback stream over the same Rust reads | Android: measure start and seek time on slow networks; real formats. Desktop: see [desktop plan](DESKTOP.md) |
 | Per-account encrypted media object store | Retained media should not become plaintext files by default; block encryption preserves seeking | Measure overhead and prove crash publication and key recovery on all targets |
 | Plaintext app-private metadata catalog initially | Avoid unproven encrypted-database distribution/migration complexity | Disclose filename/date leakage locally; reconsider full catalog encryption before a vault claim |
 | Original-quality offline retention | An offline badge must mean the whole original is locally readable | Network-denied restart tests including seeks and expired sessions |
@@ -42,7 +42,7 @@
 
 ## Questions to settle with prototypes
 
-1. Can egui meet the gallery's interaction/accessibility/color requirements on real Linux and Windows devices using the chosen player renderer?
+1. Does Iced meet the gallery’s scrolling, accessibility, and color requirements on real Linux (Wayland and X11) and Windows machines? Video integration remains a later milestone.
 2. Does Media3 cover enough actual uploaded video formats to justify the Android integration change? What is the measured cost of FFI copies versus mpv reuse?
 3. Which SDK page, acknowledgement, verification, and upload-recovery APIs are missing and should be upstreamed first?
 4. Can encrypted retained blocks meet seek targets on low-end flash without excessive small-file overhead? Start with simple block files; consider packfiles only after measurement, since compaction complicates crash safety.
@@ -74,3 +74,13 @@ Data at rest otherwise:
 - The catalog stays plain SQLite (mode 600, app-private, under Android's file-based encryption). It holds decrypted names, album titles and the hidden flag. Signing out deletes everything of the account from it and rewrites the file (`VACUUM`), and deletes the thumbnail, picker and original caches. SQLCipher would add about 3 MB, an OpenSSL cross-build and a key migration; reconsider it before hidden albums are described as a vault.
 - Decrypted originals in the cache expire after a day, checked whenever the app leaves the screen. Grid thumbnails of non-hidden media stay on disk (320 px WebP, 256 MB) until sign-out or the system clears the cache.
 - Release builds drop verbose logs; warnings name the kind of failure only, never paths or file names.
+
+## 2026-11-18: complete the Iced browser milestone
+
+The approved plan supersedes the Compose desktop migration proposal for this milestone.
+Keep reusable workflows in `pg-app` and frontend state in Iced. Preserve Android's UniFFI
+surface and platform integrations. Desktop scope is account access, Photos browsing and
+still viewing; video, albums/Drive controls, backup and packaging are later work.
+The Compose skeleton is retained as an acceptance fallback, not an active migration target.
+Encoded demo fixtures use the real media-provider/decoder path. Linux/Windows CI compilation
+is distinct from runtime acceptance, and unperformed checks remain explicit in VALIDATION.md.
