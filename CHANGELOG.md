@@ -2,8 +2,35 @@
 
 ## Unreleased
 
-- Desktop Drive galleries and subfolders use cover cards in the same scroll area as their media.
-- Android can choose an album cover from its subfolders.
+## 0.3.0
+
+### Install
+
+- Android 12 or later. Download the signed `proton-gallery-v0.3.0.apk` for
+  arm64 or x86_64. It updates the regular Proton Gallery app in place.
+- Ubuntu 24.04 and Debian 13. Download the x86_64 `.deb`.
+- Fedora. Download the signed x86_64 `.rpm` and the accompanying public key.
+- Arch Linux. Check out this tag and run `cd packaging && makepkg -fi`.
+  Windows users can build the desktop app from source.
+
+### Desktop and Drive
+
+- Browse and manage Drive galleries inline in Proton Drive Linux Photos, with
+  album covers, nested folders, public links, and gated access to hidden albums.
+- Desktop gallery zoom uses Ctrl+mousewheel and keeps the pointer anchored.
+- Drive gallery folders use cover cards in the same scroll area as their media.
+- Browse Proton Photos with incremental sync, complete album loading state, and
+  more responsive photo grids.
+
+### Android
+
+- Background Photos sync uses incremental Proton volume event cursors, with
+  improved thumbnails and clearer loading and deletion updates.
+- Hidden galleries can use covers from nested folders without exposing their
+  contents in the public album list.
+- Choose Android album covers from nested folders.
+
+## 0.2.0
 
 ## 0.2.0
 
