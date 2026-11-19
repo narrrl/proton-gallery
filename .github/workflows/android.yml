@@ -14,6 +14,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -64,14 +65,24 @@ jobs:
         with:
           targets: aarch64-linux-android, x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-ndk-${{ env.NDK_VERSION }}-cargo-ndk-${{ env.CARGO_NDK_VERSION }}
+          cache-on-failure: true
       # The action's default package list includes "tools", which the SDK
       # repository no longer offers, so name the packages explicitly.
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools ndk;${{ env.NDK_VERSION }} build-tools;${{ env.BUILD_TOOLS }} platforms;android-36
       - name: cargo-ndk
-        run: cargo install cargo-ndk --version "${CARGO_NDK_VERSION}" --locked
+        run: |
+          if ! cargo ndk --version 2>/dev/null | grep -Fxq "cargo-ndk ${CARGO_NDK_VERSION}"; then
+            cargo install cargo-ndk --version "${CARGO_NDK_VERSION}" --locked
+          fi
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Branch reruns can reuse the resolved SDK jar and Gradle state.
+          # Fork pull requests can restore the base cache.
+          cache-read-only: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
       - name: Unit tests and lint
         run: android/gradlew -p android --no-daemon testDebugUnitTest lintDebug
       - name: Release APK
