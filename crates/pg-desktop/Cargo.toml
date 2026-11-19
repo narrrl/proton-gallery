@@ -11,8 +11,6 @@ name = "proton-gallery"
 path = "src/main.rs"
 
 [dependencies]
-argon2 = { version = "0.5", features = ["zeroize"] }
-getrandom.workspace = true
 pg-app.workspace = true
 pg-core.workspace = true
 pg-drive.workspace = true
@@ -29,10 +27,16 @@ directories.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 gstreamer-video = "0.25"
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = ["Security_Credentials_UI", "Win32_Foundation", "Win32_System_WinRT"] }
+windows-future = "0.3"

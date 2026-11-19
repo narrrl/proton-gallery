@@ -83,38 +83,3 @@ impl CredentialVault for TemporaryVault {
         Ok(())
     }
 }
-
-/// Check or set the machine-local passphrase protecting hidden Gallery views.
-/// The keyring stores a salted Argon2id verifier scoped to this account.
-pub fn unlock_hidden(username: &str, passphrase: &str) -> std::result::Result<(), String> {
-    use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-    let entry = keyring::Entry::new(SERVICE, &format!("hidden-albums:{username}"))
-        .map_err(|_| "The system keyring is unavailable.".to_owned())?;
-    let argon = argon2::Argon2::default();
-    match entry.get_password() {
-        Ok(stored) => {
-            let hash = PasswordHash::new(&stored)
-                .map_err(|_| "The local hidden album passphrase couldn’t be read.".to_owned())?;
-            argon
-                .verify_password(passphrase.as_bytes(), &hash)
-                .map_err(|_| "The Gallery passphrase is incorrect.".to_owned())
-        }
-        Err(keyring::Error::NoEntry) => {
-            if passphrase.chars().count() < 12 {
-                return Err("Choose a Gallery passphrase with at least 12 characters.".into());
-            }
-            let mut bytes = [0; 16];
-            getrandom::fill(&mut bytes)
-                .map_err(|_| "Couldn’t generate the passphrase salt.".to_owned())?;
-            let salt = SaltString::encode_b64(&bytes)
-                .map_err(|_| "Couldn’t generate the passphrase salt.".to_owned())?;
-            let hash = argon
-                .hash_password(passphrase.as_bytes(), &salt)
-                .map_err(|_| "Couldn’t protect this passphrase.".to_owned())?;
-            entry.set_password(&hash.to_string()).map_err(|_| {
-                "Couldn’t save the passphrase verifier in the system keyring.".to_owned()
-            })
-        }
-        Err(_) => Err("The system keyring is locked or unavailable.".into()),
-    }
-}

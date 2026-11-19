@@ -5,6 +5,7 @@
 //! (100,000 by default) in a throwaway directory, without an account.
 mod captcha;
 mod design;
+mod device_auth;
 mod gallery;
 mod grid;
 mod metrics;

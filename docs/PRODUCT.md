@@ -36,8 +36,8 @@ visibility in an encrypted settings device in the Proton account. Each upgraded
 client applies changes after a successful check. Gallery can skip settings reads
 when the Proton event feeds and the local outbox are idle.
 
-Hidden albums unlock with Android device authentication or a desktop Gallery
-passphrase. Their media is excluded from the ordinary Gallery library and its
+Hidden albums unlock with your device sign-in on Android, Linux, and Windows.
+Their media is excluded from the ordinary Gallery library and its
 cloud picker. Cloud originals remain accessible in Proton Photos or Drive and
 through existing shares. For an upgrade, refresh Android first to import prior
 phone settings, then refresh the other clients.

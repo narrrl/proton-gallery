@@ -288,7 +288,7 @@ struct HiddenAccess {
     private_album: bool,
     busy: bool,
     request: u64,
-    passphrase: Zeroizing<String>,
+    verified: bool,
     error: Option<String>,
 }
 
@@ -322,6 +322,7 @@ pub struct Gallery {
     albums_loading: bool,
     drive: DriveNavigation,
     hidden: HiddenAccess,
+    window_focused: bool,
     drive_link: DriveLinkPanel,
     row_target: u32,
     favorite_request: u64,
@@ -428,8 +429,8 @@ pub enum Message {
     OpenAlbum(String),
     BackToAlbums,
     OpenHiddenPrompt,
-    HiddenPassphrase(String),
-    SubmitHiddenPassphrase,
+    WindowFocusChanged(bool),
+    AuthenticateHidden,
     HiddenUnlocked(u64, Generation, Result<(), String>),
     LockHidden,
     OpenDriveLink,
@@ -521,6 +522,7 @@ impl Gallery {
             albums_loading: false,
             drive: DriveNavigation::default(),
             hidden: HiddenAccess::default(),
+            window_focused: true,
             drive_link: DriveLinkPanel::default(),
             row_target: ROW_TARGET,
             favorite_request: 0,
@@ -630,8 +632,12 @@ impl Gallery {
                     .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::RetryPhotos));
             }
             subscriptions.push(iced::event::listen_with(|event, _, _| match event {
-                iced::Event::Window(window::Event::Focused) => Some(Message::CheckPhotos),
-                iced::Event::Window(window::Event::Unfocused) => Some(Message::LockHidden),
+                iced::Event::Window(window::Event::Focused) => {
+                    Some(Message::WindowFocusChanged(true))
+                }
+                iced::Event::Window(window::Event::Unfocused) => {
+                    Some(Message::WindowFocusChanged(false))
+                }
                 _ => None,
             }));
         }
@@ -1410,35 +1416,31 @@ impl Gallery {
                 }
                 Task::none()
             }
-            Message::HiddenPassphrase(value) => {
-                if self.hidden.prompt && value.len() <= 1024 {
-                    self.hidden.passphrase = Zeroizing::new(value);
+            Message::WindowFocusChanged(focused) => {
+                self.window_focused = focused;
+                if focused {
+                    Task::batch([
+                        self.reveal_verified_hidden(),
+                        self.update(Message::CheckPhotos),
+                    ])
+                } else if self.hidden.unlocked {
+                    self.update(Message::LockHidden)
+                } else {
+                    Task::none()
                 }
-                Task::none()
             }
-            Message::SubmitHiddenPassphrase => {
-                if !self.hidden.prompt || self.hidden.busy || self.hidden.passphrase.is_empty() {
+            Message::AuthenticateHidden => {
+                if !self.hidden.prompt || self.hidden.busy || self.hidden.verified {
                     return Task::none();
                 }
                 let Some(app) = self.app() else {
                     return Task::none();
                 };
                 let generation = app.generation();
-                let username = self.account.username.clone();
-                let passphrase = std::mem::take(&mut self.hidden.passphrase);
                 self.hidden.busy = true;
+                self.hidden.error = None;
                 self.hidden.request += 1;
-                let request = self.hidden.request;
-                Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            vault::unlock_hidden(&username, &passphrase)
-                        })
-                        .await
-                        .map_err(|_| "Couldn’t read the hidden album passphrase.".to_owned())?
-                    },
-                    move |result| Message::HiddenUnlocked(request, generation, result),
-                )
+                crate::device_auth::authenticate(self.hidden.request, generation)
             }
             Message::HiddenUnlocked(request, generation, result) => {
                 if request != self.hidden.request || !self.current(generation) {
@@ -1447,10 +1449,8 @@ impl Gallery {
                 self.hidden.busy = false;
                 match result {
                     Ok(()) => {
-                        self.hidden.prompt = false;
-                        self.hidden.unlocked = true;
-                        self.hidden.error = None;
-                        self.load_albums()
+                        self.hidden.verified = true;
+                        self.reveal_verified_hidden()
                     }
                     Err(error) => {
                         self.hidden.error = Some(error);
@@ -1855,6 +1855,16 @@ impl Gallery {
         self.drive.request += 1;
         self.albums.clear();
         self.albums_request += 1;
+    }
+
+    fn reveal_verified_hidden(&mut self) -> Task<Message> {
+        if !self.window_focused || !self.hidden.verified {
+            return Task::none();
+        }
+        self.hidden.verified = false;
+        self.hidden.prompt = false;
+        self.hidden.unlocked = true;
+        self.load_albums()
     }
 
     fn close_hidden_access(&mut self) {
@@ -3329,19 +3339,26 @@ impl Gallery {
         if self.hidden.prompt {
             let mut form = column![
                 text("Hidden albums").size(24).font(design::MEDIUM),
-                text("Enter your Gallery passphrase. On first use, choose a passphrase for this device."),
-                text_input("Gallery passphrase", &self.hidden.passphrase)
-                    .secure(true)
-                    .on_input(Message::HiddenPassphrase)
-                    .on_submit(Message::SubmitHiddenPassphrase)
-                    .padding(12),
+                text("Use your device sign-in to unlock hidden albums."),
                 row![
-                    button("Cancel").on_press(Message::LockHidden).style(design::secondary),
-                    button(if self.hidden.busy { "Checking…" } else { "Unlock" })
-                        .on_press_maybe((!self.hidden.busy).then_some(Message::SubmitHiddenPassphrase))
-                        .style(design::primary),
-                ].spacing(8),
-            ].spacing(12).max_width(420);
+                    button("Cancel")
+                        .on_press(Message::LockHidden)
+                        .style(design::secondary),
+                    button(if self.hidden.busy {
+                        "Checking…"
+                    } else {
+                        "Unlock"
+                    })
+                    .on_press_maybe(
+                        (!self.hidden.busy && !self.hidden.verified)
+                            .then_some(Message::AuthenticateHidden)
+                    )
+                    .style(design::primary),
+                ]
+                .spacing(8),
+            ]
+            .spacing(12)
+            .max_width(420);
             if let Some(error) = &self.hidden.error {
                 form = form.push(text(error.as_str()));
             }
