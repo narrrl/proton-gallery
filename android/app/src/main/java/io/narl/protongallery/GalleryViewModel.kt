@@ -570,10 +570,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    fun setCover(item: GalleryItem) {
-        val current = mutableOptions.value ?: return
+    fun setCover(target: GalleryLocation, item: GalleryItem) {
+        val repo = repository.value ?: return
+        val generation = account.value.generation
         if (item.assetKey.isEmpty()) return
-        saveOptions(current.copy(coverKey = item.assetKey), "Cover updated")
+        viewModelScope.launch(guard) {
+            try {
+                val current = repo.options(target) ?: return@launch
+                val saved = repo.setOptions(target, current.copy(coverKey = item.assetKey)) ?: return@launch
+                if (account.value.generation != generation) return@launch
+                if (location.value == target) mutableOptions.value = saved
+                refreshGallerySettings()
+                mutableState.update { it.copy(revision = it.revision + 1, message = "Cover updated", error = false) }
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "The cover couldn’t be saved. Try again.", error = true) }
+            }
+        }
     }
 
     suspend fun remoteThumbnail(item: GalleryItem) = repository.value?.thumbnail(item)

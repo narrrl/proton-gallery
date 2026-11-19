@@ -39,6 +39,9 @@ const ROW_TARGET: u32 = 200;
 const SIDEBAR: f32 = 224.0;
 const TOOLBAR: f32 = 104.0;
 const GUTTER: f32 = 24.0;
+const COVER_WIDTH: f32 = 210.0;
+const COVER_HEIGHT: f32 = 174.0;
+const COVER_GAP: f32 = 12.0;
 /// Room for the vertical scrollbar beside the grid.
 const SCROLLBAR: f32 = 14.0;
 
@@ -115,6 +118,8 @@ impl std::fmt::Display for Section {
 #[derive(Default)]
 struct DriveNavigation {
     trail: Vec<pg_core::library::Album>,
+    parent_scroll: Vec<f32>,
+    restore_scroll: Option<f32>,
     chooser: Option<Vec<FolderChoice>>,
     listing: Option<FolderListing>,
     request: u64,
@@ -244,6 +249,7 @@ pub enum Message {
         usize,
         Result<Option<Decoded>, String>,
     ),
+    CoverLoaded(u64, Generation, String, Result<Option<Decoded>, String>),
     Open(usize),
     Close,
     RetryViewer,
@@ -839,6 +845,8 @@ impl Gallery {
                             if self.album_open {
                                 self.album_open = false;
                                 self.drive.trail.clear();
+                                self.drive.parent_scroll.clear();
+                                self.drive.restore_scroll = None;
                                 self.view = View::Photos;
                             }
                             let originals = self.originals.clone();
@@ -942,6 +950,18 @@ impl Gallery {
                         tracing::debug!("thumbnail failed: {error}");
                         self.thumbs_failed.insert(id);
                     }
+                }
+                self.request_visible()
+            }
+            Message::CoverLoaded(request, generation, id, result) => {
+                if request != self.albums_request || !self.current(generation) {
+                    return Task::none();
+                }
+                self.thumbs_loading.remove(&id);
+                if let Ok(Some(decoded)) = result {
+                    self.thumbs.insert(id, decoded, thumbs::BUDGET);
+                } else {
+                    self.thumbs_failed.insert(id);
                 }
                 self.request_visible()
             }
@@ -1136,6 +1156,7 @@ impl Gallery {
                     if let Some(album) = self.albums.iter().find(|a| {
                         a.source.id.as_str() == id && (self.hidden.unlocked || !a.settings.hidden)
                     }) {
+                        self.drive.parent_scroll.push(self.scroll_top);
                         self.drive.trail.push(album.clone());
                         return self.show_drive_place();
                     }
@@ -1165,7 +1186,9 @@ impl Gallery {
             Message::BackToAlbums => {
                 if self.section == Section::Drive {
                     self.drive.trail.pop();
-                    self.show_drive_place()
+                    let task = self.show_drive_place();
+                    self.drive.restore_scroll = self.drive.parent_scroll.pop();
+                    task
                 } else {
                     self.update(Message::Navigate(Section::Albums))
                 }
@@ -1232,6 +1255,8 @@ impl Gallery {
                     self.clear_media();
                     self.album_open = false;
                     self.drive.trail.clear();
+                    self.drive.parent_scroll.clear();
+                    self.drive.restore_scroll = None;
                     self.view = View::Photos;
                 }
                 if reload {
@@ -1380,6 +1405,8 @@ impl Gallery {
                 self.drive.busy = false;
                 if removed && result.is_ok() {
                     self.drive.trail.clear();
+                    self.drive.parent_scroll.clear();
+                    self.drive.restore_scroll = None;
                 }
                 self.sync.error = result.err();
                 if self.section == Section::Drive {
@@ -1392,11 +1419,13 @@ impl Gallery {
                     return Task::none();
                 }
                 self.albums_loading = false;
+                self.thumbs_loading
+                    .retain(|key, _| !key.starts_with("cover:"));
                 match result {
                     Ok(albums) => self.albums = albums,
                     Err(error) => self.sync.error = Some(error),
                 }
-                Task::none()
+                Task::batch([self.restore_drive_scroll(), self.request_visible()])
             }
             Message::GridSize(target) => {
                 self.row_target = target.clamp(100, 320);
@@ -1558,6 +1587,8 @@ impl Gallery {
     fn reset_drive_navigation(&mut self) {
         self.close_drive_link();
         self.drive.trail.clear();
+        self.drive.parent_scroll.clear();
+        self.drive.restore_scroll = None;
         self.drive.chooser = None;
         self.drive.listing = None;
         self.drive.request += 1;
@@ -1792,7 +1823,7 @@ impl Gallery {
         }
         let anchor_id = self
             .layout
-            .anchor(self.scroll_top)
+            .anchor(self.media_top())
             .and_then(|(item, offset)| {
                 self.outline
                     .as_ref()
@@ -1857,7 +1888,11 @@ impl Gallery {
             self.grid_width() as u32,
             self.row_target,
         );
-        let scroll = self.restore(anchor);
+        let scroll = if self.drive.restore_scroll.is_some() {
+            self.restore_drive_scroll()
+        } else {
+            self.restore(anchor)
+        };
         Task::batch([scroll, self.request_visible()])
     }
 
@@ -1886,14 +1921,31 @@ impl Gallery {
         let Some(outline) = &self.outline else {
             return Task::none();
         };
-        let anchor = self.layout.anchor(self.scroll_top);
+        let anchor = self.layout.anchor(self.media_top());
         self.layout = Layout::plan(&self.ratios, &outline.times, width as u32, self.row_target);
         let scroll = self.restore(anchor);
         Task::batch([scroll, self.request_visible()])
     }
 
     fn restore(&mut self, anchor: Option<(usize, f32)>) -> Task<Message> {
-        let top = anchor.and_then(|a| self.layout.restore(a)).unwrap_or(0.0);
+        let prefix = self.cover_height();
+        let top = anchor
+            .and_then(|a| self.layout.restore(a))
+            .map_or(self.scroll_top.min(prefix), |y| prefix + y);
+        self.scroll_absolute(top)
+    }
+
+    fn restore_drive_scroll(&mut self) -> Task<Message> {
+        if self.albums_loading || (self.album_open && self.outline_work.is_some()) {
+            return Task::none();
+        }
+        self.drive
+            .restore_scroll
+            .take()
+            .map_or_else(Task::none, |top| self.scroll_absolute(top))
+    }
+
+    fn scroll_absolute(&mut self, top: f32) -> Task<Message> {
         self.scroll_top = top;
         operation::scroll_to(
             grid_id(),
@@ -1942,17 +1994,52 @@ impl Gallery {
         if !self.browsing() {
             return Task::none();
         }
-        let (Some(app), Some(outline)) = (self.app().cloned(), self.outline.clone()) else {
+        let Some(app) = self.app().cloned() else {
             return Task::none();
         };
-        let rows = self.layout.visible(self.scroll_top, self.viewport_height);
+        let generation = app.generation();
+        let mut tasks = Vec::new();
+        let provider = self.provider(&app);
+        for album in &self.albums[self.visible_covers()] {
+            if self.thumbs_loading.len() >= THUMBS_IN_FLIGHT {
+                break;
+            }
+            let Some(cover) = &album.cover else { continue };
+            let id = cover_id(cover);
+            if self.thumbs.contains(&id)
+                || self.thumbs_loading.contains_key(&id)
+                || self.thumbs_failed.contains(&id)
+            {
+                continue;
+            }
+            let request = self.albums_request;
+            let provider = provider.clone();
+            let key = cover.key.clone();
+            let done = id.clone();
+            let (task, handle) = Task::perform(
+                async move {
+                    let Some(bytes) = provider.thumbnail(&key).await.map_err(shown)? else {
+                        return Ok(None);
+                    };
+                    thumbs::decode_async(bytes, thumbs::THUMB_SIDE)
+                        .await
+                        .map(Some)
+                },
+                move |result| Message::CoverLoaded(request, generation, done.clone(), result),
+            )
+            .abortable();
+            self.thumbs_loading.insert(id, handle.abort_on_drop());
+            tasks.push(task);
+        }
+        let Some(outline) = self.outline.clone() else {
+            return Task::batch(tasks);
+        };
+        let rows = self.layout.visible(self.media_top(), self.media_height());
         let items = self.layout.items_in(rows);
         if items.is_empty() {
-            return Task::none();
+            return Task::batch(tasks);
         }
-        let generation = app.generation();
         let request = self.library_request;
-        let mut tasks = Vec::new();
         let first_page = items.start / PAGE;
         let last_page = (items.end - 1) / PAGE;
         let keep = first_page.saturating_sub(KEPT_PAGES / 2)..=last_page + KEPT_PAGES / 2;
@@ -2083,6 +2170,7 @@ impl Gallery {
         let Some((y, row_height)) = self.layout.item_bounds(focus) else {
             return Task::none();
         };
+        let y = y + self.cover_height();
         let top = if y < self.scroll_top {
             y - grid::HEADING
         } else if y + row_height > self.scroll_top + self.viewport_height {
@@ -2790,63 +2878,106 @@ impl Gallery {
             )
             .into();
         }
-        scrollable(container(self.album_rows()).padding([0, GUTTER as u16]))
-            .height(Length::Fill)
-            .into()
+        self.media_grid()
+    }
+
+    fn cover_columns(&self) -> usize {
+        ((self.grid_width() + COVER_GAP) / (COVER_WIDTH + COVER_GAP))
+            .floor()
+            .max(1.0) as usize
+    }
+
+    fn cover_height(&self) -> f32 {
+        let count = if matches!(self.section, Section::Drive | Section::Albums)
+            && (!self.album_open || self.section == Section::Drive)
+        {
+            self.albums.len()
+        } else {
+            0
+        };
+        count.div_ceil(self.cover_columns()) as f32 * (COVER_HEIGHT + COVER_GAP)
+    }
+
+    fn visible_covers(&self) -> std::ops::Range<usize> {
+        if self.cover_height() == 0.0 {
+            return 0..0;
+        }
+        let stride = COVER_HEIGHT + COVER_GAP;
+        let columns = self.cover_columns();
+        let start = ((self.scroll_top - grid::OVERSCAN).max(0.0) / stride) as usize * columns;
+        let end = ((self.scroll_top + self.viewport_height + grid::OVERSCAN) / stride).ceil()
+            as usize
+            * columns;
+        start.min(self.albums.len())..end.min(self.albums.len())
+    }
+
+    fn media_top(&self) -> f32 {
+        (self.scroll_top - self.cover_height()).max(0.0)
+    }
+
+    fn media_height(&self) -> f32 {
+        (self.viewport_height - (self.cover_height() - self.scroll_top).max(0.0)).max(0.0)
     }
 
     fn album_rows(&self) -> iced::widget::Column<'_, Message> {
-        let mut list = column![].spacing(10).width(Length::Fill);
-        for album in self
-            .albums
-            .iter()
-            .filter(|album| self.hidden.unlocked || !album.settings.hidden)
-        {
-            let title = album
-                .settings
-                .title
-                .as_deref()
-                .unwrap_or(&album.source.label);
-            list = list.push(
-                button(
-                    row![
-                        container(design::icon(Icon::Albums, 28.0))
-                            .padding(16)
-                            .style(design::soft),
+        let columns = self.cover_columns();
+        let visible = self.visible_covers();
+        let stride = COVER_HEIGHT + COVER_GAP;
+        let width = (self.grid_width() - (columns - 1) as f32 * COVER_GAP) / columns as f32;
+        let top = (visible.start / columns) as f32 * stride;
+        let bottom = visible.end.div_ceil(columns) as f32 * stride;
+        let mut list = column![Space::new().height(top)].width(Length::Fill);
+        for albums in self.albums[visible].chunks(columns) {
+            let mut cards = row![].spacing(COVER_GAP);
+            for album in albums {
+                let title = album
+                    .settings
+                    .title
+                    .as_deref()
+                    .unwrap_or(&album.source.label);
+                let cover: Element<'_, Message> = match album
+                    .cover
+                    .as_ref()
+                    .and_then(|asset| self.thumbs.get(&cover_id(asset)))
+                {
+                    Some(decoded) => image(decoded.handle.clone())
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .content_fit(ContentFit::Cover)
+                        .into(),
+                    None => center(design::icon(Icon::Albums, 30.0)).into(),
+                };
+                let items = count_label(album.direct_items as usize, "item", "items");
+                let detail = if album.child_albums == 0 {
+                    items
+                } else {
+                    format!(
+                        "{items} · {}",
+                        count_label(album.child_albums as usize, "folder", "folders")
+                    )
+                };
+                cards = cards.push(
+                    button(
                         column![
-                            text(title).font(design::MEDIUM).size(17),
-                            text(
-                                if self.section == Section::Drive && album.child_albums > 0 {
-                                    format!(
-                                        "{} · {}",
-                                        count_label(album.direct_items as usize, "item", "items"),
-                                        count_label(
-                                            album.child_albums as usize,
-                                            "folder",
-                                            "folders"
-                                        )
-                                    )
-                                } else {
-                                    count_label(album.direct_items as usize, "item", "items")
-                                }
-                            )
-                            .size(13)
-                            .style(design::muted)
+                            container(cover).height(108).clip(true).style(design::soft),
+                            text(title)
+                                .font(design::MEDIUM)
+                                .size(17)
+                                .wrapping(text::Wrapping::None),
+                            text(detail).size(13).style(design::muted),
                         ]
-                        .spacing(6)
-                        .width(Length::Fill),
-                        design::icon(Icon::Next, 20.0),
-                    ]
-                    .spacing(18)
-                    .align_y(Alignment::Center),
-                )
-                .padding(12)
-                .width(Length::Fill)
-                .on_press(Message::OpenAlbum(album.source.id.to_string()))
-                .style(design::secondary),
-            );
+                        .spacing(5),
+                    )
+                    .width(width)
+                    .height(COVER_HEIGHT)
+                    .padding(8)
+                    .on_press(Message::OpenAlbum(album.source.id.to_string()))
+                    .style(design::secondary),
+                );
+            }
+            list = list.push(cards).push(Space::new().height(COVER_GAP));
         }
-        list
+        list.push(Space::new().height((self.cover_height() - bottom).max(0.0)))
     }
 
     fn drive_chooser<'a>(&'a self, trail: &'a [FolderChoice]) -> Element<'a, Message> {
@@ -2927,17 +3058,6 @@ impl Gallery {
         }
         if matches!(self.section, Section::Albums | Section::Drive) && !self.album_open {
             return self.albums_view();
-        }
-        if self.section == Section::Drive && !self.albums.is_empty() {
-            return column![
-                container(scrollable(self.album_rows()))
-                    .max_height(228)
-                    .padding([0, GUTTER as u16]),
-                self.media_grid(),
-            ]
-            .spacing(12)
-            .height(Length::Fill)
-            .into();
         }
         self.media_grid()
     }
@@ -3039,7 +3159,7 @@ impl Gallery {
     }
 
     fn media_grid(&self) -> Element<'_, Message> {
-        if self.outline.as_ref().is_none_or(|o| o.is_empty()) {
+        if self.cover_height() == 0.0 && self.outline.as_ref().is_none_or(|o| o.is_empty()) {
             let (message, hint) = if self.sync.running {
                 (
                     "Your photos are on their way…",
@@ -3071,8 +3191,11 @@ impl Gallery {
             }
             return center(empty).into();
         }
-        let rows = self.layout.visible(self.scroll_top, self.viewport_height);
+        let rows = self.layout.visible(self.media_top(), self.media_height());
         let mut grid = column![].width(Length::Fill);
+        if self.cover_height() > 0.0 {
+            grid = grid.push(self.album_rows());
+        }
         let mut cursor = 0.0;
         for row in &self.layout.rows[rows] {
             if row.y > cursor {
@@ -3423,6 +3546,10 @@ fn viewer_button(theme: &Theme, status: button::Status) -> button::Style {
         Color::WHITE
     };
     style
+}
+
+fn cover_id(asset: &pg_core::model::Asset) -> String {
+    format!("cover:{:?}:{:?}", asset.key, asset.revision)
 }
 
 /// A Proton thumbnail, decoded at grid size.

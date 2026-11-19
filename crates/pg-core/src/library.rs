@@ -439,6 +439,21 @@ impl Catalog {
         .await
     }
 
+    /// Account-owned items excluded from public gallery views, including
+    /// members of descendants of a hidden Drive album.
+    pub async fn hidden_assets(&self, account: AccountId) -> Result<Vec<(String, String)>> {
+        self.run(move |conn| {
+            let mut query = conn.prepare(&format!(
+                "{HIDDEN_SOURCES} SELECT DISTINCT m.volume, m.node FROM memberships m
+                 JOIN hidden_sources h ON h.source=m.source WHERE m.account=?1"
+            ))?;
+            Ok(query
+                .query_map([account.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
     pub async fn album_settings(&self, source: SourceId) -> Result<AlbumSettings> {
         self.run(move |conn| load_settings(conn, source.as_str()))
             .await
@@ -478,6 +493,20 @@ impl Catalog {
                 if !member {
                     return Err(Error::Invalid("the cover must be a photo or video from this album".into()));
                 }
+            }
+            if !settings.hidden
+                && let Some(cover) = &settings.cover
+                && let Some(gallery) = tx
+                    .query_row(
+                        "SELECT gallery FROM album_nodes WHERE source=?1",
+                        [source.as_str()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                && !resolve_cover(&tx, &gallery, source.as_str(), Some(cover), settings.order, false)?
+                    .is_some_and(|asset| asset.key == *cover)
+            {
+                return Err(Error::Invalid("a hidden item cannot be the cover of a visible album".into()));
             }
             if let Some((account, identity)) = crate::configuration::album_identity(&tx, &source)? {
                 let before = load_settings(&tx, source.as_str())?;

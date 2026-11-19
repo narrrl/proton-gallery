@@ -132,6 +132,18 @@ impl VideoStream {
 }
 
 impl VideoStream {
+    /// Open a seekable reader around an already authorized revision.
+    pub fn from_revision(reader: RevisionReader, cancel: pg_core::CancellationToken) -> Arc<Self> {
+        Arc::new(Self {
+            starts: block_starts(reader.block_sizes()),
+            reader: Arc::new(reader),
+            blocks: Mutex::new(HashMap::new()),
+            runtime: tokio::runtime::Handle::current(),
+            read_ahead: Arc::new(Semaphore::new(READ_AHEAD)),
+            cancel: cancel.child_token(),
+        })
+    }
+
     /// The video's length in bytes.
     pub fn length(&self) -> u64 {
         *self.starts.last().unwrap_or(&0)
@@ -189,14 +201,7 @@ impl App {
                 Error::message("Couldn’t open the video. Check your connection and try again.")
             })?,
         };
-        Ok(Arc::new(VideoStream {
-            starts: block_starts(reader.block_sizes()),
-            reader: Arc::new(reader),
-            blocks: Mutex::new(HashMap::new()),
-            runtime: tokio::runtime::Handle::current(),
-            read_ahead: Arc::new(Semaphore::new(READ_AHEAD)),
-            cancel: account.cancel.child_token(),
-        }))
+        Ok(VideoStream::from_revision(reader, account.cancel))
     }
 }
 

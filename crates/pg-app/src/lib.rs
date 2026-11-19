@@ -118,7 +118,34 @@ impl App {
         data_dir: impl Into<PathBuf>,
         vault: Arc<dyn CredentialVault>,
     ) -> Result<Self> {
-        let root = data_dir.into();
+        Self::open_with_auth(data_dir.into(), AuthService::new(vault)).await
+    }
+
+    /// Open gallery services for an application that already owns its session.
+    pub async fn open_hosted(
+        data_dir: PathBuf,
+        session: proton_sdk::session::ProtonApiSession,
+        drive: proton_drive_rs::ProtonDriveClient,
+        cancel: pg_core::CancellationToken,
+    ) -> Result<Self> {
+        struct HostVault;
+        impl CredentialVault for HostVault {
+            fn load(&self) -> pg_drive::auth::Result<Option<Vec<u8>>> {
+                Ok(None)
+            }
+            fn save(&self, _: &[u8]) -> pg_drive::auth::Result<()> {
+                Err(pg_drive::auth::AuthError("The host owns the session."))
+            }
+            fn clear(&self) -> pg_drive::auth::Result<()> {
+                Ok(())
+            }
+        }
+        let auth = AuthService::hosted(Arc::new(HostVault), session, drive, cancel).await?;
+        Self::open_with_auth(data_dir, auth).await
+    }
+
+    async fn open_with_auth(root: PathBuf, auth: AuthService) -> Result<Self> {
+        std::fs::create_dir_all(&root).map_err(|e| Error::message(e.to_string()))?;
         let catalog = Catalog::open(root.join("catalog.db")).await?;
         let local = LocalLibrary::open(root.join("device"), catalog.clone()).await?;
         catalog.register_source(LocalLibrary::source()?).await?;
@@ -139,7 +166,7 @@ impl App {
         Ok(Self {
             catalog,
             local,
-            auth: AuthService::new(vault),
+            auth,
             photos: RwLock::new(None),
             photos_sync: tokio::sync::Mutex::new(()),
             indexed: AtomicU64::new(0),

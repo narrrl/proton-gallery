@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Desktop Drive galleries and subfolders use cover cards in the same scroll area as their media.
+- Android can choose an album cover from its subfolders.
+
 ## 0.2.0
 
 ### Install
