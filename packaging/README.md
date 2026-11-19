@@ -36,9 +36,9 @@ proton-gallery --demo 100000
 ## Debian, Ubuntu and Fedora
 
 The Linux packages workflow builds `.deb` and `.rpm` files on Ubuntu 24.04.
-Download the matching package from a GitHub Actions run or a release that includes
-Linux assets. Install it through the native package manager so it can resolve
-dependencies:
+Download the matching package from GitHub Releases and install it through
+the native package manager to resolve dependencies.
+[Download release packages](https://github.com/narrrl/proton-gallery/releases/latest)
 
 ```sh
 # Ubuntu 24.04 or Debian 13
@@ -71,5 +71,8 @@ the binary's minimum glibc version.
 A working Wayland or X11 session, graphics driver and fonts are needed. Saved
 sessions require a running Secret Service provider, such as GNOME Keyring or
 KWallet with Secret Service enabled. Without one, the app offers a temporary
-session. `xdg-utils` provides the browser-opening command used by CAPTCHA sign-in.
-See [desktop behavior and acceptance gaps](../docs/DESKTOP.md).
+session. GStreamer plugins provide video codec support. On Fedora, install
+`gstreamer1-plugin-libav` if it is available and your video needs codecs
+from that plugin. `xdg-utils` provides the browser-opening command used by
+CAPTCHA sign-in. [Desktop guide](../docs/DESKTOP.md) ·
+[Signing and release workflow](../docs/RELEASING.md)

@@ -2,7 +2,10 @@
 
 This is a dependency-ordered backlog, not a delivery-date estimate. Each milestone ends with demonstrated behavior and evidence. Performance numbers below are proposed targets, not measured results.
 
-Implementation includes the shared Rust core, CLI, native Android gallery, account service with Keystore session storage, and Photos metadata/thumbnail delivery over UniFFI. Real-account acceptance, remote originals/video, persistent encrypted previews, and the Drive folder chooser remain open. [Development status](DEVELOPMENT.md) and [Android](ANDROID.md) distinguish implemented behavior from remaining milestone gates; no milestone is claimed complete merely because its initial code exists.
+The v0.2.0 release includes the Android and Iced desktop apps, Drive folder
+choosers, shared configuration sync, and Android/Linux range playback. The
+milestones below track broader work on incremental media sync, offline retention,
+uploads, and platform acceptance. [Current development status](DEVELOPMENT.md)
 
 The [current product direction](PRODUCT.md) changes the delivery order: normal Proton Photos is the main view in the first delivery; Drive folders are separate galleries with nested albums. The shared Rust justified grid and source/album catalog foundation are implemented. The old M5 placement of basic Photos support is superseded.
 
@@ -10,7 +13,7 @@ The [current product direction](PRODUCT.md) changes the delivery order: normal P
 
 Before building the full interface:
 
-- [ ] Audit the local SDK 0.12 API against `proton-stream`'s 0.9 dependency. Select an available reproducible SDK version/commit and record it.
+- [x] Pin a reproducible registry SDK version. The workspace uses 0.12.1.
 - [ ] Trace login/session rotation, Photos routing, per-block reads, cancellation, thumbnail batching, upload drafts, and signature outcomes. Produce a capability/gap matrix.
 - [ ] Verify random reads for Photos-volume media separately from ordinary Drive. Add Photos-aware revision-reader APIs in the SDK if ordinary link/key routing is insufficient.
 - [ ] Expose SDK folder/Photos pages or streams if current `Vec` enumeration waits for every page. First screen must not require full library enumeration.
@@ -88,7 +91,9 @@ These are two independent workstreams once M3 interfaces settle; complete both f
 - [ ] Profile target hardware, tune budgets, and add regressions for the measured bottlenecks.
 - [ ] Test Windows native builds and NTFS publication/open-handle behavior; Linux Wayland and X11; multiple real Android GPU/codec vendors.
 - [ ] Add migration fixtures, database backup/recovery for durable user intent, corrupt-store repair, disk-full handling, and source/account removal races.
-- [ ] Package Linux, Windows, and Android from independent clean checkouts with pinned dependencies and consistent app identity. Choose package formats using the existing release scripts as references.
+- [x] Package Android and Linux from independent checkouts with pinned dependencies
+  and consistent app identity. [Release workflow](RELEASING.md)
+- [ ] Package the Iced app on Windows.
 - [ ] Validate local metadata disclosure, backups, export cleanup, credential-store absence/lock behavior, dependency licenses, and signed-release/update strategy.
 - [ ] Provide user guidance for offline guarantees, storage, weak networks, codec limitations, and Android background restrictions.
 
@@ -133,13 +138,12 @@ Use deterministic fakes for correctness and explicit opt-in test accounts for li
 
 ## Deferred scope
 
-Automatic camera backup, remote deletion/organization tools, photo editing, face recognition, semantic search, maps, transcoding, shared/public libraries, synchronized favorites/settings, iOS, TV, system services, portable/external offline stores, and general two-way synchronization. Preserve extensible contracts without implementing these before the core gallery/offline experience is reliable.
+Photo editing, face recognition, semantic search, maps, transcoding, Photos
+invitations and shared-album discovery, iOS, TV, system services, portable or
+external offline stores, and general two-way file synchronization.
 
-## Current desktop milestone (2026-11-18)
+## Desktop milestone and current acceptance
 
-The approved Iced completion plan narrows this desktop milestone to account access,
-Photos browsing and still-photo viewing. `pg-app` services and `pg-desktop` implement it;
-Android's existing UI/UniFFI/platform work and `desktop/` Compose skeleton are preserved.
-Implementation does not close the broader folder/video/offline/upload gates above.
-See DESKTOP.md for supported interactions, request/cache/decode limits and commands;
-VALIDATION.md records executed checks and the outstanding acceptance matrix.
+The Iced app now includes Photos, albums, favorites, Drive galleries, and
+Linux video playback in addition to account access and still viewing.
+[Desktop behavior and limits](DESKTOP.md) · [Platform acceptance](VALIDATION.md)

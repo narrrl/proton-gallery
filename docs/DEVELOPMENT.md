@@ -1,10 +1,18 @@
 # Development and current implementation
 
-The native Android gallery provides a combined phone/Proton Photos timeline, automatic phone-folder backup, Proton Photos album management, nested Drive galleries with a folder chooser, photo/video viewing, sharing, and Android picker integration. Rust owns the local catalog, indexing, Proton operations, and media services; Kotlin/Compose owns the interface and Android integration. The desktop UI, encrypted persistent remote previews, range-backed remote video playback, and full remote offline retention remain under development. The CLI is a headless diagnostic client with its own narrower account and storage behavior. See [Android development](ANDROID.md) for current app behavior and [the README](../README.md) for the user overview.
+Android uses Kotlin/Compose for a combined phone and Proton Photos timeline,
+automatic backup, album editing, and media-picker integration. Desktop uses
+Rust/Iced for Photos, albums, favorites, and nested Drive galleries. Android
+and Linux use the same Rust revision-range service for Proton videos.
+The CLI provides headless account and storage diagnostics. See the
+[Android guide](ANDROID.md) and [desktop guide](DESKTOP.md) for platform behavior.
 
 ## Implemented
 
-- Independent Rust workspace: `pg-core`, `pg-drive`, `pg-cli`, and `pg-mobile`. Registry SDK dependencies are pinned in the manifest and lockfile; no sibling checkout is a build dependency.
+- Independent Rust workspace with `pg-core`, `pg-drive`, `pg-app`, `pg-cli`,
+  `pg-mobile`, and `pg-desktop`. The manifest and lockfile pin the registry SDK.
+- Shared account lifecycle, Photos queries, configuration sync, folder
+  galleries, public Drive links, still previews, and video reads in `pg-app`.
 - Typed UniFFI mobile bridge, bidirectional keyset paging, durable content-addressed device imports, and forward-only schema migrations, typed source scopes, nested album trees, and stored media shapes. Kotlin supplies native Compose UI and platform media/picker integration.
 - A bounded async catalog facade over a dedicated SQLite thread. WAL, forward-only schema initialization, application identity checks, and refusal to open a newer or unrelated database.
 - Persistent source membership and timeline assets with full-key pagination, including tied timestamps. Queries can run while a remote scan is waiting for its next page.
@@ -17,7 +25,9 @@ The native Android gallery provides a combined phone/Proton Photos timeline, aut
 
 ## Run locally
 
-Requires Rust 1.96 or later as declared by the workspace/SDK. Current validation uses the installed Rust 1.99.1 toolchain on Linux; the declared minimum and other targets still require their own CI validation.
+Requires Rust 1.96 or later. The CI matrix uses the stable Rust toolchain.
+For Linux workspace checks, install the desktop development libraries and
+GStreamer plugins listed in the [desktop guide](DESKTOP.md#build-and-run).
 
 From `proton-gallery`:
 
@@ -87,7 +97,11 @@ cargo clippy --workspace --all-targets --all-features --locked --offline -- -D w
 cargo test --workspace --all-features --locked --offline
 ```
 
-Rust tests use isolated temporary directories, synthetic sources, and no credentials/network. Android has separate build, lint, and Robolectric checks; see [validation](VALIDATION.md) for actual results. Live Proton account sign-in, Windows filesystem behavior, remote Android media/codec behavior, and optimized release builds remain unverified. Native sign-in, Keystore session persistence, Photos metadata sync, and memory-only remote previews are implemented.
+Rust tests use isolated directories and synthetic sources, with live diagnostics
+ignored by default. Android has separate build, lint, and Robolectric checks.
+Recorded evidence includes disposable-account settings and Drive sharing checks,
+production Android APK assembly, and Linux release-package smoke tests.
+[Validation and remaining platform checks](VALIDATION.md)
 
 The [validation record](VALIDATION.md) includes actual checks and an indicative 100,000-item local query measurement. It is separate from the performance targets in the roadmap.
 
@@ -99,4 +113,6 @@ Source-filtered pages now seek the `memberships_timeline` covering index and joi
 
 The app-private metadata database is plaintext. Unix file/directory permissions are restricted for new catalog/object files, but Windows directory ACL setup and full power-loss publication semantics need platform validation. Stored objects are authenticated; startup does not hash/scan every retained block. Missing/corrupt objects fail on read and can be repaired when an online source is attached.
 
-Next integration work: incremental SDK timeline delivery, desktop secret-store adapters, encrypted persistent remote previews, shared priority scheduling, range-backed Android video playback, and a desktop thumbnail grid. The [roadmap](IMPLEMENTATION_PLAN.md) retains the device acceptance gates.
+Next integration work includes incremental media-event application, encrypted
+persistent remote previews, shared priority scheduling, and durable user-facing
+offline retention. [Implementation roadmap](IMPLEMENTATION_PLAN.md)

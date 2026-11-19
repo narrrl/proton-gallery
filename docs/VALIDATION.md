@@ -1,5 +1,16 @@
 # Validation
 
+## v0.2.0 release preparation
+
+- Formatting, workspace Clippy with warnings denied, and all 111 automated Rust
+  tests passed. Four live diagnostics were kept opt-in.
+- Arch package metadata reports `0.2.0-1`. The launcher passes
+  `desktop-file-validate`.
+- Before the release version bump, a production-signed arm64 APK built from
+  `914d547` passed release lint and updated an existing Proton Gallery
+  installation over Wi-Fi ADB on a Pixel 6. Its signing certificate matched
+  the existing app and the installed APK hash matched the local build.
+
 ## Signing, settings sync, and desktop media — 2026-11-19
 
 - Signed the same RPM on Arch with RPM 6 and in Ubuntu 24.04 with RPM 4.18.
@@ -62,7 +73,7 @@
   Redraw intervals p50/p95 were 23.431/44.485 ms under concurrent build load; this is
   smoke evidence, not release performance acceptance. Full-size and small sign-in screens
   were also opened without credentials and visually inspected.
-- The latest failed GitHub Android run (`44333891068`) failed resolving the Kotlin 2.2.21
+- GitHub Android run `44333891068` failed resolving the Kotlin 2.2.21
   plugin. Repository routing now resolves Kotlin through Maven Central and limits Google's
   repository to Android/Google/AndroidX groups. **An empty Gradle user home using the exact
   pinned Gradle 8.14.5 wrapper and JDK 21 passed `help`**, downloading the Kotlin and Compose

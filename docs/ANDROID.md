@@ -9,7 +9,10 @@ Kotlin/Compose calls `pg-mobile` through generated UniFFI bindings. Rust owns th
 - **Drive** reads selected gallery roots and nested folder albums from the Rust catalog. An album shows its item and album counts, description and tags above its albums and media.
 - A shared Rust smart grid lays out portraits and landscapes in justified, edge-to-edge rows with 2dp gaps and square corners. Pinch with two fingers to zoom (target row height 48–240dp, default 120dp, saved). Headings follow the zoom like the Linux app: days for large tiles, months below 104dp, years below 64dp. The first visible photo stays in view while zooming.
 - Pull down to refresh Photos, or the Drive gallery on screen.
-- Background work looks the same everywhere: a thin bar under the top bar, a ring around the account button, and one short line beside it saying what is happening ("Backing up 3 of 12", "Comparing with Proton: 1,204 left", "Updating Proton Photos: 4,120 found"). The bar and ring fill when the share done is known. There are no spinners.
+- Photos and Albums show a loading state while their local results arrive. An empty-library
+  refresh action appears after loading settles. Active background work appears under
+  the top bar and in the account sheet while it runs. Manual and selection backups
+  also report when a request is queued, running, or finished.
 - The viewer shows the phone file, the local file, or Proton's large preview (the decrypted original when there is none); Proton videos stream: Media3 reads byte ranges through `ProtonDataSource`, which Rust (`open_video`) serves from the revision's blocks, decrypted in memory. About six blocks (24 MiB) stay cached around the play position and two are fetched ahead; nothing is written to disk, including for hidden albums. Range reads skip the whole-file manifest signature check that a full download does; each block is still decrypted and checked. If a stream can't be opened, the viewer falls back to downloading the whole file first. One tap hides the bars and the system bars; another brings them back.
 - Other apps can pick photos and videos here (`GET_CONTENT`, `PICK`), Proton-only ones included: the app opens in a picking mode and returns content URIs with read access, decrypting Proton originals into its cache first. Copies older than a day are removed.
 - The account button opens one sheet: account, refresh, **Backup**, and theme (device, light, dark). Backup chooses phone folders to upload automatically, with Wi‑Fi-only (default) and charging-only conditions, and frees up space.
@@ -17,7 +20,11 @@ Kotlin/Compose calls `pg-mobile` through generated UniFFI bindings. Rust owns th
 
 Native sign-in supports SRP passwords, authenticator codes, separate mailbox passwords, and Proton-hosted CAPTCHA. Sessions resume without a network round trip; Photos sync starts separately. Android Keystore protects the token/derived-key blob with AES-256-GCM and atomic writes under `noBackupFilesDir`. Login/mailbox passwords are not persisted. Sign-out cancels work, clears the saved session, hides that account’s catalog, drops remote preview caches, and attempts server revocation with a short timeout. Imported device media remains available.
 
-Android can sync normal Proton Photos and load small server thumbnails. The SDK still enumerates timeline IDs before returning metadata pages; each committed page becomes queryable while later pages decrypt. A persistent encrypted remote preview cache and range-backed (streaming) remote video playback remain unfinished: Proton videos download completely before they play. Remote items are not marked available offline. The app requests Internet access with cleartext traffic disabled.
+Android can sync Proton Photos and load server thumbnails. The SDK still enumerates
+timeline IDs before returning metadata pages. Each committed page becomes queryable
+while later pages decrypt. Persistent encrypted previews and full remote offline
+retention are future work. The app uses HTTPS for Proton requests and allows
+specific cleartext certificate-revocation hosts.
 
 The sign-in dialog blocks screenshots and keeps password/code input out of saved instance state. Proton CAPTCHA runs separately from credential input, with origin-scoped WebView messaging limited to `https://verify.proton.me`. Security-key-only accounts and email/SMS verification are reported as unsupported. An invalid authenticator attempt restarts sign-in because Proton may consume its pending session.
 
@@ -45,12 +52,22 @@ Android lists only the cloud apps the phone maker allows, so this needs one adb 
 
 ```sh
 # Android 15 and later; Android 14 uses `put` instead of `override`.
-adb shell device_config override mediaprovider allowed_cloud_providers io.narl.protongallery.testing
+adb shell device_config override mediaprovider allowed_cloud_providers io.narl.protongallery
 # Android 13 additionally reads the authority from another namespace, and only at boot:
-adb shell device_config put storage_native_boot allowed_cloud_providers io.narl.protongallery.testing.picker
+adb shell device_config put storage_native_boot allowed_cloud_providers io.narl.protongallery.picker
 ```
 
-The value is the whole list: name other cloud apps too, comma-separated (for example `com.google.android.apps.photos,io.narl.protongallery.testing`); `adb shell device_config get mediaprovider allowed_cloud_providers` shows the current one. Restart the phone if the app does not show up, then choose it under the picker's settings (the account sheet links there, `MediaStore.ACTION_PICK_IMAGES_SETTINGS`). On Android 13 and 14 a server flag sync can reset a `put` value. Some Android 16 builds also need `cloud_media_feature_enabled true` in both namespaces. To test, `adb shell am start -a android.provider.action.PICK_IMAGES -t 'image/*'`.
+These commands use the regular release package. For **Proton Gallery Testing**,
+substitute `io.narl.protongallery.testing` and `io.narl.protongallery.testing.picker`.
+The value is the whole list, so include other cloud apps, comma-separated
+(for example `com.google.android.apps.photos,io.narl.protongallery`).
+`adb shell device_config get mediaprovider allowed_cloud_providers` shows the
+current value. Restart the phone if the app does not show up, then choose it
+in the picker's settings (`MediaStore.ACTION_PICK_IMAGES_SETTINGS`). The account
+sheet links there. On Android 13 and 14 a server flag sync can reset a `put`
+value. Some Android 16 builds also need `cloud_media_feature_enabled true` in
+both namespaces. To test, run
+`adb shell am start -a android.provider.action.PICK_IMAGES -t 'image/*'`.
 
 Device dates mean **added to this app**. Photos chronology uses the server's capture date; ordinary Drive currently uses remote modification time. Identical device bytes deduplicate, and reimport repairs the stored copy while preserving its original title/date. Unsupported images can import but fail to decode; viewing reports that failure.
 
@@ -60,9 +77,12 @@ Drive → + (Add gallery) opens a folder chooser over My files. The chosen folde
 
 Photos sync and Drive gallery work run independently, each with its own lock and progress counter in `pg-mobile` (`sync_progress`, `drive_progress`) and its own job in the view model. A gallery can be added while a large Photos library is still syncing.
 
-Album presentation settings and selected Drive roots sync through a dedicated Proton Gallery
-device. The app uses these settings when browsing and leaves the ordinary Drive folders and
-Proton albums in place. Refresh Android first after upgrading to import settings from your phone.
+Album presentation settings, selected Drive roots, and hiding sync through
+**Proton Gallery settings**, a dedicated encrypted device in your Proton account.
+Refresh the upgraded Android app first to import settings from your phone, then
+refresh your other Gallery devices. Background checks use Proton event cursors
+to skip settings reconciliation when there is no change. Manual Photos and
+Drive media refreshes still scan their respective scopes.
 
 The **Public link** action on an owned Drive folder can create, copy, and revoke
 a viewer link. Gallery checks for hidden contents before creating it. Existing
@@ -71,7 +91,13 @@ public links can still be revoked from an unlocked hidden folder.
 - Name and description. The folder keeps its Drive name.
 - Cover: a chosen photo or video from the album or one of its subalbums. By default, the album uses its newest item.
 - Tags (up to 20, case-insensitive). The Drive tab filters by tag across all galleries.
-- Pin to top, and hide. Open hidden albums using Android’s fingerprint, face or screen lock (`BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`). They lock when the app leaves the screen. Their photos leave the visible timeline and system picker in Gallery after sync. "Hide" asks which hidden album to use or creates one. Proton Photos still shows the originals.
+- Pin or hide an album. Open hidden albums using Android’s fingerprint, face
+  or screen lock (`BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`).
+  They lock when the app leaves the screen. Their photos leave Gallery's
+  timeline and cloud picker after sync. **Hide** asks which hidden album to use
+  or creates one. Originals remain accessible in Proton Photos or Drive and
+  through existing shares. Local phone copies remain subject to Android's own
+  gallery and picker rules.
 
 The interface shows everything newest first, and the grid's zoom sets the date headings. The catalog still stores grouping and order per album (`album_settings.grouping`, `sort_order`, with a case-insensitive name index), but the app no longer offers them.
 
@@ -84,10 +110,6 @@ Connection check: after a failed sign-in, the account screen offers **Test conne
 Crash report: `CrashLog` keeps the stack trace of an uncaught Kotlin exception and, on the next start, also reads Android's record of a native crash or freeze (`ApplicationExitInfo`). From a native tombstone it keeps only frame and abort strings, never raw memory. A Rust panic hook writes the last panic to `gallery/last-panic.txt`, which is added to the report. The app shows the report once, with a Copy button. Background tasks in the view model run under a `CoroutineExceptionHandler`, so an unexpected failure shows a message instead of closing the app.
 
 Native code: calls into Rust run on a pool of 8 threads with 8 MB stacks, because each call blocks on async Rust and Android's pooled threads have about 1 MB. The Android library is built with `--release`.
-
-Build with JDK 21 (`JAVA_HOME=/usr/lib/jvm/java-21-openjdk`). Gradle 8.14 does not run on JDK 27 and fails with only the version string `27.0.1.0.3` as its message.
-
-Emulator: a separate SDK with an emulator and an Android 15 x86_64 image is in `~/.local/share/proton-gallery-emulator` (AVD `pgtest`), because `/opt/android-sdk` is root-owned and has no emulator. Build with `--abis arm64-v8a,x86_64` to run the testing APK there.
 
 ## Visual direction and icon
 
@@ -122,7 +144,8 @@ See [current product direction](PRODUCT.md) for the distinction between native P
 
 ## Performance and storage boundaries
 
-Historical prototype screenshots use procedural test images, not a signed-in Proton account, and show the earlier interface and branding: [phone library, light theme](images/android-library-light.png) and [appearance sheet, dark theme](images/android-appearance-dark.png). The fixtures are not bundled with the application. The [nested Drive album](images/android-nested-album-light.png) illustrates the same smart grid and breadcrumbs.
+The README shows captures of the Android interface with a demo library.
+[Android screenshots](../README.md#screenshots)
 
 - Paging requests 90 records, prefetches 18, and targets a 360-record working set. Both directions use Rust/SQLite keyset seeks. Paging can discard/reload old pages; its size bound is best effort during in-flight work.
 - Storage/query FFI calls run on `Dispatchers.IO`; pure Rust layout runs on `Dispatchers.Default`. Rust uses the bounded SQLite actor, with batched paths/shapes. Only server thumbnails (at most 4MiB) cross FFI; originals stay outside this bridge. Source-specific indexes avoid scanning the global timeline for an album.
@@ -141,7 +164,7 @@ Requirements: Linux host for the script, JDK 21, Rust 1.96+, `cargo-ndk` 4.x, SD
 
 ```bash
 rustup target add aarch64-linux-android x86_64-linux-android
-cargo install cargo-ndk --locked
+cargo install cargo-ndk --version 4.1.2 --locked
 export JAVA_HOME=/path/to/jdk-21
 export ANDROID_HOME=/path/to/android-sdk
 export ANDROID_NDK_HOME=/path/to/android-ndk
@@ -200,7 +223,30 @@ from ordinary test output. The websites’ sync scripts then
 copy those captures and regenerate their social previews. The photographs are test inputs
 and website assets; they are not bundled with the Android app.
 
-## Signed device-testing build
+## Signed builds
+
+### Production APK
+
+The production signing profile belongs outside the checkout. With the local
+`~/Keys/proton-gallery/release.json` profile and its matching PKCS#12 keystore:
+
+```bash
+JAVA_HOME=/path/to/jdk-21 python3 scripts/build-signed-android.py --release
+adb install -r android/app/build/outputs/apk/release/app-release.apk
+```
+
+The minified build uses package ID `io.narl.protongallery`. Android preserves
+app data during an in-place update when the signing certificate matches and
+the version code is eligible. To install over Wi-Fi, pair the device in
+Android's **Wireless debugging** settings and select its serial with
+`adb -s SERIAL install -r` if more than one device is connected.
+The default APK contains arm64-v8a and x86_64. Use `--abis arm64-v8a` for a
+phone-only build.
+
+Tagged builds use the production signing profile in CI.
+[Release workflow and signing](RELEASING.md)
+
+### Separate device-testing APK
 
 A dedicated variant uses the persistent key in `~/Keys/proton-gallery/testing.p12` and private profile `~/Keys/proton-gallery/testing.json`. The alias is `proton-gallery-testing`. The directory is mode 700; both files are mode 600. Credentials are not stored in the checkout, printed, or passed on command lines.
 
@@ -213,14 +259,6 @@ The helper also accepts `--signing-config /path/to/private/profile.json`. Its pr
 Output: `android/app/build/outputs/apk/device/app-device.apk`. The launcher label is **Proton Gallery Testing**, package `io.narl.protongallery.testing`, so it can coexist with the ordinary development package. This is a debug-based development build, not an optimized production release. The default includes arm64-v8a and x86_64; `--abis arm64-v8a` produces a smaller phone-only update. Android 12/API 31 or later is required.
 
 Keep the keystore and profile together to sign future updates with the same certificate. Use Photos → Allow access to see the phone's photos, and Sign in to Proton to connect your account.
-
-A separate release key, `~/Keys/proton-gallery/release.p12` with profile `release.json` (alias `proton-gallery-release`, RSA 4096, valid until 2054, both mode 600), signs the store variant (`io.narl.protongallery`, minified). Never use it for testing builds, and keep a backup: an app signed with it can only be updated with the same key.
-
-```bash
-python3 scripts/build-signed-android.py --release   # android/app/build/outputs/apk/release/app-release.apk
-```
-
-CI (`.github/workflows/android.yml`) runs the Rust checks, unit tests and lint on every push and pull request. A `v*` tag also builds the signed release APK and attaches it to a GitHub release. It needs four repository secrets: `RELEASE_KEYSTORE_BASE64` (`base64 -w0 release.p12`), `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_PASSWORD` and `RELEASE_KEY_ALIAS`, the values from `release.json`. The keystore is written to the runner's temporary directory with mode 600 and deleted after the build.
 
 ## Isolated device checks
 

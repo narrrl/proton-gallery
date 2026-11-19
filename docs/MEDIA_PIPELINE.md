@@ -1,5 +1,10 @@
 # Media pipeline and responsiveness
 
+This is the design for the shared media pipeline. Current desktop decode and
+cache bounds, and Android storage and playback behavior, are documented in
+the platform guides. [Desktop](DESKTOP.md#work-and-memory-bounds) ·
+[Android](ANDROID.md#performance-and-storage-boundaries)
+
 ## 1. Grid first
 
 The default is the shared Rust justified grid adapted from the user's Proton Drive app. Both Photos and Drive albums use it. Preserve normal aspect ratios, clamp extremes to 0.5–2.5, keep date groups, and do not stretch a sparse final row. See [current product direction](PRODUCT.md).

@@ -13,9 +13,9 @@
 | Decision | Reason | Validation / reconsideration |
 | --- | --- | --- |
 | Local SQLite catalog with incremental updates | Remote listing must not gate repeat browsing | Measure 100k-record queries and scan/event convergence |
-| Existing pure Rust Proton SDK | Existing authentication, Photos and revision streaming capabilities | Audit 0.9-to-0.12 differences and selected release availability |
-| Compose on Android, Rust/Iced on desktop | Shared account/library/sync/media services now live in `pg-app`; Iced calls Rust directly while Android preserves its UniFFI/platform integrations | Complete the bounded Photos/still-viewer milestone first; retain the Compose desktop skeleton until Linux/Windows runtime, accessibility and real-account acceptance is recorded |
-| Media3 on Android, streaming through a custom `DataSource`; desktop player to be chosen | Android: Rust serves byte ranges from decrypted revision blocks, so playback and seeking start before the whole file arrives. Desktop: libmpv or VLC through a callback stream over the same Rust reads | Android: measure start and seek time on slow networks; real formats. Desktop: see [desktop plan](DESKTOP.md) |
+| Registry Proton SDK 0.12.1 | Reuse authentication, Photos and revision streaming in independent checkouts | Review capability gaps as the registry SDK evolves |
+| Compose on Android, Rust/Iced on desktop | Both call shared account, library, sync, and media services in `pg-app` | Validate Windows runtime, accessibility, and real-account flows |
+| Android Media3 and Linux GStreamer | Both stream decrypted blocks through the same Rust revision reader | Measure startup and seek on real formats and slow networks. Windows playback remains open |
 | Per-account encrypted media object store | Retained media should not become plaintext files by default; block encryption preserves seeking | Measure overhead and prove crash publication and key recovery on all targets |
 | Plaintext app-private metadata catalog initially | Avoid unproven encrypted-database distribution/migration complexity | Disclose filename/date leakage locally; reconsider full catalog encryption before a vault claim |
 | Original-quality offline retention | An offline badge must mean the whole original is locally readable | Network-denied restart tests including seeks and expired sessions |
@@ -23,7 +23,7 @@
 | Preserve completed local copies after remote removal | Do not silently destroy the user's downloaded original | Clearly label local-only copies; never imply revocation can erase downloaded data |
 | One durable Rust job system | Desktop and Android must agree on completion, retries and retained bytes | OS task hosts lease Rust work; no second authoritative Kotlin download store |
 | Single account in first UI, account-namespaced internals | Reduce first-release UI scope without cross-account identity/cache bugs | Add account switching later after logout and storage isolation tests |
-| Basic upload in first release, camera backup later | Cover easy media upload without importing a sync daemon's scope | Prove uncertain-commit handling, source access lifetime and streaming memory use |
+| Android backup first | Phone folders and selected items can upload to Proton Photos | Prove uncertain-commit recovery and add desktop and Drive upload flows |
 | No server transcoding | Stay standalone and preserve original privacy/bytes | Revisit only if measured low-bandwidth playback needs explicit proxy representations |
 
 ## Alternatives considered
@@ -42,7 +42,7 @@
 
 ## Questions to settle with prototypes
 
-1. Does Iced meet the gallery’s scrolling, accessibility, and color requirements on real Linux (Wayland and X11) and Windows machines? Video integration remains a later milestone.
+1. Does Iced meet the gallery’s scrolling, accessibility, and color requirements on real Linux (Wayland and X11) and Windows machines?
 2. Does Media3 cover enough actual uploaded video formats to justify the Android integration change? What is the measured cost of FFI copies versus mpv reuse?
 3. Which SDK page, acknowledgement, verification, and upload-recovery APIs are missing and should be upstreamed first?
 4. Can encrypted retained blocks meet seek targets on low-end flash without excessive small-file overhead? Start with simple block files; consider packfiles only after measurement, since compaction complicates crash safety.
@@ -59,6 +59,10 @@ The user's revised direction is authoritative: normal Proton Photos is the main 
 The justified-row algorithm is ported from proton-drive-linux into pg-core and called through UniFFI. This prevents desktop/Android from diverging into different layout rules. Source kinds and per-gallery parent edges preserve real namespace and folder relationships. Schema 4 adds ordered membership indexes so sparse album reads do not walk the global timeline. The [product document](PRODUCT.md) records implementation boundaries and the updated delivery gates.
 
 ## 2026-11-18 — Hidden photos and data at rest
+
+This records the original Android-only implementation. v0.2.0 syncs the
+hidden policy across Gallery devices, with a distinct local unlock on each
+device. The local storage and cloud access boundaries remain applicable.
 
 Proton has no way to hide photos: no tag, and an album's `Hidden` flag is read-only in the API. Hiding is therefore a choice made on this phone. A photo is hidden while it is in any album marked hidden. It then leaves the timeline, the search and the system photo picker here (schema 10 tells the picker at once), while the album itself stays an ordinary Proton album that other Proton apps show. The app says so where an album is hidden. "Hide" asks which hidden album the photos go into, after the phone's lock confirms the user, or offers to create one (named Hidden by default) when there is none; phone-only photos are backed up first. Adding photos to a hidden album through "Add to album" hides them the same way; hidden albums appear there only while unlocked. The phone's copy stays in the phone's own gallery until the user deletes it.
 

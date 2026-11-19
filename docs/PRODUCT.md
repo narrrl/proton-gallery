@@ -1,12 +1,18 @@
 # Photos and Drive galleries
 
-This is the current product direction. It supersedes the earlier folder-first MVP and Photos-as-a-later-milestone ordering in the original planning documents.
+This guide describes the library, gallery, and visibility behavior in v0.2.0.
 
 ## Main navigation
 
-**Photos** is the normal Proton Photos library, with its timeline, capture dates, images, and videos. It does not show a union of selected Drive folders or device imports. Native Proton Photos albums can later be exposed here through their own SDK album APIs; they are not Drive folders.
+**Photos** shows the Proton Photos timeline, capture dates, images, and videos.
+Android also includes phone media and previews backed-up copies from the phone
+when available. The **Albums** view opens native Proton Photos albums, and
+**Favorites** follows Proton’s Favorite tag for cloud media.
 
-**Drive** is a collection of explicitly added folder galleries. Select a folder in the signed-in account, give it an optional display name, and browse that folder as a gallery. Each subfolder is an album, and every album may contain more albums and direct images/videos. Mixed folders are valid at every level; the app must not flatten them or hide their direct media.
+**Drive** shows explicitly added folder galleries. Choose a folder in **My files**
+and browse its direct media and subfolders. Every subfolder is an album, so mixed
+folders can show both media and nested albums. Android can customize the album
+name, cover, description, tags, and pin.
 
 ```text
 Photos                         Drive
@@ -19,7 +25,27 @@ Photos                         Drive
                                  Family                  [another added folder]
 ```
 
-Device imports remain a separate **On this device** view under the appearance/menu sheet. They are useful as local media and future upload sources; they must never masquerade as Proton Photos or a Drive gallery. An Android filesystem picker is not a substitute for selecting a folder in the Proton account.
+Android's **On this device** view exposes files explicitly imported into Gallery.
+The regular Android Photos timeline reads eligible phone media through MediaStore.
+Drive adds remote folders through its My files chooser.
+
+## Cross-device settings and sharing
+
+Gallery stores selected Drive roots, album presentation settings, and hidden
+visibility in an encrypted settings device in the Proton account. Each upgraded
+client applies changes after a successful check. Gallery can skip settings reads
+when the Proton event feeds and the local outbox are idle.
+
+Hidden albums unlock with Android device authentication or a desktop Gallery
+passphrase. Their media is excluded from the ordinary Gallery library and its
+cloud picker. Cloud originals remain accessible in Proton Photos or Drive and
+through existing shares. For an upgrade, refresh Android first to import prior
+phone settings, then refresh the other clients.
+
+Owned Drive folders support public viewer links with optional passwords and
+expiry. Gallery can copy and revoke them. Proton Photos album invitations and
+shared-album discovery are future work.
+[Settings sync design](DECISIONS.md) · [Android controls](ANDROID.md) · [Desktop controls](DESKTOP.md)
 
 ## Shared smart grid
 
@@ -35,7 +61,9 @@ The port lives in `pg-core::grid`, with typed UniFFI records for Android. Deskto
 - Keep date groups and media ordering intact. Image and video tiles use the same layout.
 - Plan bounded windows on a background dispatcher. Android preserves breaks at 90-item page boundaries to reduce reflow when Paging evicts or prepends pages. This can leave a short row at a page boundary.
 
-Stored media shapes come from known dimensions or decoded previews. Device import currently probes a small orientation-correct image decode, or video metadata with rotation. Remote thumbnail dimension learning still needs to be connected to the Android preview service. Layout never requires downloading an original just to discover its shape.
+Stored media shapes come from known dimensions or decoded previews. Android
+also probes a reduced image decode or rotated video metadata for device imports.
+The layout can use a placeholder ratio while a shape is unknown.
 
 ## Rust data model
 
@@ -43,7 +71,10 @@ Stored media shapes come from known dimensions or decoded previews. Device impor
 
 `album_nodes` stores `(gallery, source, parent)`. A folder may be a child in more than one selected gallery without losing either parent edge. Root nodes have no parent; children must reference an existing parent in the same gallery. Rust rejects cycles, cross-account/cross-volume edges, invalid roots, and excessive depth. Direct media membership is independent of child album membership.
 
-`media_shapes` persists width/height without rewriting remote metadata. `memberships_timeline` provides source-specific keyset seeks. Timestamp changes propagate to every membership; sparse albums do not scan the full Photos timeline. Schema migrations are forward-only through version 4.
+`media_shapes` persists width and height without rewriting remote metadata.
+`memberships_timeline` provides source-specific keyset seeks. Timestamp changes
+propagate to every membership. Schema 12 includes the settings journal and
+settings event cursors.
 
 Discovery commits the current album before walking its children. A failed/cancelled crawl retains committed metadata and per-folder scan checkpoints. Current traversal restarts discovery from the selected root on a new invocation; it is not yet a leased, durable background job. Absence during an incomplete scan is never a deletion signal.
 
@@ -51,15 +82,12 @@ Discovery commits the current album before walking its children. A failed/cancel
 
 | Area | Current implementation | Remaining |
 | --- | --- | --- |
-| Branding | Proton-style violet/plum themes and the suite’s frontal violet–pink photo stack with metallic copper depth | Final platform/device visual pass |
-| Main Photos | Distinct SDK Photos adapter, server capture chronology, Android sign-in/sync, account-scoped local queries, memory-only server thumbnails | Incremental SDK timeline pages, persistent encrypted previews, original viewer |
-| Drive galleries | Recursive metadata crawler, persisted nested/overlapping album trees, CLI addition, Android catalog browsing and breadcrumbs | Android remote folder picker, event reconciliation, background crawl jobs |
-| Smart grid | Shared Rust geometry, Android lazy rows, known dimensions, compact density | Remote preview shape learning, real-device scroll/anchor measurements |
-| Viewing | Local photo zoom/swipe and local Media3 videos | Photos-aware remote original/range access, encrypted Android media delivery |
-| Offline | Shared revision/block retention primitives | User-facing item/folder policies, recursive references, quota/eviction, durable platform execution |
-| Upload | Local device import, kept separate from cloud libraries | SDK Photos upload for Photos destinations; normal file upload for Drive albums |
-
-The Android main screen opens **Photos**. Native sign-in/challenges, Keystore session storage, Photos metadata sync, and memory-only server thumbnails are wired through Rust. Cached queries are scoped to the selected account. The Drive folder chooser, persistent encrypted previews, and remote original/video viewer remain unfinished. Fixture screenshots do not demonstrate a signed-in Android account.
+| Photos | Account-scoped timeline, server capture dates, album browsing, favorites, Android album editing | Incremental timeline pages and durable event replay |
+| Drive | Remote folder chooser, recursive metadata crawl, nested galleries, public viewer links | Media reconciliation from events and durable background crawl jobs |
+| Grid | Shared Rust geometry, virtualized rows, adjustable size, preview shape learning | More device and accessibility measurements |
+| Viewing | Still previews with original fallback, Android Media3 and Linux GStreamer range playback | Windows playback and broader real-account codec verification |
+| Offline | Local metadata and disposable caches, encrypted block primitives in the CLI | Encrypted persistent previews and user-facing offline retention |
+| Backup | Android manual, selection, and automatic backup to Proton Photos | Desktop uploads and user-selected Drive upload destinations |
 
 ## Current CLI paths
 
@@ -75,14 +103,14 @@ cargo run -p pg-cli -- albums --gallery GALLERY_ID --parent ALBUM_SOURCE_ID
 cargo run -p pg-cli -- list --source ALBUM_SOURCE_ID
 ```
 
-SDK 0.12 still materializes complete child/timeline ID lists before yielding metadata batches. The Photos source advertises `revision_reads=false` until Photos-specific random reads are verified. It uses Photos-aware metadata/thumbnail methods and does not silently fall back to whole-video download.
+The pinned SDK still materializes complete child and timeline ID lists before
+yielding metadata batches. The CLI scan commands index metadata. Video
+playback uses application services documented in the platform guides.
 
 ## Next delivery gates
 
-1. Validate the implemented Rust session service, Android Keystore vault, refresh/logout, and native sign-in/challenge UI with a real account.
-2. Normal Photos metadata and encrypted preview batches in the default tab. Cached content must remain browsable before authentication or network refresh completes.
-3. A real Drive folder chooser and add-gallery action, indexing selected roots before descendants and retaining the nested structure offline.
-4. Range-backed viewing and media-format coverage for both namespaces, proving video header/tail seeks without full downloads.
-5. Recursive offline retention, upload destinations, events/moves/renames, background execution, and real-device performance/accessibility validation.
-
-Photos support is part of the first end-to-end delivery. It is no longer scheduled behind the rest of the gallery.
+1. Make event-driven media reconciliation durable across interrupted scans and moves.
+2. Add encrypted persistent previews and recursive offline retention.
+3. Validate Photos and Drive video range reads, codec coverage, and seek behavior
+   on real accounts and devices.
+4. Expand Windows runtime, desktop accessibility, and Android background validation.

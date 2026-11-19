@@ -1,10 +1,9 @@
 # Desktop browser: Iced on Linux and Windows
 
-The desktop milestone is a native Rust/Iced application in `crates/pg-desktop`.
-It covers account access, the Photos timeline, Proton Photos album browsing,
-favorite management and still-photo viewing. The earlier
-Compose desktop skeleton remains in `desktop/` until Iced acceptance is complete;
-it is not the Photos browser. Android keeps Kotlin/Compose and its UniFFI interface.
+The desktop app is written in Rust with Iced in `crates/pg-desktop`. It
+browses the Proton Photos timeline, albums, favorites, and nested Drive
+galleries. It also opens still photos on Linux and Windows and plays supported
+videos on Linux. The older Compose desktop prototype lives in `desktop/`.
 
 ## Build and run
 
@@ -65,15 +64,20 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
   its photos. The Albums button or Escape returns to the list.
 - Drive lets you add a gallery from the account’s My files. Open folders to browse their direct media
   and subfolders. **Remove gallery** removes it from this app and leaves its Drive files in place.
-  Open **Public link** to create, copy or revoke a viewer link for an owned Drive folder.
+  Open **Public link** to create, copy or revoke a viewer link for an owned
+  Drive folder. A link can have a password and expiry.
 - Hidden albums unlock with a local Gallery passphrase. The desktop stores a salted
-  verifier in the system keyring and locks again when the window loses focus. Refresh
-  Android first to import existing hidden settings, then refresh desktop.
+  Argon2id verifier in the system keyring and locks again when the window loses focus.
+  Refresh Android first to import existing hidden settings, then refresh desktop.
+  Gallery checks for settings changes on window focus and while the app runs.
+  Hiding controls visibility in Gallery. Originals remain accessible in Proton
+  Photos or Drive and through existing shares.
 - Choose Favorite or Unfavorite in the viewer, or press F. Favorites shows tagged
   photos from the timeline. The Size slider and +/− keys adjust the grid density.
 - Arrow keys, Page Up/Down, Home/End and Tab move visible grid focus. Enter/Space opens;
-  Escape closes; Left/Right navigate the viewer. R/F5 retries the viewer; F5 refreshes the grid. Tiles are buttons with a visible focus
-  border. This does **not** establish screen-reader accessibility; see acceptance gaps.
+  Escape closes, and Left/Right navigate the viewer. R/F5 retries the viewer.
+  F5 refreshes the grid. Tiles are buttons with a visible focus border.
+  Screen-reader validation is pending.
 - The still viewer uses Proton's preview, falling back to a streamed original when absent.
   Scroll to zoom, drag to pan. Retry reloads an unsuccessful item. Linux videos play in the viewer
   with pause, seeking, and volume. Proton video blocks decrypt on demand in memory. Codec support
@@ -83,7 +87,7 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
 
 ## Desktop presentation
 
-The library uses a navigation rail for Photos, Favorites and Albums, a heading with the item count,
+The library uses a navigation rail for Photos, Favorites, Albums, and Drive, a heading with the item count,
 and a justified timeline with 24-pixel outer margins and six-pixel gutters. Violet marks
 selection and keyboard focus; photos carry the color. Native outline icons and the existing
 Gallery branding are embedded in the executable, with no icon-font dependency. The system

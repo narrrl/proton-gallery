@@ -1,5 +1,10 @@
 # Offline availability and storage
 
+This is the design for future user-facing offline retention. The current app
+indexes remote metadata locally and keeps disposable media caches. The
+encrypted single-revision reader is exercised by a CLI demo.
+[Current implementation](DEVELOPMENT.md#offline-demonstration)
+
 ## 1. User contract
 
 The initial `Keep offline` action retains **original quality**, including all video blocks. A thumbnail or a buffered video prefix is not an offline original. Existing cached previews can be viewed without a network, but the UI labels their availability separately.

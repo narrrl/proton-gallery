@@ -1,8 +1,12 @@
 # Architecture
 
-Planning baseline: 2026-11-17; application ownership updated 2026-11-18. `pg-core`, `pg-drive`, `pg-app`, `pg-mobile`, and `pg-desktop` exist. Named scheduler/media/transfer crate extractions below remain proposals.
+Android calls shared application services through `pg-mobile`. The Rust/Iced
+desktop calls `pg-app` directly. Both use `pg-core` for the SQLite catalog and
+layout and `pg-drive` for Proton SDK access. The sections below record the target
+architecture for shared scheduling, media jobs, offline retention, and durable
+media-event reconciliation.
 
-## 1. System boundary
+## 1. Target system boundary
 
 ```mermaid
 flowchart TD
@@ -45,7 +49,8 @@ The core is Rust. Native players and image decoders may use C/C++ libraries or p
 
 ## 2. Reuse strategy
 
-Use `proton-sdk` and `proton-drive-rs` as the shared protocol layer. Do not recreate SRP, OpenPGP, block-URL refresh, or Photos endpoints inside the gallery. The local SDK workspace declares `0.12.0`; `proton-stream` still declares `0.9.0`. Audit compatibility and published availability before pinning a release version.
+The workspace pins published `proton-sdk` and `proton-drive-rs` 0.12.1.
+Authentication, OpenPGP, block-URL refresh, and Photos requests belong in the SDK.
 
 Port the generic streaming/cache ideas and relevant tests from `proton-stream`, preserving attribution. Its current `pstr-stream` depends on the show-oriented `pstr-core`; taking it as a direct application dependency would import an unsuitable domain model. First adapt a minimal generic byte layer into the gallery. Consider a published shared streaming crate after the gallery's requirements stabilize, without making a cross-repository refactor a prerequisite.
 
@@ -55,7 +60,10 @@ Release builds must work from this directory as an independent checkout. Registr
 
 ## 3. Sources and identity
 
-MVP: one signed-in account, the normal Proton Photos library as the default view, and a separate Drive tab for explicitly selected folders as nested galleries. Photos is part of the first delivery. Public share links remain a later extension. [Current product direction](PRODUCT.md) supersedes the original folder-first ordering.
+One signed-in account provides the Proton Photos library and a separate Drive
+section for selected folder galleries. Android also joins phone media into its
+Photos timeline. Public viewer links use the owned Drive folder route.
+[Current product behavior](PRODUCT.md)
 
 Define source capabilities rather than assume every source supports folders, event cursors, uploads, or albums:
 
@@ -68,7 +76,9 @@ ThumbnailSource -> thumbnails(asset_ids, variant) -> per-asset outcomes
 
 These are conceptual contracts, not claims that the SDK already exports matching methods. Add SDK pagination and verification APIs where needed; protocol work belongs in the SDK.
 
-Photos random access is also an explicit SDK gate: the inspected revision opener uses ordinary Drive link/key routing, while Photos metadata and thumbnails use Photos-aware helpers. Validate Photos-video range access independently and add the appropriate revision opener before advertising streaming from that source.
+Android Media3 and Linux GStreamer use `pg-app::video` for on-demand
+decrypted revision reads. Photos-specific routing and real-account codec
+coverage remain separate verification tasks.
 
 Stable asset identity is `(account_namespace, volume_id, node_id)`; source membership is a separate relation. A photo shown in a folder and an album should reference one asset. Cache identity includes account namespace, revision ID, block index, and representation. Names and paths are presentation data, never identity or object filenames. Do not deduplicate different accounts or distinct remote assets by filename or timestamp.
 
@@ -106,6 +116,12 @@ Capture date precedence: source-provided capture metadata, valid EXIF/QuickTime 
 
 ## 5. Initial scan and event correctness
 
+The v0.2.0 settings poll stores per-account, per-volume cursors. It skips
+settings enumeration on an idle poll and advances cursors after successful
+reconciliation. This applies to Gallery configuration. The following sequence
+is the design for future media-catalog reconciliation.
+[Settings sync decisions](DECISIONS.md)
+
 1. Load local results and availability immediately after local unlock.
 2. Restore/refresh the account session asynchronously; failure must not block offline browsing.
 3. For a new scope, record an event baseline before scanning. Commit each metadata page and its checkpoint together and publish that page to the UI.
@@ -138,20 +154,31 @@ Network calls need deadlines, exponential retry with jitter, `Retry-After` suppo
 ## 7. Platform boundaries
 
 Desktop: Rust/Iced calls `pg-app` directly. It owns window/input state, viewport requests,
-visible focus, a bounded decoded-thumbnail cache and still-photo presentation. `pg-app`
+visible focus, a bounded decoded-thumbnail cache, still-photo presentation, and
+the Linux GStreamer player. `pg-app`
 serializes account transitions and gates shared operations against sign-out cleanup;
 `pg-drive` cancels session work and guards refresh persistence. The Android UniFFI adapter
 also uses `pg-app`; it retains Android-specific player, Keystore, MediaStore and task hosting.
 The old Compose desktop skeleton remains until Iced acceptance is recorded. See
 [desktop instructions](DESKTOP.md) and [measured acceptance](VALIDATION.md).
 
-Android: Kotlin/Compose renders paged DTOs and handles gestures. Rust remains the source of truth for catalog and transfers. UniFFI exposes coarse queries, thumbnail batches, opaque reader handles, and explicit cancellation; avoid full decoded bitmaps, whole videos, or per-byte callbacks across FFI. Measure bounded copies before adding specialized JNI direct-buffer code. Test cancellation and teardown for the pinned UniFFI version; [UniFFI's async lifecycle documentation](https://mozilla.github.io/uniffi-rs/latest/internals/async-ffi.html) describes explicit future cleanup, but application job cancellation is still a separate contract.
+Android: Kotlin/Compose renders paged DTOs and handles gestures. Rust owns the
+catalog and serves video blocks through opaque reader handles. Media3 and
+WorkManager provide platform playback and backup task hosting.
+[Android platform details](ANDROID.md)
 
 OS adapters wake Rust jobs; they do not independently schedule every asset. Use one active transfer host per account/process, persisted leases, and bounded batches. Android 14+ offers user-initiated data-transfer jobs for long explicit transfers; deferrable refresh uses WorkManager. Older-version foreground execution needs a tested policy. No promise of execution after force-stop or while the OS withholds work. Follow [Android's transfer API selection guidance](https://developer.android.com/develop/background-work/background-tasks/data-transfer-options).
 
-Provisional support floor: Android 12/API 31, matching the existing client; confirm during the Android spike. Linux x86_64 and Windows x64 first; Android arm64 first. Additional CPU architectures require explicit build/test coverage.
+The release targets Android 12/API 31 or later on arm64 and x86_64, and packages
+Linux x86_64. Windows x64 builds from source.
 
 ## 8. Local privacy and account lifecycle
+
+Today, OS credential stores protect the saved session. The SQLite catalog and
+decrypted viewing/share caches use platform file protection. Hiding syncs
+visibility settings through Proton and leaves original cloud access in place.
+The following are design goals for durable offline storage, encrypted keys,
+and future local unlock behavior. [Current storage behavior](../README.md#privacy-and-local-storage)
 
 Use a random per-installation, per-account content-store key wrapped by Linux Secret Service, Windows credential protection, or Android Keystore. Persist cached media/derivatives with an established authenticated-encryption implementation and unique nonces. Bind object identity and format version as associated data. Large offline files remain encrypted by independently readable blocks. Unlocked readers may hold bounded plaintext in memory; never promise forensic erasure of RAM or storage.
 

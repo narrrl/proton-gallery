@@ -47,7 +47,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Linux desktop build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
       - name: Rust checks
         run: bash scripts/check.sh
 
@@ -127,7 +127,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v heading="## $version" '
+            /^## / { if (printing) exit; printing = ($0 == heading); next }
+            printing { print }
+          ' CHANGELOG.md > "$notes"
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            echo "::error::Missing changelog entry for $version"
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk proton-gallery_*.deb proton-gallery-*.rpm packaging/RPM-GPG-KEY-proton-gallery \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Proton Gallery ${GITHUB_REF_NAME#v}" --generate-notes \
-            --notes "Android 12 or newer (arm64-v8a and x86_64). Linux desktop packages for x86_64 (Debian/Ubuntu and Fedora)."
+            --verify-tag --title "Proton Gallery $version" --generate-notes --notes-file "$notes"
