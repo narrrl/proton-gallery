@@ -30,6 +30,7 @@ pub mod favorites;
 pub mod fixtures;
 pub mod library;
 pub mod media;
+pub mod places;
 pub mod sharing;
 pub mod sync;
 pub mod video;

@@ -3,7 +3,7 @@ package io.narl.protongallery
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.LibraryView
 
-enum class GallerySection { Photos, Albums, Drive, Device }
+enum class GallerySection { Photos, Albums, Drive, Places, Device }
 
 data class GalleryLocation(
     val section: GallerySection = GallerySection.Photos,
@@ -14,12 +14,14 @@ data class GalleryLocation(
         GallerySection.Photos -> "Photos"
         GallerySection.Albums -> "Albums"
         GallerySection.Drive -> "Drive"
+        GallerySection.Places -> "Places"
         GallerySection.Device -> "On this device"
     }
     fun nativeView(): LibraryView? = when (section) {
         GallerySection.Photos -> LibraryView.Photos
         // A Proton album pages like a Drive album: it is a one-level gallery of itself.
         GallerySection.Albums -> album?.let { LibraryView.DriveAlbum(it.gallery, it.id) }
+        GallerySection.Places -> null
         GallerySection.Device -> LibraryView.Device
         GallerySection.Drive -> album?.let { LibraryView.DriveAlbum(it.gallery, it.id) }
     }

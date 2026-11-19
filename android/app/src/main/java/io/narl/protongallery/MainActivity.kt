@@ -179,6 +179,7 @@ class MainActivity : ComponentActivity() {
                     location = location, albums = albums, onNavigate = model::navigate, load = load,
                     onRetryView = { model.navigate(location) },
                     onDriveLink = model::openDriveLink,
+                    placesActions = PlacesActions(model::scanPlaces, model::placePhoto),
                     account = account, onAccount = model::showAccount, onRefresh = model::refresh,
                     onCloseAccount = model::closeAccount, onSignIn = model::signIn,
                     onCode = model::secondFactor, onMailbox = model::mailboxPassword,

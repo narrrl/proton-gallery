@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
@@ -143,11 +144,13 @@ fun GalleryApp(
     albumActions: AlbumActions = AlbumActions(),
     privacy: PrivacyLock = PrivacyLock(),
     onDriveLink: () -> Unit = {},
+    placesActions: PlacesActions = PlacesActions(),
 ) {
     var backupSheet by rememberSaveable { mutableStateOf(false) }
     // Selected timeline items by id, in the order they were chosen.
     var selection by remember(location) { mutableStateOf<Map<String, GalleryItem>>(emptyMap()) }
     val photosRoot = location == GalleryLocation()
+    val places = location.section == GallerySection.Places
     var menu by rememberSaveable { mutableStateOf(false) }
     var editing by rememberSaveable { mutableStateOf(false) }
     // Keep the target even when the picker navigates into a child album.
@@ -159,7 +162,7 @@ fun GalleryApp(
         if (target != location) onNavigate(target)
     }
     // The open viewer: the outline it swipes through and where it opened.
-    var selected by remember(location) { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
+    var selected by remember(location, account.generation, account.visibilityRevision) { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
     // Items waiting for the user to confirm their deletion.
     var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for an album to go into, and the "New album" dialog.
@@ -272,6 +275,20 @@ fun GalleryApp(
                 !device && account.connected && !account.visibilityReady -> EmptyLibrary(onRefresh, !account.visibilityStale,
                     "Checking hidden albums", if (account.visibilityStale) "Connect to Proton to check visibility before opening your library." else "",
                     "Try again", top)
+                places && !account.connected -> EmptyLibrary(onAccount, false, "Places",
+                    "Sign in to see where your Proton Photos were taken.", "Sign in to Proton", top)
+                places -> key(account.generation, account.visibilityRevision) {
+                    val placeScope = rememberCoroutineScope()
+                    PlacesScreen(placesActions, state.revision, PaddingValues(top = top, bottom = bottom)) { photo ->
+                        placeScope.launch {
+                            val current = try { placesActions.open(photo.id) }
+                            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                            catch (_: Exception) { null }
+                            if (current == null) snackbar.showSnackbar("This photo is no longer available.")
+                            else selected = current
+                        }
+                    }
+                }
                 load == GalleryLoad.Failed -> EmptyLibrary(onRetryView, false, "Couldn’t open ${location.title}", "", "Try again", top)
                 load == GalleryLoad.Loading || (count == 0L && albums.isEmpty() && refreshing) ->
                     EmptyLibrary({}, true, "Loading ${location.title}…", "", "", top)
@@ -314,7 +331,7 @@ fun GalleryApp(
                     private = location.private)
             }
         }
-        if (account.connected && !device && state.ready) {
+        if (account.connected && !device && !places && state.ready) {
             val pull = rememberPullToRefreshState()
             // Pulling fills a bar under the top bar; the refresh then shows like all other work.
             PullToRefreshBox(refreshing, onRefresh, Modifier.fillMaxSize(), state = pull, indicator = {
@@ -414,14 +431,14 @@ fun GalleryApp(
     if (naming) NewAlbumDialog(onCreate = { albumActions.create(it, emptyList()); naming = false }, onDismiss = { naming = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
     if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection, onRepairPhotos)
-    selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },
+    selected?.takeIf { !places || (account.connected && account.visibilityReady) }?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },
         actions = ViewerActions(
             delete = { confirmDelete = listOf(it) },
             backUp = { backupActions.upload(listOf(it)) },
             addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
             favorite = { item -> media.favorite(listOf(item), !item.favorite) },
             hide = if (canAddToAlbum && !location.private) { { hiding = listOf(it); albumActions.loadChoices() } } else null,
-        ), private = location.private, latestOutline = outline) }
+        ), private = location.private, latestOutline = if (places) items else outline) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },
             onDismiss = { confirmDelete = null })
@@ -464,6 +481,7 @@ private fun SectionSwitch(current: GallerySection, onSelect: (GallerySection) ->
         Triple(GallerySection.Photos, "Photos", Icons.Outlined.Image),
         Triple(GallerySection.Albums, "Albums", Icons.Outlined.PhotoLibrary),
         Triple(GallerySection.Drive, "Drive", Icons.Outlined.FolderOpen),
+        Triple(GallerySection.Places, "Places", Icons.Outlined.LocationOn),
     )
     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(Modifier.padding(4.dp).selectableGroup()) {

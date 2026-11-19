@@ -2,6 +2,7 @@
 //! on a blocking thread, never on the UI thread; the renderer only uploads
 //! ready pixels.
 use iced::widget::image::Handle;
+use image::{ImageDecoder, metadata::Orientation};
 use std::collections::HashMap;
 
 /// Longest side of a decoded grid thumbnail, in pixels.
@@ -30,16 +31,29 @@ pub fn decode(bytes: &[u8], side: u32) -> Result<Decoded, String> {
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(128 * 1024 * 1024);
-    reader.limits(limits);
-    let image = reader
-        .decode()
-        .map_err(|_| "This image format or size can’t be shown yet.".to_string())?;
-    let (width, height) = (image.width(), image.height());
-    let image = if width > side || height > side {
+    reader.limits(limits.clone());
+    let unsupported = |_| "This image format or size can’t be shown yet.".to_string();
+    let mut decoder = reader.into_decoder().map_err(unsupported)?;
+    limits.reserve(decoder.total_bytes()).map_err(unsupported)?;
+    decoder.set_limits(limits).map_err(unsupported)?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let (mut width, mut height) = decoder.dimensions();
+    let image = image::DynamicImage::from_decoder(decoder).map_err(unsupported)?;
+    let mut image = if width > side || height > side {
         image.thumbnail(side, side)
     } else {
         image
     };
+    image.apply_orientation(orientation);
+    if matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    ) {
+        std::mem::swap(&mut width, &mut height);
+    }
     let rgba = image.into_rgba8();
     let (w, h) = rgba.dimensions();
     let pixels = rgba.into_raw();
@@ -220,6 +234,25 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         assert!(decode(&png, VIEWER_SIDE).unwrap_err().contains("size"));
+    }
+
+    #[test]
+    fn jpeg_orientation_swaps_the_display_shape_before_it_reaches_the_grid() {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(&[200; 16 * 8 * 3], 16, 8, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let tiff = [
+            b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 18, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let length = (2 + 6 + tiff.len()) as u16;
+        let mut exif = vec![0xff, 0xe1];
+        exif.extend_from_slice(&length.to_be_bytes());
+        exif.extend_from_slice(b"Exif\0\0");
+        exif.extend_from_slice(&tiff);
+        jpeg.splice(2..2, exif);
+        let decoded = decode(&jpeg, THUMB_SIDE).unwrap();
+        assert_eq!((decoded.width, decoded.height), (8, 16));
     }
 
     #[test]
