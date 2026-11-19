@@ -64,43 +64,31 @@ impl App {
             .collect())
     }
 
-    /// Bring every album and its photos in line with Proton. Best effort:
-    /// a failure leaves the albums as they were.
-    pub(crate) async fn sync_albums(&self, photos: &ProtonPhotosClient, account: &AccountId) {
-        if let Err(error) = self.try_sync_albums(photos, account).await {
-            tracing::warn!("album sync failed: {error}");
-        }
-    }
-
-    async fn try_sync_albums(
+    /// Resolve one album at a time so a partial pass can resume from disk.
+    pub(crate) async fn sync_photo_album(
         &self,
         photos: &ProtonPhotosClient,
         account: &AccountId,
+        uid: &NodeUid,
     ) -> Result<()> {
-        let uids = photos
-            .enumerate_album_node_uids()
+        let node = photos
+            .enumerate_nodes(std::slice::from_ref(uid))
             .await
-            .map_err(album_failure("list your albums"))?;
-        let mut keep = Vec::with_capacity(uids.len());
-        for batch in uids.chunks(100) {
-            let nodes = photos
-                .enumerate_nodes(batch)
+            .map_err(crate::sync::photos_error("read an album"))?
+            .into_iter()
+            .find(|node| &node.uid == uid)
+            .ok_or_else(|| Error::message("Some album details are still unavailable."))?;
+        let spec = album_spec(account, uid, &node.name)?;
+        if node.trashed {
+            self.catalog.forget_photo_album(spec.id).await?;
+        } else {
+            let items = photos
+                .enumerate_album(uid)
                 .await
-                .map_err(album_failure("read your albums"))?;
-            for node in nodes.into_iter().filter(|n| !n.trashed) {
-                let spec = album_spec(account, &node.uid, &node.name)?;
-                let items = photos
-                    .enumerate_album(&node.uid)
-                    .await
-                    .map_err(album_failure("read an album"))?;
-                let assets = self.album_assets(photos, account, items).await?;
-                self.catalog.sync_photo_album(spec.clone(), assets).await?;
-                keep.push(spec.id);
-            }
+                .map_err(crate::sync::photos_error("read an album"))?;
+            let assets = self.album_assets(photos, account, items).await?;
+            self.catalog.sync_photo_album(spec, assets).await?;
         }
-        self.catalog
-            .retain_photo_albums(account.clone(), keep)
-            .await?;
         Ok(())
     }
 
@@ -136,7 +124,10 @@ impl App {
             let nodes = photos
                 .enumerate_nodes(&uids)
                 .await
-                .map_err(album_failure("read an album"))?;
+                .map_err(crate::sync::photos_error("read an album"))?;
+            if nodes.len() != uids.len() {
+                return Err(Error::message("Some album photos are still unavailable."));
+            }
             for node in nodes {
                 let Some(item) = batch.iter().find(|item| item.uid == node.uid) else {
                     continue;

@@ -11,6 +11,8 @@ data class AccountState(
     // Proton Photos sync and the Drive gallery sync run independently.
     val syncing: Boolean = false,
     val indexed: Long = 0,
+    val lastPhotosSync: Long? = null,
+    val sessionExpired: Boolean = false,
     // The gallery being added or refreshed, e.g. "Holidays" or "your galleries".
     val driveSync: String? = null,
     val driveIndexed: Long = 0,

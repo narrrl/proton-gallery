@@ -13,6 +13,7 @@ pub mod model;
 pub mod outline;
 pub mod phone;
 pub mod photo_albums;
+pub mod photos_sync;
 pub mod picker;
 pub mod removal;
 pub mod source;

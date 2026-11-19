@@ -11,7 +11,7 @@ use crate::model::*;
 use crate::source::SourcePage;
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: u32 = 12;
+const SCHEMA_VERSION: u32 = 13;
 const APPLICATION_ID: u32 = 0x50474c59;
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
@@ -578,6 +578,12 @@ fn open_connection(path: Option<&Path>) -> Result<Connection> {
     if version < 12 {
         let tx = conn.transaction()?;
         tx.execute_batch(include_str!("schema_v12.sql"))?;
+        tx.pragma_update(None, "user_version", 12)?;
+        tx.commit()?;
+    }
+    if version < 13 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(include_str!("schema_v13.sql"))?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
     }

@@ -135,6 +135,7 @@ fun GalleryApp(
     chooser: ChooserState = ChooserState(), chooserActions: ChooserActions = ChooserActions(),
     onRemoveGallery: (FolderAlbum) -> Unit = {},
     onTestConnection: () -> Unit = {},
+    onRepairPhotos: () -> Unit = {},
     crashReport: String? = null, onDismissCrash: () -> Unit = {},
     backup: BackupState = BackupState(), backupActions: BackupActions = BackupActions(),
     media: MediaActions = MediaActions(),
@@ -158,7 +159,7 @@ fun GalleryApp(
         if (target != location) onNavigate(target)
     }
     // The open viewer: the outline it swipes through and where it opened.
-    var selected by remember { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
+    var selected by remember(location) { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
     // Items waiting for the user to confirm their deletion.
     var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for an album to go into, and the "New album" dialog.
@@ -300,6 +301,7 @@ fun GalleryApp(
                 }, albums = albums, onAlbum = { onNavigate(location.child(it)) },
                     tags = if (driveRoot) tags else emptyList(), selectedTag = tagFilter, onTag = onTag,
                     albumsTitle = if (driveRoot) "Galleries" else "Albums",
+                    showsMedia = location.nativeView() != null,
                     hiddenUnlocked = hiddenUnlocked, onToggleHidden = toggleHidden,
                     onNewAlbum = if (albumsRoot && account.connected && pick == null) { { naming = true } } else null,
                     header = gridHeader,
@@ -411,7 +413,7 @@ fun GalleryApp(
     )
     if (naming) NewAlbumDialog(onCreate = { albumActions.create(it, emptyList()); naming = false }, onDismiss = { naming = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
-    if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)
+    if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection, onRepairPhotos)
     selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },
         actions = ViewerActions(
             delete = { confirmDelete = listOf(it) },
@@ -419,7 +421,7 @@ fun GalleryApp(
             addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
             favorite = { item -> media.favorite(listOf(item), !item.favorite) },
             hide = if (canAddToAlbum && !location.private) { { hiding = listOf(it); albumActions.loadChoices() } } else null,
-        ), private = location.private) }
+        ), private = location.private, latestOutline = outline) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },
             onDismiss = { confirmDelete = null })
@@ -617,7 +619,9 @@ private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
 fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier,
     selected: Boolean? = null, onLongClick: (() -> Unit)? = null, private: Boolean = false) {
     // A thumbnail already in memory shows in the first frame, without a placeholder.
-    val bitmap by produceState(loader.peek(item), item.id, item.revision, private, loader) { value = loader.peek(item) ?: loader.load(item, private) }
+    val bitmap by produceState(loader.peek(item, private), item.id, item.revision, private, loader) {
+        value = loader.peek(item, private) ?: loader.load(item, private)
+    }
     val phoneOnly = item.phoneId != null && !item.backedUp
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
         .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)

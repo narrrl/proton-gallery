@@ -27,14 +27,19 @@ uniffi::setup_scaffolding!();
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum GalleryError {
+    #[error("Your Proton session expired. Sign in again to sync your library.")]
+    SessionExpired,
     #[error("{detail}")]
     Operation { detail: String },
 }
 
 impl From<pg_app::Error> for GalleryError {
     fn from(error: pg_app::Error) -> Self {
-        Self::Operation {
-            detail: error.to_string(),
+        match error {
+            pg_app::Error::SessionExpired => Self::SessionExpired,
+            error => Self::Operation {
+                detail: error.to_string(),
+            },
         }
     }
 }

@@ -108,94 +108,61 @@ impl App {
             .map(|s| s.volume.clone()))
     }
 
-    /// The small Proton thumbnail of a photo or video, decrypted, or `None`
-    /// when it has none. Callers keep it in a bounded memory cache.
+    /// A bounded thumbnail for the grid. A preview can supply it when Proton
+    /// only generated the larger rendition.
     pub async fn thumbnail(&self, key: &AssetKey) -> Result<Option<Vec<u8>>> {
-        let _operations = self.operations.read().await;
-        let account = self.auth.account().await?;
-        self.owns(&account.id, key)?;
-        let photos_volume = self.photos_volume(&account.id).await?;
-        if photos_volume.as_ref() != Some(&key.volume) {
-            // Drive gallery media lives outside the Photos volume.
-            let uid = pg_drive::node_uid(key);
-            return tokio::select! { biased;
-                _ = account.cancel.cancelled() => Err(Error::Cancelled),
-                result = account.drive.download_thumbnail(&uid, proton_drive_rs::ThumbnailType::Thumbnail) => {
-                    let bytes = result.map_err(|e| {
-                        tracing::warn!("Drive thumbnail failed: {}", pg_drive::auth::cause_chain(&e));
-                        Error::message("Couldn’t load this preview.")
-                    })?;
-                    if bytes.as_ref().is_some_and(|b| b.len() > THUMBNAIL_LIMIT) {
-                        return Err(pg_core::Error::Invalid("thumbnail exceeds budget".into()).into());
-                    }
-                    Ok(bytes)
+        use proton_drive_rs::ThumbnailType;
+        let fetch = async {
+            match self
+                .rendition(key, ThumbnailType::Thumbnail, THUMBNAIL_LIMIT)
+                .await?
+            {
+                Some(bytes) => Ok(Some(bytes)),
+                None => {
+                    self.rendition(key, ThumbnailType::Preview, PREVIEW_LIMIT)
+                        .await
                 }
-            };
-        }
-        let cached = self
-            .photos
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .filter(|source| {
-                pg_core::source::MediaSource::spec(source.as_ref()).account == account.id
-            })
-            .cloned();
-        let source = match cached {
-            Some(source) => source,
-            None => {
-                let generation = self.generation();
-                let photos =
-                    proton_drive_rs::ProtonPhotosClient::from_drive_client(account.drive.clone());
-                let root = tokio::select! { biased;
-                    _ = account.cancel.cancelled() => return Err(Error::Cancelled),
-                    result = photos.get_photos_root() => result
-                        .map_err(|_| Error::message("Couldn’t load Proton Photos previews."))?
-                        .ok_or(pg_core::Error::NotFound)?,
-                };
-                let source = Arc::new(pg_drive::photos::ProtonPhotosSource::new(
-                    photos,
-                    account.id.clone(),
-                    &root,
-                )?);
-                let mut cache = self.photos.write().unwrap_or_else(|e| e.into_inner());
-                if account.cancel.is_cancelled() {
-                    return Err(Error::Cancelled);
-                }
-                self.ensure_current(generation)?;
-                *cache = Some(source.clone());
-                source
             }
         };
-        Ok(source.thumbnail(key, &account.cancel).await?)
+        tokio::time::timeout(std::time::Duration::from_secs(12), fetch)
+            .await
+            .map_err(|_| Error::message("Proton took too long to load this thumbnail."))?
     }
 
-    /// The large preview (about screen size) Proton keeps beside a photo, or
-    /// `None` when there is none and only the original can be shown.
+    /// The large preview (about screen size) Proton keeps beside a photo.
     pub async fn preview(&self, key: &AssetKey) -> Result<Option<Vec<u8>>> {
+        self.rendition(key, proton_drive_rs::ThumbnailType::Preview, PREVIEW_LIMIT)
+            .await
+    }
+
+    async fn rendition(
+        &self,
+        key: &AssetKey,
+        kind: proton_drive_rs::ThumbnailType,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>> {
         let _operations = self.operations.read().await;
         let account = self.auth.account().await?;
         self.owns(&account.id, key)?;
         let photos_volume = self.photos_volume(&account.id).await?;
         let uid = pg_drive::node_uid(key);
-        let preview = proton_drive_rs::ThumbnailType::Preview;
         let download = async {
             if photos_volume.as_ref() == Some(&key.volume) {
                 proton_drive_rs::ProtonPhotosClient::from_drive_client(account.drive.clone())
-                    .download_thumbnail(&uid, preview)
+                    .download_thumbnail(&uid, kind)
                     .await
             } else {
-                account.drive.download_thumbnail(&uid, preview).await
+                account.drive.download_thumbnail(&uid, kind).await
             }
         };
         let bytes = tokio::select! { biased;
             _ = account.cancel.cancelled() => return Err(Error::Cancelled),
             result = download => result.map_err(|e| {
-                tracing::warn!("photo preview failed: {}", pg_drive::auth::cause_chain(&e));
+                tracing::warn!("Proton rendition failed: {}", pg_drive::auth::cause_chain(&e));
                 Error::message("Couldn’t load this photo.")
             })?,
         };
-        if bytes.as_ref().is_some_and(|b| b.len() > PREVIEW_LIMIT) {
+        if bytes.as_ref().is_some_and(|b| b.len() > limit) {
             return Err(pg_core::Error::Invalid("preview exceeds budget".into()).into());
         }
         Ok(bytes)

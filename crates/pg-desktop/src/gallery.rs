@@ -8,18 +8,25 @@ use crate::design::{self, Icon};
 use crate::grid::{self, Layout, RowKind};
 use crate::thumbs::{self, Decoded};
 use crate::vault;
+use iced::advanced::{
+    Clipboard, Layout as WidgetLayout, Shell, Widget, layout, mouse, overlay, renderer,
+    widget::{Operation, Tree},
+};
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{
     Space, button, center, checkbox, column, container, image, operation, pick_list, row,
     scrollable, slider, text, text_input,
 };
 use iced::{
-    Alignment, Color, ContentFit, Element, Length, Size, Subscription, Task, Theme, window,
+    Alignment, Color, ContentFit, Element, Event, Length, Rectangle, Renderer, Size, Subscription,
+    Task, Theme, Vector, window,
 };
 use pg_app::drive_galleries::{FolderChoice, FolderListing};
 use pg_app::fixtures::{FixtureMedia, MediaProvider};
 use pg_app::sharing::{PublicLink, PublicLinkAction};
-use pg_app::{AccountState, App, Generation, MediaItem, Outline, SignInStage, View};
+use pg_app::{
+    AccountState, App, Generation, MediaItem, Outline, PhotosSyncStatus, SignInStage, View,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,6 +54,148 @@ const SCROLLBAR: f32 = 14.0;
 
 fn grid_id() -> iced::widget::Id {
     iced::widget::Id::new("timeline")
+}
+
+/// Intercept the gesture before the scrollable can move the viewport.
+struct GridZoom<'a>(Element<'a, Message>);
+
+impl Widget<Message, Theme, Renderer> for GridZoom<'_> {
+    fn size(&self) -> Size<Length> {
+        self.0.as_widget().size()
+    }
+
+    fn tag(&self) -> iced::advanced::widget::tree::Tag {
+        iced::advanced::widget::tree::Tag::of::<keyboard::Modifiers>()
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        iced::advanced::widget::tree::State::new(keyboard::Modifiers::empty())
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.0)]
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.children[0].diff(&self.0);
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.0
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: WidgetLayout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.0.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: WidgetLayout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        let modifiers = tree.state.downcast_mut::<keyboard::Modifiers>();
+        match event {
+            Event::Keyboard(keyboard::Event::ModifiersChanged(value)) => *modifiers = *value,
+            Event::Window(window::Event::Unfocused) => *modifiers = keyboard::Modifiers::empty(),
+            Event::Mouse(mouse::Event::WheelScrolled { delta })
+                if modifiers.control() && cursor.is_over(layout.bounds()) =>
+            {
+                let y = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => {
+                        *y
+                    }
+                };
+                if y != 0.0 {
+                    shell.publish(Message::GridZoom(y > 0.0));
+                    shell.capture_event();
+                    return;
+                }
+            }
+            _ => {}
+        }
+        self.0.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: WidgetLayout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.0
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: WidgetLayout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.0
+            .as_widget()
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut Tree,
+        layout: WidgetLayout<'a>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
+        self.0.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +230,12 @@ struct SyncState {
     indexed: u64,
     error: Option<String>,
     settings_busy: bool,
+    status_busy: bool,
+    revision: u64,
+    last_success: Option<i64>,
+    failures: u32,
+    retry_at: Option<std::time::Instant>,
+    expired: bool,
     visibility_stale: bool,
 }
 
@@ -229,9 +384,12 @@ pub enum Message {
     SignedOut(Result<(), String>),
     Sync,
     SyncTick,
-    CheckSettings,
-    SettingsChecked(Generation, bool, Result<Option<bool>, String>),
-    Synced(Generation, Result<u64, pg_app::Error>),
+    CheckPhotos,
+    RetryPhotos,
+    RepairPhotos,
+    SettingsChecked(Generation, Result<Option<bool>, String>),
+    PhotosStatus(Generation, Result<PhotosSyncStatus, pg_app::Error>),
+    Synced(Generation, Result<PhotosSyncStatus, pg_app::Error>),
     DemoReady(Result<usize, String>),
     OutlineLoaded(u64, Generation, Result<Arc<Outline>, String>),
     Relayout,
@@ -297,6 +455,7 @@ pub enum Message {
         Result<Vec<pg_core::library::Album>, String>,
     ),
     GridSize(u32),
+    GridZoom(bool),
     ToggleFavorite,
     FavoriteDone(
         u64,
@@ -465,9 +624,13 @@ impl Gallery {
         }
         if self.browsing() && !self.demo() {
             subscriptions
-                .push(iced::time::every(Duration::from_secs(120)).map(|_| Message::CheckSettings));
+                .push(iced::time::every(Duration::from_secs(120)).map(|_| Message::CheckPhotos));
+            if self.sync.retry_at.is_some() {
+                subscriptions
+                    .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::RetryPhotos));
+            }
             subscriptions.push(iced::event::listen_with(|event, _, _| match event {
-                iced::Event::Window(window::Event::Focused) => Some(Message::CheckSettings),
+                iced::Event::Window(window::Event::Focused) => Some(Message::CheckPhotos),
                 iced::Event::Window(window::Event::Unfocused) => Some(Message::LockHidden),
                 _ => None,
             }));
@@ -547,7 +710,7 @@ impl Gallery {
                     );
                 }
                 if self.browsing() {
-                    return self.start_sync();
+                    return self.open_library();
                 }
                 Task::none()
             }
@@ -754,7 +917,7 @@ impl Gallery {
                                 temporary: self.form.temporary,
                                 ..SignInForm::default()
                             };
-                            return self.start_sync();
+                            return self.open_library();
                         }
                     }
                     Err(error) => {
@@ -779,7 +942,11 @@ impl Gallery {
                 self.forget_library();
                 self.account.stage = SignInStage::SignedOut;
                 self.form.busy = true;
-                self.sync = SyncState::default();
+                let expired = self.sync.expired;
+                self.sync = SyncState {
+                    expired,
+                    ..SyncState::default()
+                };
                 spawn(
                     &app,
                     move |app| async move { app.sign_out().await.map_err(shown) },
@@ -792,9 +959,12 @@ impl Gallery {
                 if let Some(app) = self.app() {
                     self.account = app.account_state();
                 }
+                let expired = self.sync.expired;
                 self.sync = SyncState::default();
                 self.form = SignInForm {
-                    error: result.err(),
+                    error: result
+                        .err()
+                        .or_else(|| expired.then(|| pg_app::Error::SessionExpired.to_string())),
                     ..SignInForm::default()
                 };
                 Task::none()
@@ -810,6 +980,29 @@ impl Gallery {
                     self.start_sync()
                 }
             }
+            Message::CheckPhotos => {
+                if self
+                    .sync
+                    .retry_at
+                    .is_some_and(|at| at > std::time::Instant::now())
+                {
+                    Task::none()
+                } else {
+                    self.start_sync()
+                }
+            }
+            Message::RetryPhotos => {
+                if self
+                    .sync
+                    .retry_at
+                    .is_some_and(|at| at <= std::time::Instant::now())
+                {
+                    self.index_photos(false)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::RepairPhotos => self.index_photos(true),
             Message::SyncTick => {
                 if !self.browsing() {
                     return Task::none();
@@ -818,15 +1011,13 @@ impl Gallery {
                     let indexed = app.indexed.load(std::sync::atomic::Ordering::Relaxed);
                     let grew = indexed > self.sync.indexed;
                     self.sync.indexed = indexed;
-                    // Show what has arrived so far.
-                    if grew {
+                    if self.demo() && grew {
                         return self.load_outline();
                     }
                 }
-                Task::none()
+                self.read_photos_status()
             }
-            Message::CheckSettings => self.check_settings(false),
-            Message::SettingsChecked(generation, index_photos, result) => {
+            Message::SettingsChecked(generation, result) => {
                 if !self.current(generation) {
                     return Task::none();
                 }
@@ -855,34 +1046,54 @@ impl Gallery {
                                 |_| Message::Ignored,
                             );
                         }
-                        let index = if index_photos {
-                            self.index_photos()
-                        } else {
-                            Task::none()
-                        };
-                        Task::batch([self.load_outline(), self.load_albums(), index, drop_cached])
+                        Task::batch([self.load_outline(), self.load_albums(), drop_cached])
                     }
-                    Err(error) => {
+                    Err(_) => {
                         self.sync.visibility_stale = true;
-                        self.sync.error = Some(error);
-                        Task::batch([self.load_outline(), self.load_albums()])
+                        Task::none()
                     }
                 }
             }
-            Message::Synced(generation, result) => {
-                let Some(app) = self.app() else {
+            Message::PhotosStatus(generation, result) => {
+                if !self.current(generation) {
                     return Task::none();
-                };
-                if app.ensure_current(generation).is_err() {
+                }
+                self.sync.status_busy = false;
+                match result {
+                    Ok(status) => self.apply_photos_status(status),
+                    Err(_) => Task::none(),
+                }
+            }
+            Message::Synced(generation, result) => {
+                if !self.current(generation) {
                     return Task::none();
                 }
                 self.sync.running = false;
                 match result {
-                    Ok(_) => self.sync.error = None,
-                    Err(pg_app::Error::Cancelled | pg_app::Error::Stale) => {}
-                    Err(error) => self.sync.error = Some(error.to_string()),
+                    Ok(status) => {
+                        let reload = self.apply_photos_status(status);
+                        if status.more {
+                            return Task::batch([reload, self.index_photos(false)]);
+                        }
+                        if status.retry {
+                            self.photos_retry("Some Photos changes are still pending. Your cached library is available.".into());
+                        } else {
+                            self.sync.error = None;
+                            self.sync.failures = 0;
+                        }
+                        reload
+                    }
+                    Err(pg_app::Error::Cancelled | pg_app::Error::Stale) => Task::none(),
+                    Err(pg_app::Error::SessionExpired) => {
+                        self.sync.expired = true;
+                        self.sync.error = Some(pg_app::Error::SessionExpired.to_string());
+                        self.read_photos_status()
+                    }
+                    Err(error) => {
+                        self.photos_retry(error.to_string());
+                        self.read_photos_status()
+                    }
                 }
-                Task::batch([self.load_outline(), self.load_albums()])
             }
             Message::OutlineLoaded(request, generation, result) => {
                 if request != self.outline_request || !self.current(generation) {
@@ -1410,7 +1621,7 @@ impl Gallery {
                 }
                 self.sync.error = result.err();
                 if self.section == Section::Drive {
-                    return Task::batch([self.show_drive_place(), self.check_settings(false)]);
+                    return Task::batch([self.show_drive_place(), self.check_settings()]);
                 }
                 Task::none()
             }
@@ -1422,15 +1633,35 @@ impl Gallery {
                 self.thumbs_loading
                     .retain(|key, _| !key.starts_with("cover:"));
                 match result {
-                    Ok(albums) => self.albums = albums,
+                    Ok(albums) => {
+                        self.albums = albums;
+                        if let View::PhotoAlbum(id) = &self.view
+                            && self.album_open
+                            && !self
+                                .albums
+                                .iter()
+                                .any(|album| album.source.id.as_str() == id)
+                        {
+                            return self.update(Message::BackToAlbums);
+                        }
+                    }
                     Err(error) => self.sync.error = Some(error),
                 }
                 Task::batch([self.restore_drive_scroll(), self.request_visible()])
             }
             Message::GridSize(target) => {
-                self.row_target = target.clamp(100, 320);
+                let target = target.clamp(100, 320);
+                if target == self.row_target {
+                    return Task::none();
+                }
+                self.row_target = target;
                 self.replan()
             }
+            Message::GridZoom(inward) => self.update(Message::GridSize(if inward {
+                self.row_target + 20
+            } else {
+                self.row_target.saturating_sub(20)
+            })),
             Message::ToggleFavorite => self.toggle_favorite(),
             Message::FavoriteDone(request, generation, key, favorite, result) => {
                 if request != self.favorite_request || !self.current(generation) {
@@ -1481,60 +1712,90 @@ impl Gallery {
                 .is_some_and(|app| app.ensure_current(generation).is_ok())
     }
 
-    fn start_sync(&mut self) -> Task<Message> {
-        self.check_settings(true)
+    fn open_library(&mut self) -> Task<Message> {
+        Task::batch([self.load_outline(), self.load_albums(), self.start_sync()])
     }
 
-    fn check_settings(&mut self, index_photos: bool) -> Task<Message> {
-        if !self.browsing()
-            || self.demo()
-            || self.sync.settings_busy
-            || self.sync.running
-            || self.drive.busy
-        {
+    fn start_sync(&mut self) -> Task<Message> {
+        Task::batch([self.check_settings(), self.index_photos(false)])
+    }
+
+    fn check_settings(&mut self) -> Task<Message> {
+        if !self.browsing() || self.demo() || self.sync.settings_busy || self.sync.expired {
             return Task::none();
         }
         let Some(app) = self.app().cloned() else {
             return Task::none();
         };
         self.sync.settings_busy = true;
-        self.sync.error = None;
         let generation = app.generation();
         spawn(
             &app,
-            move |app| async move {
-                if index_photos {
+            |app| async move {
+                if app.gallery_visibility_cached().await.map_err(shown)? {
+                    app.poll_gallery_configuration(false).await.map_err(shown)
+                } else {
                     app.refresh_gallery_configuration(false)
                         .await
                         .map(Some)
                         .map_err(shown)
-                } else {
-                    app.poll_gallery_configuration(false).await.map_err(shown)
                 }
             },
-            move |result| Message::SettingsChecked(generation, index_photos, result),
+            move |result| Message::SettingsChecked(generation, result),
         )
     }
 
-    fn index_photos(&mut self) -> Task<Message> {
-        if !self.browsing() {
+    fn index_photos(&mut self, repair: bool) -> Task<Message> {
+        if !self.browsing() || self.sync.running || self.demo() || self.sync.expired {
             return Task::none();
         }
         let Some(app) = self.app().cloned() else {
             return Task::none();
         };
-        if self.sync.running || self.demo() {
-            return Task::none();
-        }
         self.sync.running = true;
-        self.sync.error = None;
+        self.sync.retry_at = None;
         self.sync.indexed = 0;
         let generation = app.generation();
         spawn(
             &app,
-            |app| async move { app.sync_photos(|_| {}).await },
+            move |app| async move { app.sync_photos_batch(repair, |_| {}).await },
             move |result| Message::Synced(generation, result),
         )
+    }
+
+    fn read_photos_status(&mut self) -> Task<Message> {
+        if self.sync.status_busy || self.demo() {
+            return Task::none();
+        }
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        self.sync.status_busy = true;
+        let generation = app.generation();
+        spawn(
+            &app,
+            |app| async move { app.photos_sync_status().await },
+            move |result| Message::PhotosStatus(generation, result),
+        )
+    }
+
+    fn apply_photos_status(&mut self, status: PhotosSyncStatus) -> Task<Message> {
+        self.sync.last_success = self.sync.last_success.max(status.last_success);
+        if self.sync.revision >= status.revision {
+            return Task::none();
+        }
+        self.sync.revision = status.revision;
+        if self.section == Section::Drive {
+            return Task::none();
+        }
+        Task::batch([self.load_outline(), self.load_albums()])
+    }
+
+    fn photos_retry(&mut self, message: String) {
+        self.sync.error = Some(message);
+        let seconds = 5 * 2u64.pow(self.sync.failures.min(6));
+        self.sync.failures = self.sync.failures.saturating_add(1);
+        self.sync.retry_at = Some(std::time::Instant::now() + Duration::from_secs(seconds));
     }
 
     fn load_albums(&mut self) -> Task<Message> {
@@ -2642,6 +2903,14 @@ impl Gallery {
                 );
             }
             side = side.push(
+                button("Repair library")
+                    .padding([9, 12])
+                    .style(design::secondary)
+                    .on_press_maybe(
+                        (!self.sync.running && !self.sync.expired).then_some(Message::RepairPhotos),
+                    ),
+            );
+            side = side.push(
                 button(row![design::icon(Icon::Exit, 16.0), text("Sign out").size(13)].spacing(8))
                     .padding([9, 12])
                     .on_press(Message::SignOut)
@@ -2724,17 +2993,32 @@ impl Gallery {
         } else {
             count_label(self.ratios.len(), "item", "items")
         };
-        let title = column![
+        let last_sync = self
+            .sync
+            .last_success
+            .and_then(|time| chrono::DateTime::from_timestamp(time, 0))
+            .map(|time| {
+                format!(
+                    "Last Photos sync {}",
+                    time.with_timezone(&chrono::Local).format("%b %e, %H:%M")
+                )
+            });
+        let mut title = column![
             text(self.section_title())
                 .font(design::MEDIUM)
                 .size(if self.window.width < 760.0 { 22 } else { 30 }),
             text(status).size(13).style(design::muted),
         ]
         .spacing(4);
+        if let Some(label) = last_sync {
+            title = title.push(text(label).size(12).style(design::muted));
+        }
         let refresh = button(
             row![
                 design::icon(Icon::Refresh, 16.0),
-                text(if self.sync.error.is_some() {
+                text(if self.sync.expired && self.section != Section::Drive {
+                    "Sign in again"
+                } else if self.sync.error.is_some() {
                     "Retry"
                 } else {
                     "Refresh"
@@ -2751,7 +3035,11 @@ impl Gallery {
             } else {
                 !self.sync.running
             })
-            .then_some(Message::Sync),
+            .then_some(if self.sync.expired && self.section != Section::Drive {
+                Message::SignOut
+            } else {
+                Message::Sync
+            }),
         )
         .style(design::secondary);
         let mut controls = row![].spacing(12).align_y(Alignment::Center);
@@ -2841,6 +3129,14 @@ impl Gallery {
             .padding([20, GUTTER as u16])
             .height(TOOLBAR);
         if self.window.width < 760.0 && !self.demo() {
+            if self.section == Section::Photos && !self.sync.expired {
+                bar = bar.push(
+                    button("Repair library")
+                        .padding([8, 10])
+                        .style(design::secondary)
+                        .on_press_maybe((!self.sync.running).then_some(Message::RepairPhotos)),
+                );
+            }
             bar = bar.push(
                 button("Sign out")
                     .padding([10, 12])
@@ -3216,7 +3512,7 @@ impl Gallery {
         if self.layout.height > cursor {
             grid = grid.push(Space::new().height(self.layout.height - cursor));
         }
-        scrollable(container(grid).padding([0, GUTTER as u16]))
+        let scroll = scrollable(container(grid).padding([0, GUTTER as u16]))
             .id(grid_id())
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new()
@@ -3226,8 +3522,8 @@ impl Gallery {
             ))
             .on_scroll(Message::Scrolled)
             .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+            .height(Length::Fill);
+        Element::new(GridZoom(scroll.into()))
     }
 
     fn tile_row(&self, items: std::ops::Range<usize>, height: f32) -> Element<'_, Message> {
@@ -3784,6 +4080,23 @@ mod tests {
         gallery.ratios[new_index] = 0.5;
         let _ = gallery.replan_to(600.0);
         assert_eq!(current_id(&gallery, gallery.focus.unwrap()), focus_id);
+    }
+
+    #[tokio::test]
+    async fn a_catalog_change_closes_the_deleted_photo_in_the_viewer() {
+        let (_dir, mut gallery) = gallery(10).await;
+        let _ = gallery.open(0);
+        assert!(gallery.viewer.is_some());
+        let old = gallery.outline.clone().unwrap();
+        let next = Outline {
+            keys: old.keys[1..].to_vec(),
+            ids: old.ids[1..].to_vec(),
+            times: old.times[1..].to_vec(),
+            ratios: old.ratios[1..].to_vec(),
+        };
+        let _ = gallery.show_outline(Arc::new(next));
+        assert!(gallery.viewer.is_none());
+        assert!(gallery.viewer_work.is_none());
     }
 
     #[tokio::test]

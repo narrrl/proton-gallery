@@ -246,6 +246,163 @@ async fn fill(c: &Catalog, source: &SourceSpec, assets: Vec<Asset>) {
 }
 
 #[tokio::test]
+async fn hidden_drive_entries_include_nested_roots_once() {
+    use pg_core::library::AlbumSettings;
+
+    let catalog = Catalog::in_memory().await.unwrap();
+    let root = folder("root");
+    let hidden = folder("hidden");
+    let descendant = folder("descendant");
+    let gallery = root.id.clone();
+    for (source, parent) in [
+        (&root, None),
+        (&hidden, Some(root.id.clone())),
+        (&descendant, Some(hidden.id.clone())),
+    ] {
+        catalog
+            .register_album(gallery.clone(), source.clone(), parent)
+            .await
+            .unwrap();
+    }
+    let cover = media(&hidden, "cover", 10);
+    fill(&catalog, &hidden, vec![cover.clone()]).await;
+    for source in [&hidden, &descendant] {
+        catalog
+            .set_album_settings(
+                source.id.clone(),
+                AlbumSettings {
+                    hidden: true,
+                    ..AlbumSettings::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let entries = catalog
+        .hidden_drive_albums(root.account.clone())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].source.id, hidden.id);
+    assert_eq!(entries[0].cover.as_ref().unwrap().key, cover.key);
+    assert!(
+        catalog
+            .drive_album_is_private(gallery.clone(), descendant.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !catalog
+            .drive_album_is_private(gallery, root.id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_hidden_gallery_child_can_have_its_own_cover() {
+    use pg_core::library::AlbumSettings;
+
+    let catalog = Catalog::in_memory().await.unwrap();
+    let (private, public, album) = (folder("private"), folder("public"), folder("child"));
+    for root in [&private, &public] {
+        catalog
+            .register_album(root.id.clone(), root.clone(), None)
+            .await
+            .unwrap();
+        catalog
+            .register_album(root.id.clone(), album.clone(), Some(root.id.clone()))
+            .await
+            .unwrap();
+    }
+    let chosen = media(&album, "chosen", 10);
+    let newest = media(&album, "newest", 20);
+    fill(&catalog, &album, vec![chosen.clone(), newest.clone()]).await;
+    catalog
+        .set_album_settings(
+            private.id.clone(),
+            AlbumSettings {
+                hidden: true,
+                ..AlbumSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let hidden = catalog
+        .albums(Some(private.id.clone()), Some(private.id.clone()))
+        .await
+        .unwrap();
+    assert_eq!(hidden[0].cover.as_ref().unwrap().key, newest.key);
+    let settings = AlbumSettings {
+        cover: Some(chosen.key.clone()),
+        tags: vec!["trip".into()],
+        ..AlbumSettings::default()
+    };
+    assert!(
+        catalog
+            .set_album_settings_at(Some(public.id.clone()), album.id.clone(), settings.clone())
+            .await
+            .is_err()
+    );
+    catalog
+        .set_album_settings_at(Some(private.id.clone()), album.id.clone(), settings)
+        .await
+        .unwrap();
+    let hidden = catalog
+        .albums(Some(private.id.clone()), Some(private.id))
+        .await
+        .unwrap();
+    assert_eq!(hidden[0].cover.as_ref().unwrap().key, chosen.key);
+    let visible = catalog
+        .albums(Some(public.id.clone()), Some(public.id))
+        .await
+        .unwrap();
+    assert!(visible[0].cover.is_none());
+    let tagged = catalog
+        .tagged_albums("trip".into(), album.account)
+        .await
+        .unwrap();
+    assert_eq!(tagged.len(), 1);
+    assert_eq!(tagged[0].gallery.as_str(), "public");
+    assert!(tagged[0].cover.is_none());
+    let root = SourceId::new("private").unwrap();
+    catalog
+        .set_album_settings(
+            root.clone(),
+            AlbumSettings {
+                hidden: true,
+                cover: Some(chosen.key.clone()),
+                ..AlbumSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .set_album_settings(
+            root.clone(),
+            AlbumSettings {
+                cover: Some(chosen.key.clone()),
+                ..AlbumSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+    let roots = catalog.albums(None, None).await.unwrap();
+    assert_eq!(
+        roots
+            .iter()
+            .find(|album| album.gallery == root)
+            .unwrap()
+            .cover
+            .as_ref()
+            .unwrap()
+            .key,
+        chosen.key
+    );
+}
+
+#[tokio::test]
 async fn album_settings_name_cover_group_tag_pin_and_hide_albums() {
     use pg_core::library::{AlbumSettings, Grouping};
     let c = Catalog::in_memory().await.unwrap();

@@ -182,6 +182,7 @@ fun SmartMediaGrid(
     albums: List<FolderAlbum> = emptyList(), onAlbum: (FolderAlbum) -> Unit = {},
     tags: List<AlbumTag> = emptyList(), selectedTag: String? = null, onTag: (String?) -> Unit = {},
     albumsTitle: String = "Albums",
+    showsMedia: Boolean = true,
     onNewAlbum: (() -> Unit)? = null,
     // Hidden albums show only while unlocked with the phone's lock.
     hiddenUnlocked: Boolean = false,
@@ -318,7 +319,7 @@ fun SmartMediaGrid(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     for (album in albumRows[index]) {
                         if (album == null) NewAlbumCard(onNewAlbum ?: {}, Modifier.weight(1f))
-                        else key(album.gallery, album.id) { AlbumCard(album, thumbnails, { onAlbum(album) }, Modifier.weight(1f)) }
+                        else key(album.gallery, album.id) { AlbumCard(album, thumbnails, private || album.hidden, { onAlbum(album) }, Modifier.weight(1f)) }
                     }
                     repeat(albumColumns - albumRows[index].size) { Spacer(Modifier.weight(1f)) }
                 }
@@ -354,7 +355,7 @@ fun SmartMediaGrid(
                 }
             }
             if (failed) item(key = "layout-error") { PageRetry { retry++ } }
-            if (outline == null || (layout == null && outline.count > 0)) item(key = "loading") {
+            if (showsMedia && (outline == null || (layout == null && outline.count > 0))) item(key = "loading") {
                 Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) { ActivityBar(Activity("Loading"), Modifier.width(96.dp)) }
             }
         }
@@ -370,11 +371,11 @@ fun albumCaption(album: FolderAlbum): String = buildList {
 }.joinToString(" · ")
 
 @Composable
-private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, private: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cover = album.cover
-    val bitmap by produceState(cover?.let(loader::peek), cover?.id, cover?.revision, album.hidden, loader) {
+    val bitmap by produceState(cover?.let { loader.peek(it, private) }, cover?.id, cover?.revision, private, loader) {
         // The state outlives its keys: replace it, or a slot keeps the previous album's cover.
-        value = cover?.let { loader.peek(it) ?: loader.load(it, album.hidden) }
+        value = cover?.let { loader.peek(it, private) ?: loader.load(it, private) }
     }
     Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
         .semantics(mergeDescendants = true) { contentDescription = "Album ${album.name}, ${albumCaption(album)}" }) {

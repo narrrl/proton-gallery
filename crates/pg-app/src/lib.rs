@@ -34,7 +34,7 @@ pub mod video;
 
 pub use account::{AccountState, SignInStage};
 pub use library::{MediaItem, Outline, View};
-pub use sync::SyncProgress;
+pub use sync::{PhotosSyncStatus, SyncProgress};
 
 /// A failure to show the user, or work that stopped on purpose.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -42,6 +42,8 @@ pub enum Error {
     /// Something went wrong; the text is written for the user.
     #[error("{0}")]
     Message(String),
+    #[error("Your Proton session expired. Sign in again to sync your library.")]
+    SessionExpired,
     /// The work was cancelled, for example by signing out.
     #[error("cancelled")]
     Cancelled,
