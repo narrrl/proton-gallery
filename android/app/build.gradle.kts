@@ -8,6 +8,10 @@ plugins {
 
 val nativeAbis = providers.environmentVariable("PG_ANDROID_ABIS").orElse("arm64-v8a,x86_64").get().split(",")
 require(nativeAbis.isNotEmpty() && nativeAbis.all { it in setOf("arm64-v8a", "x86_64") }) { "Unsupported PG_ANDROID_ABIS" }
+val robolectricSdk by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+}
 
 android {
     namespace = "io.narl.protongallery"
@@ -65,6 +69,16 @@ android {
         unitTests.all {
             it.systemProperty("roborazzi.test.record", "true")
             it.systemProperty("jna.library.path", rootProject.projectDir.parentFile.resolve("target/debug").absolutePath)
+            // Resolve the SDK used by @Config(sdk = [34]) through Gradle's
+            // repositories and CI cache. Robolectric otherwise downloads it
+            // during the test run using a separate Maven client.
+            it.inputs.files(robolectricSdk)
+            it.jvmArgumentProviders.add(CommandLineArgumentProvider {
+                listOf(
+                    "-Drobolectric.offline=true",
+                    "-Drobolectric.dependency.dir=${robolectricSdk.singleFile.parent}",
+                )
+            })
             providers.gradleProperty("pg.screenshot.photos").orNull?.let { directory ->
                 val photos = rootProject.file(directory)
                 it.systemProperty("pg.screenshot.photos", photos.absolutePath)
@@ -113,6 +127,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16")
+    robolectricSdk("org.robolectric:android-all-instrumented:14-robolectric-10818077-i7")
     testImplementation("androidx.compose.ui:ui-test-junit4:1.11.3")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.76.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.76.0")
