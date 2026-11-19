@@ -545,8 +545,14 @@ class GalleryUiTest {
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithContentDescription("Edit album").performClick()
         compose.onNodeWithText("Choose").performScrollTo().performClick()
-        compose.onNodeWithText("Coast").performClick()
-        compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performClick()
+        val stopChoosing = compose.onNodeWithContentDescription("Stop choosing a cover")
+        stopChoosing.assertExists()
+        compose.onNodeWithText("Coast").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty()
+        }
+        stopChoosing.assertExists()
+        compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performSemanticsAction(SemanticsActions.OnClick)
         compose.runOnIdle { assertEquals(listOf("year" to "Coast 0.jpg"), chosen) }
         compose.onNodeWithText("Coast").assertExists()
     }
