@@ -44,19 +44,22 @@ pub struct PickerDeletions {
 }
 
 impl GalleryEngine {
-    async fn picker_source(&self) -> Result<Option<SourceSpec>, GalleryError> {
+    pub(crate) async fn picker_source(&self) -> Result<Option<SourceSpec>, GalleryError> {
         let Some(account) = self.auth.account_id() else {
             return Ok(None);
         };
         if !self.app.gallery_visibility_cached().await? {
             return Ok(None);
         }
+        let Some(source) = self.app.photo_source().await? else {
+            return Ok(None);
+        };
         Ok(self
             .catalog
             .account_sources(SourceKind::Photos, account)
             .await?
             .into_iter()
-            .next())
+            .find(|spec| spec.id == source))
     }
 }
 

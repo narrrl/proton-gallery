@@ -69,19 +69,7 @@ impl GalleryEngine {
         limit: u32,
     ) -> Result<picker::PickerDeletions, GalleryError> {
         self.runtime.block_on(async {
-            let Some(account) = self.auth.account_id() else {
-                return Ok(picker::PickerDeletions {
-                    ids: vec![],
-                    next: None,
-                });
-            };
-            let Some(source) = self
-                .catalog
-                .account_sources(SourceKind::Photos, account)
-                .await?
-                .into_iter()
-                .next()
-            else {
+            let Some(source) = self.picker_source().await? else {
                 return Ok(picker::PickerDeletions {
                     ids: vec![],
                     next: None,

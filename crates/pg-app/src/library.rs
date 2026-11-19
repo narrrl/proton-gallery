@@ -115,6 +115,9 @@ impl App {
         let Some(account) = self.auth.account_id() else {
             return Ok(None);
         };
+        if let Some((source, _)) = self.catalog.account_photos_sync(account.clone()).await? {
+            return Ok(Some(source));
+        }
         Ok(self
             .catalog
             .account_sources(SourceKind::Photos, account)
@@ -207,6 +210,17 @@ impl App {
                         .ok_or(pg_core::Error::NotFound)?
                         .id,
                 )
+            } else if let View::DriveAlbum { gallery, album } = &view {
+                let id = self.checked_album(gallery.clone(), album.clone()).await?;
+                if !unlocked
+                    && self
+                        .catalog
+                        .drive_album_is_private(SourceId::new(gallery)?, id.clone())
+                        .await?
+                {
+                    return Err(pg_core::Error::NotFound.into());
+                }
+                Some(id)
             } else {
                 self.view_source(view).await?
             };

@@ -176,12 +176,20 @@ impl GalleryEngine {
             hidden: options.hidden,
             tags: options.tags,
         };
+        let gallery = match &view {
+            LibraryView::DriveAlbum { gallery, .. } => Some(SourceId::new(gallery.clone())?),
+            _ => None,
+        };
         self.runtime.block_on(async {
             let source = self
                 .view_source(view)
                 .await?
                 .ok_or(pg_core::Error::NotFound)?;
-            self::options(self.catalog.set_album_settings(source, settings).await?)
+            self::options(
+                self.catalog
+                    .set_album_settings_at(gallery, source, settings)
+                    .await?,
+            )
         })
     }
 

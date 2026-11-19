@@ -24,6 +24,18 @@ fn drive_error(action: &'static str) -> impl Fn(proton_sdk::error::ProtonError) 
 }
 
 impl App {
+    pub async fn hidden_drive_albums(&self) -> Result<Vec<Album>> {
+        let generation = self.generation();
+        let _operations = self.operations.read().await;
+        let Some(account) = self.auth.account_id() else {
+            return Ok(vec![]);
+        };
+        self.require_gallery_visibility().await?;
+        let albums = self.catalog.hidden_drive_albums(account).await?;
+        self.ensure_current(generation)?;
+        Ok(albums)
+    }
+
     pub async fn drive_albums(
         &self,
         place: Option<(&str, &str)>,
@@ -34,10 +46,17 @@ impl App {
         };
         self.require_gallery_visibility().await?;
         let (gallery, parent) = if let Some((gallery, parent)) = place {
-            (
-                Some(SourceId::new(gallery)?),
-                Some(self.checked_album(gallery.into(), parent.into()).await?),
-            )
+            let id = self.checked_album(gallery.into(), parent.into()).await?;
+            let gallery = SourceId::new(gallery)?;
+            if !unlocked
+                && self
+                    .catalog
+                    .drive_album_is_private(gallery.clone(), id.clone())
+                    .await?
+            {
+                return Err(pg_core::Error::NotFound.into());
+            }
+            (Some(gallery), Some(id))
         } else {
             (None, None)
         };

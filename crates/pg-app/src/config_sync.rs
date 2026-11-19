@@ -278,16 +278,21 @@ impl App {
         }
     }
 
-    /// Check visibility before a Photos sync publishes new timeline entries.
+    /// Refresh visibility and report whether the hidden items or albums changed.
     pub async fn refresh_gallery_configuration(&self, import_current: bool) -> Result<bool> {
         let _sync = self.configuration_sync.lock().await;
         let generation = self.generation();
-        let before = self.catalog.picker_state().await?.generation;
+        let account = self.auth.account().await?;
+        let mut before = self.catalog.hidden_assets(account.id.clone()).await?;
+        before.sort_unstable();
+        let before_albums = self
+            .catalog
+            .hidden_configuration_albums(account.id.clone())
+            .await?;
         let galleries = self
             .synchronize_gallery_configuration(import_current)
             .await?;
         self.ensure_current(generation)?;
-        let account = self.auth.account().await?;
         {
             let _operations = self.operations.read().await;
             self.ensure_current(generation)?;
@@ -350,13 +355,17 @@ impl App {
             }
         }
         if let Err(error) = self
-            .reconcile_drive_galleries(generation, account.id, galleries)
+            .reconcile_drive_galleries(generation, account.id.clone(), galleries)
             .await
         {
             self.ensure_current(generation)?;
             tracing::warn!("Couldn’t apply one or more Drive gallery choices: {error}");
         }
-        Ok(before != self.catalog.picker_state().await?.generation)
+        let mut after = self.catalog.hidden_assets(account.id.clone()).await?;
+        after.sort_unstable();
+        let after_albums = self.catalog.hidden_configuration_albums(account.id).await?;
+        self.ensure_current(generation)?;
+        Ok(before != after || before_albums != after_albums)
     }
 
     async fn reconcile_drive_galleries(

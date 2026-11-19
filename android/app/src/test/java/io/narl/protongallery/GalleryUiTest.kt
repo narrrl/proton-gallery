@@ -35,6 +35,8 @@ import io.narl.protongallery.bridge.SignInStage
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -117,6 +119,61 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Drive").performClick()
         compose.onNodeWithText("Trips").assertExists()
         compose.onRoot().captureRoboImage("build/screenshots/collections-light.png")
+    }
+
+    @Test fun an_album_only_gallery_has_no_media_loading_indicator() {
+        val trips = FolderAlbum("gallery", "root", null, "Trips", 0uL, 1uL)
+        compose.setContent {
+            GalleryTheme(ThemeMode.Dark) {
+                GalleryApp(LibraryState(ready = true), null, ThumbnailLoader(File("build/test-thumbnails-smart")),
+                    ThemeMode.Dark, ZOOM_DEFAULT, {}, {}, {}, {}, {},
+                    location = GalleryLocation(GallerySection.Drive), albums = listOf(trips))
+            }
+        }
+        compose.onNodeWithText("Trips").assertExists()
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+            .assertCountEquals(0)
+    }
+
+    @Test fun a_private_thumbnail_retries_and_stays_in_memory_until_lock() {
+        val directory = java.nio.file.Files.createTempDirectory("private-thumbnail").toFile()
+        try {
+            val original = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+            val bytes = java.io.ByteArrayOutputStream().also { original.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+            val item = fixtureItems().first().copy(localPath = "", remoteKey = "photo-fixture", phoneId = null)
+            var attempts = 0
+            val thumbnails = ThumbnailLoader(directory, remote = {
+                if (++attempts == 1) error("Temporary thumbnail failure")
+                bytes.copyOf()
+            })
+
+            assertNotNull(runBlocking { thumbnails.load(item, private = true) })
+            assertEquals(2, attempts)
+            assertNull(thumbnails.peek(item))
+            assertNotNull(thumbnails.peek(item, private = true))
+            assertTrue(directory.listFiles().isNullOrEmpty())
+            thumbnails.forgetPrivate()
+            assertNull(thumbnails.peek(item, private = true))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun a_committed_deletion_closes_the_open_viewer() {
+        val items = fixtureItems()
+        val original = GalleryOutline.of(items)
+        var latest by mutableStateOf(original)
+        var showing by mutableStateOf(true)
+        val thumbnails = ThumbnailLoader(File(System.getProperty("java.io.tmpdir"), "viewer-deletion"), { null })
+        compose.setContent {
+            GalleryTheme(ThemeMode.Light) {
+                if (showing) MediaViewer(original, 0, thumbnails, MediaActions(),
+                    onClose = { showing = false }, latestOutline = latest)
+            }
+        }
+        compose.onNodeWithContentDescription("Back to gallery").assertExists()
+        compose.runOnIdle { latest = GalleryOutline.of(items.drop(1)) }
+        compose.onNodeWithContentDescription("Back to gallery").assertDoesNotExist()
     }
 
     @Test @Config(sdk = [34], qualifiers = "w800dp-h1100dp-xhdpi")
@@ -535,11 +592,34 @@ class GalleryUiTest {
         compose.onRoot().captureRoboImage("build/screenshots/album-options-light.png")
     }
 
+    @Test fun a_descendant_photo_sets_the_original_album_cover() {
+        val options = AlbumOptions(null, null, null, AlbumGrouping.DAY, AlbumOrder.NEWEST, false, false, emptyList())
+        val chosen = mutableListOf<Pair<String?, String>>()
+        render(fixtureItems(), ThemeMode.Light, options = options, initialLocation = GalleryLocation(),
+            optionsAlbum = "year", onCoverChosen = { target, item -> chosen += target.album?.id to item.name })
+        compose.onNodeWithContentDescription("Drive").performClick()
+        compose.onNodeWithText("Trips").performClick()
+        compose.onNodeWithText("2026").performClick()
+        compose.onNodeWithContentDescription("Edit album").performClick()
+        compose.onNodeWithText("Choose").performScrollTo().performClick()
+        val stopChoosing = compose.onNodeWithContentDescription("Stop choosing a cover")
+        stopChoosing.assertExists()
+        compose.onNodeWithText("Coast").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty()
+        }
+        stopChoosing.assertExists()
+        compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performSemanticsAction(SemanticsActions.OnClick)
+        compose.runOnIdle { assertEquals(listOf("year" to "Coast 0.jpg"), chosen) }
+        compose.onNodeWithText("Coast").assertExists()
+    }
+
     private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {},
         backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false,
         media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
         photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions(),
-        driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock(), load: GalleryLoad = GalleryLoad.Ready) {
+        driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock(), load: GalleryLoad = GalleryLoad.Ready,
+        optionsAlbum: String = "coast", onCoverChosen: (GalleryLocation, GalleryItem) -> Unit = { _, _ -> }) {
         val thumbnailDirectory = if (System.getProperty("pg.screenshot.photos") == null) "build/test-thumbnails-smart" else "build/screenshot-photo-thumbnails"
         val directory = File(thumbnailDirectory).apply { mkdirs() }
         val thumbnailLoader = ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) })
@@ -568,7 +648,7 @@ class GalleryUiTest {
                     GalleryApp(state ?: LibraryState(ready = true, bytes = 12_000_000), outline,
                         remember { thumbnailLoader }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
-                        options = if (location.album?.id == "coast") options else null,
+                        options = if (location.album?.id == optionsAlbum) options else null, onCover = onCoverChosen,
                         account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick,
                         albumActions = albumActions, privacy = privacy, load = load)
                 }

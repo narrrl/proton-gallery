@@ -87,16 +87,6 @@ class GalleryOutline(
         for (page in first..last) if (pages[page] == null) request(page)
     }
 
-    /** Load the page around `index` now, so a new outline shows the place the
-     * old one was at without empty tiles. */
-    suspend fun preload(index: Int) {
-        if (index !in ids.indices) return
-        val page = index / PAGE
-        if (pages[page] != null) return
-        runCatching { pages[page] = fetch(page) }.onFailure { if (it is CancellationException) throw it }
-        touch(page)
-    }
-
     /** Read the loaded records again, for changes that keep the layout, such
      * as an upload finishing or a new favorite. Old records show until then. */
     fun reload() {

@@ -169,6 +169,29 @@ impl AuthService {
             cancel: RwLock::new(CancellationToken::new()),
         }
     }
+    /// Use the host's live session without installing a second token refresh callback.
+    pub async fn hosted(
+        vault: Arc<dyn CredentialVault>,
+        session: ProtonApiSession,
+        drive: ProtonDriveClient,
+        cancel: CancellationToken,
+    ) -> Result<Self> {
+        let service = Self::new(vault);
+        let id = AccountId::new(session.user_id().as_str())
+            .map_err(|_| AuthError("The host account is invalid."))?;
+        let username = session.username().to_owned();
+        service.state.lock().await.account = Some(Account {
+            id: id.clone(),
+            session,
+            drive,
+            cancel: cancel.clone(),
+        });
+        *service.active_id.write().unwrap() = Some(id);
+        *service.cancel.write().unwrap() = cancel;
+        service.publish(Stage::Connected, username, None);
+        Ok(service)
+    }
+
     pub fn status(&self) -> Status {
         let mut value = self.status.read().unwrap().clone();
         value.persistence_failed = self.gate.lock().unwrap().failed;

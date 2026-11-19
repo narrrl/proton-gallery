@@ -94,7 +94,10 @@ class MainActivity : ComponentActivity() {
                 if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
                     notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
-            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.phoneAccessChanged() }
+            LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                model.phoneAccessChanged()
+                model.syncPhotos()
+            }
             LaunchedEffect(model) {
                 lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                     while (isActive) {
@@ -179,7 +182,7 @@ class MainActivity : ComponentActivity() {
                     account = account, onAccount = model::showAccount, onRefresh = model::refresh,
                     onCloseAccount = model::closeAccount, onSignIn = model::signIn,
                     onCode = model::secondFactor, onMailbox = model::mailboxPassword,
-                    onVerification = model::verification, onSignOut = model::signOut,
+                    onVerification = model::verification, onSignOut = model::signOut, onRepairPhotos = model::repairPhotos,
                     options = options, onSaveOptions = { model.saveOptions(it) }, onCover = model::setCover,
                     tags = tags, tagFilter = tagFilter, onTag = model::filterTag,
                     chooser = chooser, chooserActions = ChooserActions(model::openChooser, model::chooserOpen, model::chooserBack,

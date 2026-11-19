@@ -5,7 +5,7 @@
 //! presentation settings, covers and paging reuse the folder-album code.
 //! An album's photos are memberships; the assets are shared with the
 //! timeline, and photos that live only in an album are added as assets too.
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 
 use crate::catalog::Catalog;
 use crate::library::{Album, SourceKind};
@@ -36,6 +36,13 @@ impl Catalog {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         self.run(move |conn| {
             let tx = conn.transaction()?;
+            let album_removed: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM photos_removed WHERE (account,volume,node)=(?1,?2,?3))",
+                params![album.account.as_str(),album.volume.as_str(),album.root.as_str()], |r| r.get(0),
+            )?;
+            if album_removed {
+                return Ok(());
+            }
             tx.execute(
                 "INSERT OR IGNORE INTO album_nodes(gallery,source,parent) VALUES (?1,?1,NULL)",
                 [album.id.as_str()],
@@ -56,9 +63,15 @@ impl Catalog {
                 let mut listed = tx.prepare_cached(
                     "INSERT OR IGNORE INTO temp.album_listed(account,volume,node) VALUES (?1,?2,?3)",
                 )?;
+                let mut removed = tx.prepare_cached(
+                    "SELECT EXISTS(SELECT 1 FROM photos_removed WHERE (account,volume,node)=(?1,?2,?3))",
+                )?;
                 for (item, payload) in assets.iter().zip(&payloads) {
                     let key = &item.key;
                     let (account, volume, node) = (key.account.as_str(), key.volume.as_str(), key.node.as_str());
+                    if removed.query_row(params![account,volume,node], |r| r.get::<_,bool>(0))? {
+                        continue;
+                    }
                     asset.execute(params![account, volume, node, item.sort_time, payload])?;
                     member.execute(params![album.id.as_str(), account, volume, node])?;
                     listed.execute(params![account, volume, node])?;
@@ -85,20 +98,9 @@ impl Catalog {
         let keep = serde_json::to_string(&keep.iter().map(SourceId::as_str).collect::<Vec<_>>())?;
         self.run(move |conn| {
             let tx = conn.transaction()?;
-            let gone: Vec<String> = tx
-                .prepare(
-                    "SELECT k.source FROM source_kinds k JOIN sources s ON s.id=k.source
-                     WHERE k.kind='album' AND json_extract(s.payload,'$.account')=?1
-                     AND k.source NOT IN (SELECT value FROM json_each(?2))",
-                )?
-                .query_map(params![account.as_str(), keep], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            for source in &gone {
-                tx.execute("DELETE FROM memberships WHERE source=?1", [source])?;
-                tx.execute("DELETE FROM album_nodes WHERE gallery=?1", [source])?;
-            }
+            let removed = retain_photo_albums_tx(&tx, &account, &keep)?;
             tx.commit()?;
-            Ok(gone.len() as u64)
+            Ok(removed)
         })
         .await
     }
@@ -216,4 +218,24 @@ impl Catalog {
         })
         .await
     }
+}
+
+pub(crate) fn retain_photo_albums_tx(
+    tx: &Transaction<'_>,
+    account: &AccountId,
+    keep: &str,
+) -> Result<u64> {
+    let gone: Vec<String> = tx
+                .prepare(
+                    "SELECT k.source FROM source_kinds k JOIN sources s ON s.id=k.source
+                     JOIN album_nodes n ON n.source=k.source WHERE k.kind='album' AND json_extract(s.payload,'$.account')=?1
+                     AND k.source NOT IN (SELECT value FROM json_each(?2))",
+                )?
+                .query_map(params![account.as_str(), keep], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+    for source in &gone {
+        tx.execute("DELETE FROM memberships WHERE source=?1", [source])?;
+        tx.execute("DELETE FROM album_nodes WHERE gallery=?1", [source])?;
+    }
+    Ok(gone.len() as u64)
 }

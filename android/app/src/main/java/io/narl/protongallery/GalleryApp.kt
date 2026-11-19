@@ -130,11 +130,12 @@ fun GalleryApp(
     onCloseAccount: () -> Unit = {}, onSignIn: (String, String) -> Unit = { _, _ -> },
     onCode: (String) -> Unit = {}, onMailbox: (String) -> Unit = {},
     onVerification: (String) -> Unit = {}, onSignOut: () -> Unit = {},
-    options: AlbumOptions? = null, onSaveOptions: (AlbumOptions) -> Unit = {}, onCover: (GalleryItem) -> Unit = {},
+    options: AlbumOptions? = null, onSaveOptions: (AlbumOptions) -> Unit = {}, onCover: (GalleryLocation, GalleryItem) -> Unit = { _, _ -> },
     tags: List<AlbumTag> = emptyList(), tagFilter: String? = null, onTag: (String?) -> Unit = {},
     chooser: ChooserState = ChooserState(), chooserActions: ChooserActions = ChooserActions(),
     onRemoveGallery: (FolderAlbum) -> Unit = {},
     onTestConnection: () -> Unit = {},
+    onRepairPhotos: () -> Unit = {},
     crashReport: String? = null, onDismissCrash: () -> Unit = {},
     backup: BackupState = BackupState(), backupActions: BackupActions = BackupActions(),
     media: MediaActions = MediaActions(),
@@ -149,10 +150,16 @@ fun GalleryApp(
     val photosRoot = location == GalleryLocation()
     var menu by rememberSaveable { mutableStateOf(false) }
     var editing by rememberSaveable { mutableStateOf(false) }
-    // While true, tapping a photo makes it the album cover instead of opening it.
-    var pickingCover by rememberSaveable(location.section, location.album?.id) { mutableStateOf(false) }
+    // Keep the target even when the picker navigates into a child album.
+    var coverTarget by remember(account.generation) { mutableStateOf<GalleryLocation?>(null) }
+    val pickingCover = coverTarget != null
+    fun endCoverPick() {
+        val target = coverTarget ?: return
+        coverTarget = null
+        if (target != location) onNavigate(target)
+    }
     // The open viewer: the outline it swipes through and where it opened.
-    var selected by remember { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
+    var selected by remember(location) { mutableStateOf<Pair<GalleryOutline, Int>?>(null) }
     // Items waiting for the user to confirm their deletion.
     var confirmDelete by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for an album to go into, and the "New album" dialog.
@@ -176,7 +183,11 @@ fun GalleryApp(
         if (activityContext?.isChangingConfigurations != true) {
             lock()
             // Leaving the app inside a hidden album closes it too.
-            if (location.private) { selected = null; onNavigate(GalleryLocation(location.section)) }
+            if (location.private) {
+                selected = null
+                coverTarget = null
+                onNavigate(GalleryLocation(location.section))
+            }
         }
     }
     // While hidden albums are open, nothing of the screen may leave the phone:
@@ -217,7 +228,11 @@ fun GalleryApp(
         state.message?.let { snackbar.showSnackbar(it); onDismissMessage() }
     }
     BackHandler(selection.isNotEmpty()) { selection = emptyMap() }
-    BackHandler(location != GalleryLocation() && selection.isEmpty()) { onNavigate(location.back()) }
+    BackHandler(location != GalleryLocation() && selection.isEmpty() && !pickingCover) { onNavigate(location.back()) }
+    BackHandler(pickingCover) {
+        if (location.trail.size > (coverTarget?.trail?.size ?: 0)) onNavigate(location.back())
+        else endCoverPick()
+    }
 
     // The bar slides away while scrolling down the grid and returns on the way up.
     val density = LocalDensity.current
@@ -274,7 +289,11 @@ fun GalleryApp(
                     else "Photos, videos and albums from this folder appear here.",
                     if (!account.connected) "Sign in to Proton" else if (!drive) "Refresh" else if (driveRoot) "Choose a folder" else "", top)
                 else -> SmartMediaGrid(outline, thumbnails, zoom, onZoom, grid, onOpen = { index, item ->
-                    if (pickingCover) { pickingCover = false; onCover(item) }
+                    val target = coverTarget
+                    if (target != null) {
+                        endCoverPick()
+                        onCover(target, item)
+                    }
                     else if (pick != null && !pick.accepts(item)) scope.launch { snackbar.showSnackbar("This app can’t take this kind of file") }
                     else if (pick != null && pick.multiple) selection = if (item.id in selection) selection - item.id else selection + (item.id to item)
                     else if (pick != null) onPick(listOf(item))
@@ -282,6 +301,7 @@ fun GalleryApp(
                 }, albums = albums, onAlbum = { onNavigate(location.child(it)) },
                     tags = if (driveRoot) tags else emptyList(), selectedTag = tagFilter, onTag = onTag,
                     albumsTitle = if (driveRoot) "Galleries" else "Albums",
+                    showsMedia = location.nativeView() != null,
                     hiddenUnlocked = hiddenUnlocked, onToggleHidden = toggleHidden,
                     onNewAlbum = if (albumsRoot && account.connected && pick == null) { { naming = true } } else null,
                     header = gridHeader,
@@ -321,7 +341,7 @@ fun GalleryApp(
                         } else null,
                         onRemoveFromAlbum = if (location.protonAlbum) { { albumActions.remove(selection.values.toList()); selection = emptyMap() } } else null,
                         onHide = if (canAddToAlbum && !location.private) { { hiding = selection.values.toList(); albumActions.loadChoices() } } else null)
-                    pickingCover -> PickingBar { pickingCover = false }
+                    pickingCover -> PickingBar { endCoverPick() }
                     location.album != null || device -> Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onNavigate(location.back()) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
                         Text(location.title, Modifier.weight(1f).padding(start = 4.dp), style = MaterialTheme.typography.titleLarge,
@@ -357,7 +377,7 @@ fun GalleryApp(
     if (editing && options != null) AlbumOptionsSheet(
         if (location.protonAlbum) options.copy(title = options.title ?: location.album?.name) else options,
         location.album, tags, onSaveOptions,
-        onChooseCover = { pickingCover = true }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false },
+        onChooseCover = { coverTarget = location }, onRemoveGallery = { location.album?.let(onRemoveGallery) }, onDismiss = { editing = false },
         proton = location.protonAlbum, onDeleteAlbum = { location.album?.let(albumActions.delete) })
     // Hiding always asks which hidden album. Existing hidden albums are
     // listed only after the phone's lock confirms the user; with none yet,
@@ -393,7 +413,7 @@ fun GalleryApp(
     )
     if (naming) NewAlbumDialog(onCreate = { albumActions.create(it, emptyList()); naming = false }, onDismiss = { naming = false })
     if (chooser.visible) DriveFolderChooser(chooser, chooserActions.openFolder, chooserActions.back, chooserActions.retry, chooserActions.add, chooserActions.close)
-    if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection)
+    if (account.visible) AccountScreen(account, onCloseAccount, onSignIn, onCode, onMailbox, onVerification, onSignOut, onRefresh, onTestConnection, onRepairPhotos)
     selected?.let { (items, initial) -> MediaViewer(items, initial, thumbnails, media, onClose = { selected = null },
         actions = ViewerActions(
             delete = { confirmDelete = listOf(it) },
@@ -401,7 +421,7 @@ fun GalleryApp(
             addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
             favorite = { item -> media.favorite(listOf(item), !item.favorite) },
             hide = if (canAddToAlbum && !location.private) { { hiding = listOf(it); albumActions.loadChoices() } } else null,
-        ), private = location.private) }
+        ), private = location.private, latestOutline = outline) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },
             onDismiss = { confirmDelete = null })
@@ -599,7 +619,9 @@ private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
 fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, modifier: Modifier = Modifier,
     selected: Boolean? = null, onLongClick: (() -> Unit)? = null, private: Boolean = false) {
     // A thumbnail already in memory shows in the first frame, without a placeholder.
-    val bitmap by produceState(loader.peek(item), item.id, item.revision, private, loader) { value = loader.peek(item) ?: loader.load(item, private) }
+    val bitmap by produceState(loader.peek(item, private), item.id, item.revision, private, loader) {
+        value = loader.peek(item, private) ?: loader.load(item, private)
+    }
     val phoneOnly = item.phoneId != null && !item.backedUp
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
         .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)

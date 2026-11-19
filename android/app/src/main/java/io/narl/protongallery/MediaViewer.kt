@@ -79,9 +79,21 @@ class ViewerActions(
  * them the system bars, so the photo can fill the screen.
  */
 @Composable
-fun MediaViewer(outline: GalleryOutline, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit,
-    actions: ViewerActions = ViewerActions(), private: Boolean = false) {
+fun MediaViewer(initialOutline: GalleryOutline, initial: Int, thumbnails: ThumbnailLoader, media: MediaActions, onClose: () -> Unit,
+    actions: ViewerActions = ViewerActions(), private: Boolean = false, latestOutline: GalleryOutline? = initialOutline) {
+    var outline by remember(initialOutline) { mutableStateOf(initialOutline) }
     val pager = rememberPagerState(initialPage = initial.coerceIn(0, maxOf(0, outline.count - 1))) { outline.count }
+    LaunchedEffect(latestOutline) {
+        val next = latestOutline ?: return@LaunchedEffect
+        if (next === outline) return@LaunchedEffect
+        val id = outline.ids.getOrNull(pager.currentPage)
+        val index = id?.let(next::indexOf) ?: -1
+        if (index < 0) onClose()
+        else {
+            outline = next
+            pager.requestScrollToPage(index)
+        }
+    }
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var more by remember { mutableStateOf(false) }
@@ -178,8 +190,8 @@ private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, media: Med
     var offset by remember(item.id) { mutableStateOf(Offset.Zero) }
     var failed by remember(item.id) { mutableStateOf(false) }
     val context = LocalContext.current
-    val bitmap by produceState(loader.peek(item), item.id, active) {
-        if (value == null) value = loader.load(item, private)
+    val bitmap by produceState(loader.peek(item, private), item.id, item.revision, private, loader) {
+        value = loader.peek(item, private) ?: loader.load(item, private)
         val phone = PhoneLibrary.uri(item)
         if (active && !item.isVideo) {
             onLoading(true)

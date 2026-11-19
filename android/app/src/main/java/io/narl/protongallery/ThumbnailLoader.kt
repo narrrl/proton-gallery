@@ -13,9 +13,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -39,65 +42,96 @@ class ThumbnailLoader(private val directory: File,
     // holds up what is on screen.
     private val shown = Dispatchers.IO.limitedParallelism(4)
     private val ahead = Dispatchers.IO.limitedParallelism(2)
-    private val locks = Array(64) { Mutex() }
+    private class LoadLock(val mutex: Mutex = Mutex(), var users: Int = 0)
+    private val locks = mutableMapOf<String, LoadLock>()
+    private val remoteSlots = Semaphore(4)
     private val memory = object : LruCache<String, Bitmap>(memoryBudget()) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
-    private val private = java.util.Collections.synchronizedSet(HashSet<String>())
+    private var privateGeneration = 0L
     private val scope = CoroutineScope(SupervisorJob() + ahead)
     private var reading: Job? = null
 
     /** The thumbnail if it is in memory; never loads. Lets a tile show its
      * photo in its first frame instead of a placeholder. */
-    fun peek(item: GalleryItem): Bitmap? = memory.get(key(item))
+    fun peek(item: GalleryItem, private: Boolean = false): Bitmap? = memory.get(key(item, private))
 
-    suspend fun load(item: GalleryItem, private: Boolean = false): Bitmap? = withContext(shown) { obtain(item, private) }
+    suspend fun load(item: GalleryItem, private: Boolean = false): Bitmap? = withContext(shown) {
+        val generation = synchronized(memory) { privateGeneration }
+        repeat(3) { attempt ->
+            try { return@withContext obtain(item, private, generation) }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) {
+                if (attempt < 2) delay(350L * (attempt + 1))
+            }
+        }
+        null
+    }
 
-    /** Read `items` into memory ahead of the grid, in order, replacing the
-     * previous read-ahead. Remote ones are fetched too. */
+    /** Read ahead in order with at most one remote fetch in progress. */
     fun prefetch(items: List<GalleryItem>, private: Boolean = false) {
         reading?.cancel()
         if (items.isEmpty()) return
+        val generation = synchronized(memory) { privateGeneration }
         reading = scope.launch {
             for (item in items) {
-                if (memory.get(key(item)) != null) continue
-                obtain(item, private)
+                if (peek(item, private) != null) continue
+                try { obtain(item, private, generation) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) {}
             }
         }
     }
 
-    /** Hidden albums locked: drop their thumbnails from memory. */
+    /** Hidden albums locked: drop their thumbnails and discard in-flight results. */
     fun forgetPrivate() {
         reading?.cancel()
-        val keys = synchronized(private) { private.toList().also { private.clear() } }
-        for (key in keys) memory.remove(key)
+        synchronized(memory) {
+            privateGeneration++
+            memory.snapshot().keys.filter { it.startsWith(PRIVATE_PREFIX) }.forEach(memory::remove)
+        }
     }
 
-    private suspend fun obtain(item: GalleryItem, private: Boolean): Bitmap? {
-        val cacheKey = key(item)
-        memory.get(cacheKey)?.let { return it }
-        return locks[(cacheKey.hashCode() and Int.MAX_VALUE) % locks.size].withLock {
-            memory.get(cacheKey)?.let { return@withLock it }
-            currentCoroutineContext().ensureActive()
-            try {
+    private suspend fun obtain(item: GalleryItem, private: Boolean, generation: Long): Bitmap? {
+        val cacheKey = key(item, private)
+        synchronized(memory) {
+            if (private && generation != privateGeneration) return null
+            memory.get(cacheKey)?.let { return it }
+        }
+        val lock = synchronized(locks) {
+            locks.getOrPut(cacheKey) { LoadLock() }.also { it.users++ }
+        }
+        try {
+            return lock.mutex.withLock {
+                synchronized(memory) {
+                    if (private && generation != privateGeneration) return@withLock null
+                    memory.get(cacheKey)?.let { return@withLock it }
+                }
+                currentCoroutineContext().ensureActive()
                 val file = File(directory, fileName(cacheKey))
-                val cached = if (file.isFile) {
+                val cached = if (!private && file.isFile) {
                     try { ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE } }
                     catch (_: Exception) { file.delete(); null }
                 } else null
                 if (cached != null) {
-                    // Recently used files are the last to be trimmed.
                     file.setLastModified(System.currentTimeMillis())
-                    remember(cacheKey, cached, private)
+                    memory.put(cacheKey, cached)
                     return@withLock cached
                 }
                 val decoded = decode(item) ?: return@withLock null
                 currentCoroutineContext().ensureActive()
-                remember(cacheKey, decoded, private)
+                synchronized(memory) {
+                    if (private && generation != privateGeneration) return@withLock null
+                    memory.put(cacheKey, decoded)
+                }
                 if (!private) store(file, decoded)
                 decoded
-            } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { null }
+            }
+        } finally {
+            synchronized(locks) {
+                lock.users--
+                if (lock.users == 0) locks.remove(cacheKey)
+            }
         }
     }
 
@@ -107,10 +141,14 @@ class ThumbnailLoader(private val directory: File,
             if (item.remoteKey == null) return null
         }
         if (item.remoteKey != null) {
-            val bytes = remote(item) ?: return null
+            val bytes = remoteSlots.withPermit { remote(item) } ?: return null
             try {
                 val decoded = decodeBytes(bytes, EDGE)
-                if (item.aspectRatio == null) runCatching { rememberShape(item, decoded.width, decoded.height) }
+                if (item.aspectRatio == null) scope.launch {
+                    try { rememberShape(item, decoded.width, decoded.height) }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) {}
+                }
                 return decoded
             } finally { bytes.fill(0) }
         }
@@ -120,11 +158,6 @@ class ThumbnailLoader(private val directory: File,
             val size = if (ratio >= 1) Size(EDGE, (EDGE / ratio).toInt().coerceAtLeast(1)) else Size((EDGE * ratio).toInt().coerceAtLeast(1), EDGE)
             ThumbnailUtils.createVideoThumbnail(File(item.localPath), size, CancellationSignal())
         } else decodeImage(File(item.localPath), EDGE)
-    }
-
-    private fun remember(cacheKey: String, bitmap: Bitmap, private: Boolean) {
-        if (private) this.private.add(cacheKey)
-        memory.put(cacheKey, bitmap)
     }
 
     // A failed write must not hide the decoded image.
@@ -158,7 +191,11 @@ class ThumbnailLoader(private val directory: File,
         private const val QUALITY = 72
         private const val DISK_BUDGET = 256L * 1024 * 1024
 
-        private fun key(item: GalleryItem) = item.id + (item.revision?.let { ":$it" } ?: "")
+        private const val PRIVATE_PREFIX = "private/"
+        private fun key(item: GalleryItem, private: Boolean): String {
+            val prefix = if (private) PRIVATE_PREFIX else ""
+            return prefix + item.id + (item.revision?.let { ":$it" } ?: "")
+        }
 
         // Ids and revisions may hold characters a file name cannot.
         private fun fileName(key: String): String =

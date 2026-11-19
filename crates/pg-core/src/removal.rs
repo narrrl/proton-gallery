@@ -22,16 +22,24 @@ impl Catalog {
         self.run(move |conn| {
             let tx = conn.transaction()?;
             let mut removed = 0;
-            {
-                let mut delete = tx.prepare_cached(
-                    "DELETE FROM memberships WHERE account=?1 AND volume=?2 AND node=?3",
+            for key in keys {
+                let photos: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM photos_sync p JOIN sources s ON s.id=p.source
+                       WHERE json_extract(s.payload,'$.account')=?1 AND json_extract(s.payload,'$.volume')=?2)",
+                    params![key.account.as_str(), key.volume.as_str()], |r| r.get(0),
                 )?;
-                for key in &keys {
-                    removed += delete.execute(params![
-                        key.account.as_str(),
-                        key.volume.as_str(),
-                        key.node.as_str()
-                    ])?;
+                if photos {
+                    removed += crate::photos_sync::remove_photo(&tx, &key.account, &key.volume, &key.node)?;
+                    tx.execute(
+                        "UPDATE photos_sync SET revision=revision+1 WHERE source IN (
+                         SELECT id FROM sources WHERE json_extract(payload,'$.account')=?1 AND json_extract(payload,'$.volume')=?2)",
+                        params![key.account.as_str(), key.volume.as_str()],
+                    )?;
+                } else {
+                    removed += tx.execute(
+                        "DELETE FROM memberships WHERE (account,volume,node)=(?1,?2,?3)",
+                        params![key.account.as_str(),key.volume.as_str(),key.node.as_str()],
+                    )?;
                 }
             }
             tx.commit()?;
@@ -110,6 +118,7 @@ impl Catalog {
                 "DELETE FROM gallery_configuration_imported WHERE account=?1",
                 "DELETE FROM gallery_visibility_verified WHERE account=?1",
                 "DELETE FROM gallery_event_cursors WHERE account=?1",
+                "DELETE FROM photos_removed WHERE account=?1",
             ] {
                 if sql.contains("?1") {
                     tx.execute(sql, [account])?;

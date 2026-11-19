@@ -226,11 +226,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
     fun signOut() {
+        val expired = account.value.sessionExpired
         val repo = repository.value ?: return
         if (mutableAccount.value.busy) return
         mutableAccount.update { it.copy(busy = true, error = null) }
         authJob = viewModelScope.launch(guard) {
             try {
+                PhotosSync.stop(getApplication())
                 Backup.stop(getApplication())
                 repo.signOut()
                 photosJob?.join(); driveJob?.join(); settingsJob?.join()
@@ -240,7 +242,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     File(getApplication<Application>().cacheDir, "picker").deleteRecursively()
                     Originals.directory(getApplication()).deleteRecursively()
                 }
-                mutableAccount.update { AccountState(generation = it.generation + 1) }
+                mutableAccount.update { AccountState(generation = it.generation + 1, visible = expired,
+                    error = if (expired) "Your Proton session expired. Sign in again to sync your library." else null) }
+                PhotoPicker.changed(getApplication())
                 backupRequestJob?.cancel()
                 mutableBackup.update { it.copy(request = null) }
                 navigate(GalleryLocation())
@@ -250,35 +254,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             finally { mutableAccount.update { it.copy(busy = false) } }
         }
     }
-    fun syncPhotos() {
-        val repo = repository.value ?: return
-        if (!mutableAccount.value.connected || photosJob?.isActive == true) return
-        mutableAccount.update { it.copy(syncing = true, indexed = 0) }
+    fun syncPhotos() = syncPhotos(repair = false)
+    fun repairPhotos() = syncPhotos(repair = true)
+
+    private fun syncPhotos(repair: Boolean) {
+        if (!account.value.connected || account.value.sessionExpired || photosJob?.isActive == true) return
+        val app = getApplication<Application>()
+        refreshGallerySettings()
         photosJob = viewModelScope.launch(guard) {
-            val progress = watchProgress(repo, { it.syncProgress().toLong() }) { indexed -> mutableAccount.update { it.copy(indexed = indexed) } }
-            try {
-                settingsJob?.join()
-                syncGallerySettings(repo)
-                repo.syncPhotos()
-                PhotoPicker.changed(getApplication())
-                refreshDetails(repo)
-                refreshPhone(scan = false)
-            } catch (cancel: CancellationException) { throw cancel }
-            catch (error: Exception) {
-                report(error, "Couldn’t refresh Proton Photos. Your cached library is available. Check your connection or sign in again.")
-            } finally {
-                progress.cancel()
-                mutableAccount.update { it.copy(syncing = false) }
-                settle(repo)
-            }
+            PhotosSync.schedule(app)
+            var requestRepair = repair
+            do {
+                val result = PhotosSync.check(app, requestRepair)
+                requestRepair = false
+                if (result == PhotosSync.Outcome.Retry) PhotosSync.retry(app)
+            } while (result == PhotosSync.Outcome.More && account.value.connected && !account.value.busy)
         }
     }
 
     fun refreshGallerySettings() {
         val repo = repository.value ?: return
-        if (!account.value.connected || account.value.busy || photosJob?.isActive == true || settingsJob?.isActive == true) return
+        if (!account.value.connected || account.value.sessionExpired || settingsJob?.isActive == true) return
         settingsJob = viewModelScope.launch(guard) {
-            try { syncGallerySettings(repo, poll = true) }
+            try { syncGallerySettings(repo, poll = account.value.visibilityReady) }
             catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { /* Keep the last checked view while offline. */ }
         }
@@ -570,10 +568,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-    fun setCover(item: GalleryItem) {
-        val current = mutableOptions.value ?: return
+    fun setCover(target: GalleryLocation, item: GalleryItem) {
+        val repo = repository.value ?: return
+        val generation = account.value.generation
         if (item.assetKey.isEmpty()) return
-        saveOptions(current.copy(coverKey = item.assetKey), "Cover updated")
+        viewModelScope.launch(guard) {
+            try {
+                val current = repo.options(target) ?: return@launch
+                val saved = repo.setOptions(target, current.copy(coverKey = item.assetKey)) ?: return@launch
+                if (account.value.generation != generation) return@launch
+                if (location.value == target) mutableOptions.value = saved
+                refreshDetails(repo)
+                refreshGallerySettings()
+                mutableState.update { it.copy(revision = it.revision + 1, message = "Cover updated", error = false) }
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "The cover couldn’t be saved. Try again.", error = true) }
+            }
+        }
     }
 
     suspend fun remoteThumbnail(item: GalleryItem) = repository.value?.thumbnail(item)
@@ -624,13 +636,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 return@collectLatest
             }
-            if (current != null) {
-                // Open the new layout where the old one was.
-                val id = current.ids.getOrNull(current.lastIndex)
-                next.preload(id?.let(next::indexOf)?.takeIf { it >= 0 } ?: current.lastIndex.coerceAtMost(next.count - 1))
-            } else next.preload(0)
             val loaded = GalleryPage<GalleryOutline?>(place, generation, next)
             mutableOutline.value = loaded
+            // Publish the new IDs immediately; loading thumbnail records must
+            // not keep removed media on the screen or in the viewer.
+            val anchor = if (current == null) 0 else {
+                current.ids.getOrNull(current.lastIndex)?.let(next::indexOf)?.takeIf { it >= 0 }
+                    ?: current.lastIndex.coerceAtMost(next.count - 1)
+            }
+            if (anchor in next.ids.indices) next.prefetch(anchor..anchor)
             if (place.section == GallerySection.Photos) {
                 photos = loaded
                 photosRevision = revision
@@ -698,10 +712,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } catch (error: Exception) {
                     mutableAccount.update { it.copy(error = authMessage(error), visible = true) }
                 }
-                refreshDetails(repo)
+                if (mutableAccount.value.connected) syncPhotos()
                 refreshPhone()
                 Backup.schedule(getApplication())
-                if (mutableAccount.value.connected) syncPhotos()
+                if (!mutableAccount.value.connected || mutableAccount.value.visibilityReady) refreshDetails(repo)
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) {
                 mutableDetails.value = GalleryPage(location.value, account.value.generation, GalleryLoad.Failed)
@@ -763,6 +777,41 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         runCatching { application.contentResolver.registerContentObserver(PhoneLibrary.observed, true, mediaChanged) }
+        viewModelScope.launch(guard) {
+            var revision: ULong? = null
+            var message: String? = null
+            var checkBackup = false
+            PhotosSync.state.collect { sync ->
+                if (!account.value.connected || account.value.busy) return@collect
+                mutableAccount.update {
+                    it.copy(syncing = sync.running, indexed = sync.indexed, lastPhotosSync = sync.lastSuccess,
+                        sessionExpired = sync.expired, visible = it.visible || sync.expired)
+                }
+                if (message != sync.message && sync.message != null && !sync.expired) {
+                    mutableState.update { it.copy(message = sync.message, error = true) }
+                }
+                message = sync.message
+                if (revision != sync.revision) {
+                    revision = sync.revision
+                    checkBackup = true
+                    val repo = repository.value ?: return@collect
+                    mutableState.update { it.copy(revision = it.revision + 1) }
+                    try {
+                        val place = location.value
+                        if (place.protonAlbum && !repo.photoAlbumExists(requireNotNull(place.album))) {
+                            navigate(place.back())
+                        } else if (account.value.visibilityReady) {
+                            refreshDetails(repo)
+                        }
+                    } catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) {}
+                }
+                if (!sync.running && checkBackup) {
+                    checkBackup = false
+                    refreshPhone(scan = false)
+                }
+            }
+        }
         viewModelScope.launch(guard) {
             var uploaded = 0
             PhoneBackup.progress.collect { progress ->
@@ -960,8 +1009,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             mutableState.update { it.copy(preparing = if (items.size == 1) "Moving to the Proton trash" else "Moving ${items.size} items to the Proton trash") }
             try {
                 val outcome = repo.trash(items)
-                PhotoPicker.changed(getApplication())
                 afterDelete(count - outcome.failed.toInt(), outcome.failed.toInt())
+                PhotoPicker.changed(getApplication())
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
                 mutableState.update { it.copy(message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t move to the Proton trash. Try again.", error = true) }

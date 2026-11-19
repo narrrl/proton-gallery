@@ -190,6 +190,19 @@ pub(crate) fn load_settings(conn: &rusqlite::Connection, source: &str) -> Result
     Ok(settings)
 }
 
+fn has_hidden_ancestor(conn: &rusqlite::Connection, gallery: &str, source: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "WITH RECURSIVE ancestors(source) AS (
+             SELECT parent FROM album_nodes WHERE gallery=?1 AND source=?2
+             UNION
+             SELECT n.parent FROM album_nodes n JOIN ancestors a ON n.source=a.source WHERE n.gallery=?1
+         )
+         SELECT EXISTS(SELECT 1 FROM ancestors a JOIN album_settings s ON s.source=a.source WHERE s.hidden=1)",
+        params![gallery, source],
+        |row| row.get(0),
+    )?)
+}
+
 /// The chosen cover if it is still in this album or below it in `gallery`,
 /// else the first direct item in the album's order, else the first item of
 /// its subalbums in that order.
@@ -414,10 +427,49 @@ impl Catalog {
         .await
     }
 
-    /// Every album with `tag`, at any depth of any gallery of `account`.
+    /// Entry points into private Drive galleries, including folders beneath
+    /// public parents. Private descendants are reached through these roots.
+    pub async fn hidden_drive_albums(&self, account: AccountId) -> Result<Vec<Album>> {
+        self.query_albums(
+            "x.hidden=1 AND ?1 IS NULL AND ?2 IS NULL
+             AND NOT EXISTS(SELECT 1 FROM source_kinds k WHERE k.source=n.source AND k.kind='album')
+             AND NOT EXISTS(
+                 WITH RECURSIVE ancestors(source) AS (
+                     SELECT n.parent
+                     UNION
+                     SELECT p.parent FROM album_nodes p JOIN ancestors a ON p.source=a.source WHERE p.gallery=n.gallery
+                 ) SELECT 1 FROM ancestors a JOIN album_settings s ON s.source=a.source WHERE s.hidden=1
+             )",
+            vec![rusqlite::types::Value::Null; 2],
+            Some(account),
+        )
+        .await
+    }
+
+    pub async fn drive_album_is_private(
+        &self,
+        gallery: SourceId,
+        source: SourceId,
+    ) -> Result<bool> {
+        self.run(move |conn| {
+            Ok(load_settings(conn, source.as_str())?.hidden
+                || has_hidden_ancestor(conn, gallery.as_str(), source.as_str())?)
+        })
+        .await
+    }
+
+    /// Albums with this tag that can be opened directly from the tag results.
+    /// Descendants of hidden albums are reached through the unlocked parent.
     pub async fn tagged_albums(&self, tag: String, account: AccountId) -> Result<Vec<Album>> {
         self.query_albums(
-            "EXISTS(SELECT 1 FROM album_tags t WHERE t.source=n.source AND t.tag=?1 COLLATE NOCASE) AND ?2 IS NULL",
+            "EXISTS(SELECT 1 FROM album_tags t WHERE t.source=n.source AND t.tag=?1 COLLATE NOCASE) AND ?2 IS NULL
+             AND NOT EXISTS(
+                 WITH RECURSIVE ancestors(source) AS (
+                     SELECT n.parent
+                     UNION
+                     SELECT p.parent FROM album_nodes p JOIN ancestors a ON p.source=a.source WHERE p.gallery=n.gallery
+                 ) SELECT 1 FROM ancestors a JOIN album_settings s ON s.source=a.source WHERE s.hidden=1
+             )",
             vec![Some(tag).into(), rusqlite::types::Value::Null],
             Some(account),
         )
@@ -439,6 +491,21 @@ impl Catalog {
         .await
     }
 
+    /// Account-owned items excluded from public gallery views, including
+    /// members of descendants of a hidden Drive album.
+    pub async fn hidden_assets(&self, account: AccountId) -> Result<Vec<(String, String)>> {
+        self.run(move |conn| {
+            let mut query = conn.prepare(&format!(
+                "{HIDDEN_SOURCES} SELECT DISTINCT m.volume, m.node FROM memberships m
+                 JOIN hidden_sources h ON h.source=m.source WHERE m.account=?1"
+            ))?;
+            Ok(query
+                .query_map([account.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
     pub async fn album_settings(&self, source: SourceId) -> Result<AlbumSettings> {
         self.run(move |conn| load_settings(conn, source.as_str()))
             .await
@@ -448,6 +515,16 @@ impl Catalog {
     /// the album or one of its subalbums.
     pub async fn set_album_settings(
         &self,
+        source: SourceId,
+        settings: AlbumSettings,
+    ) -> Result<AlbumSettings> {
+        self.set_album_settings_at(None, source, settings).await
+    }
+
+    /// Apply the settings from a specific placement of the album in a gallery.
+    pub async fn set_album_settings_at(
+        &self,
+        gallery: Option<SourceId>,
         source: SourceId,
         settings: AlbumSettings,
     ) -> Result<AlbumSettings> {
@@ -468,23 +545,44 @@ impl Catalog {
             if settings.hidden && shared {
                 return Err(Error::Invalid("the timeline cannot be hidden".into()));
             }
+            let before = load_settings(&tx, source.as_str())?;
+            // The cover must be allowed under the proposed visibility. The
+            // transaction rolls back the settings if validation fails.
+            write_settings(&tx, &source, &settings)?;
             if let Some(cover) = &settings.cover {
+                let gallery = match gallery {
+                    Some(gallery) => Some(gallery.to_string()),
+                    None => tx.query_row(
+                        "SELECT gallery FROM album_nodes WHERE source=?1 ORDER BY gallery LIMIT 1",
+                        [source.as_str()],
+                        |row| row.get::<_, String>(0),
+                    ).optional()?,
+                };
                 let member: bool = tx.query_row(
-                    "WITH RECURSIVE tree(source) AS (SELECT ?1 UNION SELECT c.source FROM album_nodes c JOIN tree t ON c.parent=t.source)
+                    "WITH RECURSIVE tree(source) AS (
+                         SELECT ?1 UNION SELECT c.source FROM album_nodes c JOIN tree t ON c.parent=t.source
+                         WHERE (?5 IS NULL OR c.gallery=?5)
+                     )
                      SELECT EXISTS(SELECT 1 FROM memberships m WHERE m.source IN tree AND (m.account,m.volume,m.node)=(?2,?3,?4))",
-                    params![source.as_str(), cover.account.as_str(), cover.volume.as_str(), cover.node.as_str()],
+                    params![source.as_str(), cover.account.as_str(), cover.volume.as_str(), cover.node.as_str(), gallery],
                     |r| r.get(0),
                 )?;
                 if !member {
                     return Err(Error::Invalid("the cover must be a photo or video from this album".into()));
                 }
+                if let Some(gallery) = gallery
+                    && !settings.hidden
+                    && !has_hidden_ancestor(&tx, &gallery, source.as_str())?
+                    && !resolve_cover(&tx, &gallery, source.as_str(), Some(cover), settings.order, false)?
+                        .is_some_and(|asset| asset.key == *cover)
+                {
+                    return Err(Error::Invalid("a hidden item cannot be the cover of a visible album".into()));
+                }
             }
             if let Some((account, identity)) = crate::configuration::album_identity(&tx, &source)? {
-                let before = load_settings(&tx, source.as_str())?;
                 let changes = crate::configuration::changes(&tx, &account, &identity, &before, &settings)?;
                 crate::configuration::append(&tx, &account, identity, changes)?;
             }
-            write_settings(&tx, &source, &settings)?;
             let saved = load_settings(&tx, source.as_str())?;
             tx.commit()?;
             Ok(saved)
@@ -564,7 +662,8 @@ impl Catalog {
                 .map(|(gallery, payload, parent, items, children)| {
                     let source: SourceSpec = serde_json::from_str(&payload)?;
                     let settings = load_settings(conn, source.id.as_str())?;
-                    let cover = resolve_cover(conn, &gallery, source.id.as_str(), settings.cover.as_ref(), settings.order, settings.hidden)?;
+                    let private = settings.hidden || has_hidden_ancestor(conn, &gallery, source.id.as_str())?;
+                    let cover = resolve_cover(conn, &gallery, source.id.as_str(), settings.cover.as_ref(), settings.order, private)?;
                     Ok(Album {
                         gallery: SourceId::new(gallery)?,
                         source,

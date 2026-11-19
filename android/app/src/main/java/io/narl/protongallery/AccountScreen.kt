@@ -25,6 +25,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.narl.protongallery.bridge.SignInStage
 import android.content.ClipData
+import android.content.Intent
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -40,6 +43,7 @@ import kotlinx.coroutines.launch
 fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, String) -> Unit,
     onCode: (String) -> Unit, onMailbox: (String) -> Unit, onVerification: (String) -> Unit,
     onSignOut: () -> Unit, onRefresh: () -> Unit, onTestConnection: () -> Unit = {},
+    onRepairPhotos: () -> Unit = {},
 ) {
     var username by remember { mutableStateOf(state.status.username) }
     var secret by remember(state.status.stage) { mutableStateOf("") }
@@ -117,10 +121,27 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                             })
                         }
                     } else {
-                        FilledTonalButton(onClick = onRefresh, enabled = !state.syncing && !state.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(14.dp)) {
-                            Text(if (state.syncing) "Refreshing Photos…" else "Refresh Proton Photos")
+                        if (state.sessionExpired) {
+                            Text("Your Proton session expired.", color = MaterialTheme.colorScheme.error)
+                            Button(onClick = onSignOut, enabled = !state.busy) { Text("Sign in again") }
+                        } else {
+                            FilledTonalButton(onClick = onRefresh, enabled = !state.syncing && !state.busy,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(14.dp)) {
+                                Text(if (state.syncing) "Refreshing Photos…" else "Refresh Proton Photos")
+                            }
+                            state.lastPhotosSync?.let { lastSync ->
+                                val date = java.util.Date(lastSync * 1000)
+                                val formatted = java.text.DateFormat.getDateTimeInstance(
+                                    java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(date)
+                                Text("Last Photos sync $formatted", style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = onRepairPhotos, enabled = !state.syncing && !state.busy) { Text("Repair library") }
+                            TextButton(onClick = onSignOut, enabled = !state.busy,
+                                modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                                Text("Sign out", color = MaterialTheme.colorScheme.error)
+                            }
                         }
-                        TextButton(onClick = onSignOut, enabled = !state.busy, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("Sign out", color = MaterialTheme.colorScheme.error) }
+                        BatteryOptimization(Modifier.padding(top = 16.dp))
                         PhotoPickerSection(Modifier.padding(top = 24.dp))
                     }
                     state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium) }
@@ -135,6 +156,28 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BatteryOptimization(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current
+    val power = remember(context) { context.getSystemService(PowerManager::class.java) }
+    var exempt by remember(context) { mutableStateOf(power?.isIgnoringBatteryOptimizations(context.packageName) == true) }
+    DisposableEffect(lifecycle, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) exempt = power?.isIgnoringBatteryOptimizations(context.packageName) == true
+        }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
+    }
+    Column(modifier.fillMaxWidth()) {
+        TextButton(onClick = {
+            runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }) { Text("Battery optimization") }
+        Text(if (exempt) "Proton Gallery is exempt." else "Proton Gallery is optimized. Android may delay background sync.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

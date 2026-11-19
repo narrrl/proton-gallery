@@ -141,10 +141,15 @@ object PhoneBackup {
      * look at what is new.
      */
     suspend fun check(context: Context, repository: GalleryRepository): Unit = checking.withLock {
+        val started = android.os.SystemClock.elapsedRealtime()
+        var hashed = 0
         var start = repository.backupRemaining() - unreadable.size
         if (start <= 0L) {
             // Names that appeared in Proton since the last check are compared again.
-            if (repository.checkBackup(unreadable.toList()).isEmpty()) return@withLock
+            if (repository.checkBackup(unreadable.toList()).isEmpty()) {
+                android.util.Log.println(android.util.Log.INFO, "ProtonGallery", "Phone backup check: pending=0, hashes=0, elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
+                return@withLock
+            }
             start = repository.backupRemaining()
         }
         mutableProgress.update { it.copy(checking = true, toCheck = start, checkTotal = start) }
@@ -155,11 +160,13 @@ object PhoneBackup {
                 mutableProgress.update { it.copy(toCheck = left, checkTotal = maxOf(it.checkTotal, left)) }
                 if (pending.isEmpty()) break
                 val hashes = hashAll(context, pending) { mutableProgress.update { it.copy(toCheck = (it.toCheck - 1).coerceAtLeast(0)) } }
+                hashed += hashes.size
                 val read = hashes.mapTo(HashSet()) { it.id }
                 pending.filter { it.id !in read }.forEach { unreadable += it.id }
                 if (hashes.isNotEmpty()) repository.setPhoneHashes(hashes)
             }
         } finally {
+            android.util.Log.println(android.util.Log.INFO, "ProtonGallery", "Phone backup check: pending=$start, hashes=$hashed, elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
             mutableProgress.update { it.copy(checking = false, toCheck = 0, checkTotal = 0) }
         }
     }

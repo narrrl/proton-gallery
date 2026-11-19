@@ -81,6 +81,25 @@ impl From<pg_app::AccountState> for AccountStatus {
     }
 }
 
+#[derive(uniffi::Record)]
+pub struct PhotosSyncStatus {
+    pub revision: u64,
+    pub last_success: Option<i64>,
+    pub more: bool,
+    pub retry: bool,
+}
+
+impl From<pg_app::PhotosSyncStatus> for PhotosSyncStatus {
+    fn from(status: pg_app::PhotosSyncStatus) -> Self {
+        Self {
+            revision: status.revision,
+            last_success: status.last_success,
+            more: status.more,
+            retry: status.retry,
+        }
+    }
+}
+
 #[uniffi::export]
 impl GalleryEngine {
     pub fn restore_session(&self) -> Result<(), GalleryError> {
@@ -126,8 +145,15 @@ impl GalleryEngine {
     pub fn drive_progress(&self) -> u64 {
         self.drive_indexed.load(Ordering::Relaxed)
     }
-    pub fn sync_photos(&self) -> Result<u64, GalleryError> {
-        Ok(self.runtime.block_on(self.app.sync_photos(|_| {}))?)
+    pub fn sync_photos(&self, repair: bool) -> Result<PhotosSyncStatus, GalleryError> {
+        Ok(self
+            .runtime
+            .block_on(self.app.sync_photos_batch(repair, |_| {}))?
+            .into())
+    }
+
+    pub fn photos_sync_status(&self) -> Result<PhotosSyncStatus, GalleryError> {
+        Ok(self.runtime.block_on(self.app.photos_sync_status())?.into())
     }
 
     pub fn sync_gallery_settings(&self) -> Result<bool, GalleryError> {
@@ -140,6 +166,16 @@ impl GalleryEngine {
         Ok(self
             .runtime
             .block_on(self.app.poll_gallery_configuration(true))?)
+    }
+
+    pub fn photo_album_exists(&self, id: String) -> Result<bool, GalleryError> {
+        let Some(account) = self.app.auth.account_id() else {
+            return Ok(false);
+        };
+        Ok(self
+            .runtime
+            .block_on(self.catalog.photo_album(account, SourceId::new(id)?))?
+            .is_some())
     }
 
     pub fn gallery_visibility_ready(&self) -> Result<bool, GalleryError> {

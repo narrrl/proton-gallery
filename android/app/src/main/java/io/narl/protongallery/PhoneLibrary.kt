@@ -72,11 +72,15 @@ object PhoneLibrary {
      */
     suspend fun scan(context: Context, repository: GalleryRepository, force: Boolean = false): Int = scanning.withLock {
         if (!hasAccess(context)) return@withLock 0
+        val started = android.os.SystemClock.elapsedRealtime()
         val (marker, visible) = indexMarker(context) ?: (null to -1L)
         val preferences = context.getSharedPreferences("phone-library", Context.MODE_PRIVATE)
         // The catalog may have been reset since, so it must hold as many items too.
         if (!force && marker != null && preferences.getString("indexed", null) == marker &&
-            repository.phoneFolders().sumOf { it.count.toLong() } == visible) return@withLock -1
+            repository.phoneFolders().sumOf { it.count.toLong() } == visible) {
+            android.util.Log.println(android.util.Log.INFO, "ProtonGallery", "Phone library unchanged: visible=$visible, metadata=0, elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
+            return@withLock -1
+        }
         PhoneBackup.scanning(true)
         try {
             // Taken before reading, so changes made during the scan are read next time.
@@ -92,6 +96,7 @@ object PhoneLibrary {
                 if (version != null && generation != null) { putString("version", version); putLong("generation", generation) }
                 else { remove("version"); remove("generation") }
             }
+            android.util.Log.println(android.util.Log.INFO, "ProtonGallery", "Phone library scan: visible=$visible, metadata=$count, full=${since == null}, elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
             count
         } finally { PhoneBackup.scanning(false) }
     }

@@ -30,12 +30,15 @@ import java.util.UUID
  * Threads for calls into Rust. Each call blocks on async Rust code, which needs
  * more stack than Android's default for pooled threads (about 1 MB).
  */
-private val Native = run {
+private fun nativeDispatcher(threads: Int, label: String): kotlinx.coroutines.CoroutineDispatcher {
     val count = java.util.concurrent.atomic.AtomicInteger()
-    java.util.concurrent.Executors.newFixedThreadPool(8) { task ->
-        Thread(null, task, "pg-native-${count.incrementAndGet()}", 8L shl 20).apply { isDaemon = true }
+    return java.util.concurrent.Executors.newFixedThreadPool(threads) { task ->
+        Thread(null, task, "$label-${count.incrementAndGet()}", 8L shl 20).apply { isDaemon = true }
     }.asCoroutineDispatcher()
 }
+
+private val Native = nativeDispatcher(8, "pg-native")
+private val NativeThumbnails = nativeDispatcher(4, "pg-thumbnail")
 
 /** Byte streams stay on disk; typed metadata is the only FFI payload. */
 class GalleryRepository private constructor(private val context: Context) {
@@ -72,7 +75,8 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun connectionReport() = withContext(Native) { engine.connectionReport() }
     suspend fun cancelSignIn() = withContext(Native) { engine.cancelSignIn() }
     suspend fun signOut() = withContext(Native) { engine.signOut() }
-    suspend fun syncPhotos() = withContext(Native) { engine.syncPhotos() }
+    suspend fun syncPhotos(repair: Boolean) = withContext(Native) { engine.syncPhotos(repair) }
+    suspend fun photosSyncStatus() = withContext(Native) { engine.photosSyncStatus() }
     suspend fun syncGallerySettings() = withContext(Native) { engine.syncGallerySettings() }
     suspend fun pollGallerySettings() = withContext(Native) { engine.pollGallerySettings() }
     suspend fun publicDriveLink(album: FolderAlbum) = withContext(Native) {
@@ -87,7 +91,7 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun galleryVisibilityReady() = withContext(Native) { engine.galleryVisibilityReady() }
     suspend fun driveProgress() = withContext(Native) { engine.driveProgress() }
     suspend fun syncProgress() = withContext(Native) { engine.syncProgress() }
-    suspend fun thumbnail(item: GalleryItem): ByteArray? = withContext(Native) { item.remoteKey?.let(engine::photoThumbnail) }
+    suspend fun thumbnail(item: GalleryItem): ByteArray? = withContext(NativeThumbnails) { item.remoteKey?.let(engine::photoThumbnail) }
     suspend fun preview(item: GalleryItem): ByteArray? = withContext(Native) { item.remoteKey?.let(engine::photoPreview) }
     suspend fun rememberShape(item: GalleryItem, width: Int, height: Int) = withContext(Native) {
         item.remoteKey?.let { engine.rememberPhotoShape(it, width.toUInt(), height.toUInt()) }
@@ -145,6 +149,7 @@ class GalleryRepository private constructor(private val context: Context) {
             else -> engine.albums(location.album?.gallery, location.album?.id)
         }
     }
+    suspend fun photoAlbumExists(album: FolderAlbum) = withContext(Native) { engine.photoAlbumExists(album.id) }
     suspend fun photoAlbums() = withContext(Native) { engine.photoAlbums() }
     suspend fun setAlbumHidden(album: FolderAlbum, hidden: Boolean) = withContext(Native) { engine.setAlbumHidden(album.id, hidden) }
     suspend fun backupAlbums() = withContext(Native) { engine.backupAlbums() }
