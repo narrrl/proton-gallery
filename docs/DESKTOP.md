@@ -66,8 +66,11 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
   and subfolders. **Remove gallery** removes it from this app and leaves its Drive files in place.
   Open **Public link** to create, copy or revoke a viewer link for an owned
   Drive folder. A link can have a password and expiry.
-- Hidden albums unlock with a local Gallery passphrase. The desktop stores a salted
-  Argon2id verifier in the system keyring and locks again when the window loses focus.
+- Hidden albums unlock with the system sign-in prompt. Linux uses polkit and a
+  desktop authentication agent. Windows uses Windows Hello on Windows 11.
+  Hidden albums
+  lock again when the window loses focus. For a Linux source build, install
+  `packaging/io.narl.proton-gallery.policy` into the system polkit actions directory.
   Refresh Android first to import existing hidden settings, then refresh desktop.
   Gallery checks for settings changes on window focus and while the app runs.
   Hiding controls visibility in Gallery. Originals remain accessible in Proton

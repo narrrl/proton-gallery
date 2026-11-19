@@ -4906,10 +4906,8 @@ dependencies = [
 name = "pg-desktop"
 version = "0.3.0"
 dependencies = [
- "argon2",
  "chrono",
  "directories",
- "getrandom 0.4.3",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
@@ -4920,11 +4918,15 @@ dependencies = [
  "pg-core",
  "pg-drive",
  "proton-sdk",
+ "raw-window-handle",
+ "rustix 1.1.6",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "windows 0.62.2",
+ "windows-future",
  "zeroize",
 ]
 

@@ -10,7 +10,7 @@ pkgdesc='Unofficial Proton Photos and Drive gallery with a native photo and vide
 arch=('x86_64')
 url='https://github.com/narrrl/proton-gallery'
 license=('MIT')
-depends=('dbus' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11'
+depends=('dbus' 'polkit' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11'
          'libx11' 'libxcursor' 'libxi' 'libxrandr' 'wayland' 'libglvnd'
          'vulkan-icd-loader' 'hicolor-icon-theme' 'xdg-utils' 'ca-certificates'
          'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav')

@@ -23,6 +23,8 @@ use std::sync::{
 pub mod account;
 pub mod albums;
 pub mod config_sync;
+#[cfg(target_os = "linux")]
+pub mod desktop_auth;
 pub mod drive_galleries;
 pub mod favorites;
 pub mod fixtures;

@@ -42,7 +42,7 @@ This is an independent, unofficial client and is not affiliated with or endorsed
   seek within supported Proton videos. Android also shares selected originals with other apps.
 - **Hidden albums.** Hide photos into a hidden album in one step. Hidden albums and their
   photos leave the timeline, visible album lists, and Gallery’s Android cloud picker. Open a
-  hidden album with your phone’s screen lock or a local Gallery passphrase on desktop.
+  hidden album with your device sign-in on Android, Linux, or Windows.
 
 **Android backup and storage**
 

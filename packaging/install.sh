@@ -6,6 +6,7 @@ dest=${1:?Usage: packaging/install.sh DESTDIR [BINARY]}
 binary=${2:-$root/target/release/proton-gallery}
 install -Dm755 "$binary" "$dest/usr/bin/proton-gallery"
 install -Dm644 "$root/packaging/io.narl.proton-gallery.desktop" "$dest/usr/share/applications/io.narl.proton-gallery.desktop"
+install -Dm644 "$root/packaging/io.narl.proton-gallery.policy" "$dest/usr/share/polkit-1/actions/io.narl.proton-gallery.policy"
 install -Dm644 "$root/images/logo.svg" "$dest/usr/share/icons/hicolor/scalable/apps/io.narl.proton-gallery.svg"
 install -Dm644 "$root/images/icon-512.png" "$dest/usr/share/icons/hicolor/512x512/apps/io.narl.proton-gallery.png"
 # A direct PNG path also works with launchers holding a stale theme-name cache.

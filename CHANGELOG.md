@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Unlock Hidden albums on desktop with your system sign-in through polkit on
+  Linux or Windows Hello on Windows. Existing hidden settings are preserved.
+
 ## 0.3.0
 
 ### Install

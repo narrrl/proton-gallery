@@ -20,6 +20,7 @@ BuildRequires: dbus-devel
 BuildRequires: gstreamer1-devel
 BuildRequires: gstreamer1-plugins-base-devel
 Requires: dbus-libs
+Requires: polkit
 Requires: fontconfig
 Requires: libxkbcommon
 Requires: libxkbcommon-x11
@@ -62,6 +63,7 @@ bash "%{git_dir}/packaging/install.sh" "%{buildroot}" "%{binary}"
 %files
 /usr/bin/proton-gallery
 /usr/share/applications/io.narl.proton-gallery.desktop
+/usr/share/polkit-1/actions/io.narl.proton-gallery.policy
 /usr/share/icons/hicolor/scalable/apps/io.narl.proton-gallery.svg
 /usr/share/icons/hicolor/512x512/apps/io.narl.proton-gallery.png
 /usr/share/pixmaps/proton-gallery.png
