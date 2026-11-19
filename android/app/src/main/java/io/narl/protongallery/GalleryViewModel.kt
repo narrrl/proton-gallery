@@ -23,6 +23,7 @@ import io.narl.protongallery.bridge.AlbumTag
 import io.narl.protongallery.bridge.DriveFolder
 import io.narl.protongallery.bridge.PhoneFolder
 import io.narl.protongallery.bridge.PhoneRef
+import io.narl.protongallery.bridge.PublicDriveLink
 import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
@@ -50,7 +51,6 @@ import kotlinx.coroutines.withContext
 
 data class LibraryState(
     val ready: Boolean = false,
-    val count: Long = 0,
     val bytes: Long = 0,
     val importing: Boolean = false,
     val progress: String? = null,
@@ -60,6 +60,13 @@ data class LibraryState(
     /** Work the user just asked for, such as getting photos ready to share. */
     val preparing: String? = null,
 )
+
+enum class GalleryLoad { Loading, Ready, Failed }
+
+data class GalleryPage<T>(val location: GalleryLocation, val generation: Int, val value: T) {
+    fun matches(location: GalleryLocation, generation: Int) =
+        this.location == location && this.generation == generation
+}
 
 /** Something only the activity can do: system dialogs and other apps. */
 sealed interface UiRequest {
@@ -94,6 +101,7 @@ data class BackupState(
     val wifiOnly: Boolean = true,
     val chargingOnly: Boolean = false,
     val progress: BackupProgress = BackupProgress(),
+    val request: BackupRequest? = null,
     /** Free up space keeps media taken in this many recent days. */
     val keepDays: Int = 90,
     /** What freeing up space would remove; null before it is known. */
@@ -123,6 +131,40 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private var authJob: Job? = null
     private var photosJob: Job? = null
     private var driveJob: Job? = null
+    private var settingsJob: Job? = null
+    private val mutableDriveLink = MutableStateFlow<DriveLinkState?>(null)
+    val driveLink = mutableDriveLink.asStateFlow()
+    private var driveLinkRequest = 0
+
+    fun openDriveLink() = changeDriveLink { repo, album -> repo.publicDriveLink(album) }
+    fun createDriveLink(password: String, expires: Long?) = changeDriveLink { repo, album ->
+        repo.createDriveLink(album, password, expires)
+    }
+    fun revokeDriveLink() = changeDriveLink { repo, album -> repo.revokeDriveLink(album) }
+    fun closeDriveLink() {
+        driveLinkRequest++
+        mutableDriveLink.value = null
+    }
+
+    private fun changeDriveLink(action: suspend (GalleryRepository, FolderAlbum) -> PublicDriveLink?) {
+        val repo = repository.value ?: return
+        val album = location.value.takeIf { it.section == GallerySection.Drive }?.album ?: return
+        val current = mutableDriveLink.value
+        if (!account.value.connected || current?.busy == true) return
+        val request = ++driveLinkRequest
+        mutableDriveLink.value = DriveLinkState(busy = true, link = current?.link, loaded = current?.loaded == true)
+        viewModelScope.launch(guard) {
+            try {
+                val link = action(repo, album)
+                if (request == driveLinkRequest) mutableDriveLink.value = DriveLinkState(link = link, loaded = true)
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                val message = (error as? GalleryException.Operation)?.detail ?: "Couldn’t update the public link. Try again."
+                if (request == driveLinkRequest) mutableDriveLink.value = DriveLinkState(link = current?.link,
+                    loaded = current?.loaded == true, error = message)
+            }
+        }
+    }
 
     fun showAccount() {
         mutableAccount.update { it.copy(visible = true, error = null) }
@@ -156,7 +198,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 action(repo)
                 val status = repo.accountStatus()
+                val visibility = status.stage == SignInStage.CONNECTED && repo.galleryVisibilityReady()
                 mutableAccount.update { it.copy(status = status, visible = status.stage != SignInStage.CONNECTED,
+                    visibilityReady = visibility, visibilityStale = false,
                     generation = it.generation + if (status.stage == SignInStage.CONNECTED) 1 else 0) }
                 if (status.stage == SignInStage.CONNECTED) {
                     navigate(GalleryLocation())
@@ -187,8 +231,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         mutableAccount.update { it.copy(busy = true, error = null) }
         authJob = viewModelScope.launch(guard) {
             try {
+                Backup.stop(getApplication())
                 repo.signOut()
-                photosJob?.join(); driveJob?.join()
+                photosJob?.join(); driveJob?.join(); settingsJob?.join()
                 // Previews and originals of this account must not outlive it.
                 withContext(Dispatchers.IO) {
                     File(getApplication<Application>().cacheDir, "thumbnails").deleteRecursively()
@@ -196,6 +241,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     Originals.directory(getApplication()).deleteRecursively()
                 }
                 mutableAccount.update { AccountState(generation = it.generation + 1) }
+                backupRequestJob?.cancel()
+                mutableBackup.update { it.copy(request = null) }
                 navigate(GalleryLocation())
                 mutableState.update { it.copy(revision = it.revision + 1) }
             } catch (cancel: CancellationException) { throw cancel }
@@ -210,6 +257,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         photosJob = viewModelScope.launch(guard) {
             val progress = watchProgress(repo, { it.syncProgress().toLong() }) { indexed -> mutableAccount.update { it.copy(indexed = indexed) } }
             try {
+                settingsJob?.join()
+                syncGallerySettings(repo)
                 repo.syncPhotos()
                 PhotoPicker.changed(getApplication())
                 refreshDetails(repo)
@@ -225,13 +274,56 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun refreshGallerySettings() {
+        val repo = repository.value ?: return
+        if (!account.value.connected || account.value.busy || photosJob?.isActive == true || settingsJob?.isActive == true) return
+        settingsJob = viewModelScope.launch(guard) {
+            try { syncGallerySettings(repo, poll = true) }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { /* Keep the last checked view while offline. */ }
+        }
+    }
+
+    private suspend fun syncGallerySettings(repo: GalleryRepository, poll: Boolean = false) {
+        val generation = account.value.generation
+        val changed = try { if (poll) repo.pollGallerySettings() else repo.syncGallerySettings() }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (error: Exception) {
+            if (account.value.generation == generation) mutableAccount.update { it.copy(visibilityStale = true) }
+            throw error
+        }
+        if (account.value.generation != generation) return
+        if (changed == null) {
+            mutableAccount.update { it.copy(visibilityStale = false) }
+            return
+        }
+        mutableAccount.update { it.copy(visibilityReady = true, visibilityStale = false,
+            visibilityRevision = it.visibilityRevision + if (changed) 1 else 0) }
+        if (changed) {
+            navigate(GalleryLocation(location.value.section))
+            withContext(Dispatchers.IO) {
+                val app = getApplication<Application>()
+                File(app.cacheDir, "thumbnails").deleteRecursively()
+                File(app.cacheDir, "picker").deleteRecursively()
+                Originals.directory(app).deleteRecursively()
+            }
+        }
+        PhotoPicker.changed(getApplication())
+        refreshDetails(repo)
+        mutableState.update { it.copy(revision = it.revision + 1) }
+    }
+
     /** Refresh what is on screen: a Drive gallery, every gallery, or Photos. */
     fun refresh() {
         val place = location.value
-        if (place.section != GallerySection.Drive) return syncPhotos()
+        if (place.section != GallerySection.Drive || !account.value.visibilityReady) return syncPhotos()
         val album = place.album
-        if (album != null) runDrive(album.name, "Couldn’t refresh this gallery. Your cached albums are available.") { it.refreshDriveGallery(album.gallery) }
+        if (album != null) runDrive(album.name, "Couldn’t refresh this gallery. Your cached albums are available.") {
+            syncGallerySettings(it)
+            it.refreshDriveGallery(album.gallery)
+        }
         else runDrive("your galleries", "Couldn’t refresh every gallery. Your cached albums are available.") { repo ->
+            syncGallerySettings(repo)
             for (gallery in repo.albums(GalleryLocation(GallerySection.Drive))) repo.refreshDriveGallery(gallery.gallery)
         }
     }
@@ -329,6 +421,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         closeChooser()
         runDrive(folder.name, "“${folder.name}” couldn’t be added. Check your connection and try again.", after = {
             if (location.value.section == GallerySection.Drive && location.value.album == null) navigate(location.value)
+            refreshGallerySettings()
             mutableState.update { it.copy(message = "“${folder.name}” added. Its folders are now albums.", error = false) }
         }) { it.addDriveGallery(folder.id) }
     }
@@ -338,6 +431,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 repo.removeDriveGallery(album.gallery)
                 navigate(GalleryLocation(GallerySection.Drive))
+                refreshGallerySettings()
                 mutableState.update { it.copy(message = "Gallery removed. Nothing was deleted from Drive.") }
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { mutableState.update { it.copy(message = "The gallery couldn’t be removed. Try again.", error = true) } }
@@ -366,6 +460,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val message = work(repo)
                 refreshDetails(repo)
+                refreshGallerySettings()
                 mutableAlbumChoices.value = null
                 mutableState.update { it.copy(revision = it.revision + 1, message = message ?: it.message, error = false) }
             } catch (cancel: CancellationException) { throw cancel }
@@ -467,6 +562,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         description = saved.description, tags = saved.tags, pinned = saved.pinned, hidden = saved.hidden))
                 }
                 mutableTags.value = repo.albumTags()
+                refreshGallerySettings()
                 if (confirmation != null) mutableState.update { it.copy(message = confirmation, error = false) }
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
@@ -488,8 +584,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val location = mutableLocation.asStateFlow()
     private val mutableAlbums = MutableStateFlow<List<FolderAlbum>>(emptyList())
     val albums = mutableAlbums.asStateFlow()
-    private val mutableOutline = MutableStateFlow<GalleryOutline?>(null)
-    /** The open view's items for the grid; null while the first outline of a view loads. */
+    private val mutableDetails = MutableStateFlow<GalleryPage<GalleryLoad>?>(null)
+    val details = mutableDetails.asStateFlow()
+    private val mutableOutline = MutableStateFlow<GalleryPage<GalleryOutline?>?>(null)
+    /** A null page is loading. A page with a null outline failed its first read. */
     val outline = mutableOutline.asStateFlow()
 
     /** Keep the outline in step with the open view. A different view, account
@@ -497,54 +595,87 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * old one only when items were added or removed, so the layout holds still
      * otherwise and only the records are read again. */
     private fun followOutline() = viewModelScope.launch(guard) {
-        data class Key(val view: Pair<GallerySection, LibraryView?>, val generation: Int, val order: Int)
-        var shown: Key? = null
+        var photos: GalleryPage<GalleryOutline?>? = null
+        var photosRevision: Int? = null
+        var shownOrder = 0
         combine(repository, location, account, order, state) { repo, place, account, order, state ->
-            Triple(repo, Key(place.section to place.nativeView(), account.generation, order), state.revision)
-        }.distinctUntilChanged().collectLatest { (repo, key, _) ->
-            val view = key.view.second
-            if (key != shown) { mutableOutline.value = null; shown = key }
+            Triple(repo, GalleryPage(place, account.generation, order), state.revision)
+        }.distinctUntilChanged().collectLatest { (repo, page, revision) ->
+            val (place, generation, order) = page
+            val view = place.nativeView()
+            if (photos?.generation != generation || shownOrder != order || photosRevision != revision) photos = null
+            val current = mutableOutline.value?.takeIf {
+                it.matches(place, generation) && shownOrder == order
+            }?.value ?: photos?.takeIf { it.matches(place, generation) }?.value
+            shownOrder = order
+            mutableOutline.value = current?.let { GalleryPage(place, generation, it) }
             if (repo == null || view == null) return@collectLatest
-            val next = try { repo.outline(view, viewModelScope) }
+            val next = try { repo.outline(view, viewModelScope, place.private) }
                 catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { return@collectLatest }
-            val current = mutableOutline.value
-            if (current != null && current.ids == next.ids) { current.reload(); return@collectLatest }
+                catch (_: Exception) {
+                    if (current == null) mutableOutline.value = GalleryPage(place, generation, null)
+                    return@collectLatest
+                }
+            if (current != null && current.ids == next.ids) {
+                current.reload()
+                if (place.section == GallerySection.Photos) {
+                    photos = mutableOutline.value
+                    photosRevision = revision
+                }
+                return@collectLatest
+            }
             if (current != null) {
                 // Open the new layout where the old one was.
                 val id = current.ids.getOrNull(current.lastIndex)
                 next.preload(id?.let(next::indexOf)?.takeIf { it >= 0 } ?: current.lastIndex.coerceAtMost(next.count - 1))
             } else next.preload(0)
-            mutableOutline.value = next
+            val loaded = GalleryPage<GalleryOutline?>(place, generation, next)
+            mutableOutline.value = loaded
+            if (place.section == GallerySection.Photos) {
+                photos = loaded
+                photosRevision = revision
+            }
         }
     }
 
+    private var navigationJob: Job? = null
+
     fun navigate(place: GalleryLocation) {
+        closeDriveLink()
+        navigationJob?.cancel()
+        val generation = account.value.generation
+        val samePlace = location.value == place
         mutableLocation.value = place
-        mutableAlbums.value = emptyList()
+        if (!samePlace) mutableAlbums.value = emptyList()
         mutableOptions.value = null
         if (place.section != GallerySection.Drive || place.album != null) mutableTagFilter.value = null
-        mutableState.update { it.copy(count = 0) }
+        if (!samePlace || mutableDetails.value?.value == GalleryLoad.Failed) mutableDetails.value = null
         val repo = repository.value ?: return
-        viewModelScope.launch(guard) {
+        if (samePlace) mutableState.update { it.copy(revision = it.revision + 1) }
+        navigationJob = viewModelScope.launch(guard) {
             try { refreshDetails(repo, place) }
             catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { mutableState.update { it.copy(message = "This album couldn’t be opened. Try again.", error = true) } }
+            catch (_: Exception) {
+                if (location.value == place && account.value.generation == generation) {
+                    mutableDetails.value = GalleryPage(place, generation, GalleryLoad.Failed)
+                }
+            }
         }
     }
 
     private suspend fun refreshDetails(repo: GalleryRepository, place: GalleryLocation = location.value) {
-        val count = repo.count(place)
+        val generation = account.value.generation
         val driveRoot = place.section == GallerySection.Drive && place.album == null
         val tag = mutableTagFilter.value.takeIf { driveRoot }
         val children = if (tag != null) repo.taggedAlbums(tag) else repo.albums(place)
         val options = repo.options(place)
         val tags = if (place.section == GallerySection.Drive) repo.albumTags() else emptyList()
-        if (location.value == place) {
-            mutableState.update { it.copy(count = count) }
+        if (location.value == place && account.value.generation == generation &&
+            (!driveRoot || mutableTagFilter.value == tag)) {
             mutableAlbums.value = children
             mutableOptions.value = options
             mutableTags.value = tags
+            mutableDetails.value = GalleryPage(place, generation, GalleryLoad.Ready)
             if (driveRoot && tag != null && tags.none { it.name.equals(tag, ignoreCase = true) }) mutableTagFilter.value = null
         }
     }
@@ -561,7 +692,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.update { it.copy(ready = true, bytes = totals.bytes.toLong(), message = null, error = false) }
                 try {
                     repo.ensureSession()
-                    mutableAccount.update { it.copy(status = repo.accountStatus(), generation = it.generation + 1) }
+                    val status = repo.accountStatus()
+                    val ready = status.stage == SignInStage.CONNECTED && repo.galleryVisibilityReady()
+                    mutableAccount.update { it.copy(status = status, visibilityReady = ready, generation = it.generation + 1) }
                 } catch (error: Exception) {
                     mutableAccount.update { it.copy(error = authMessage(error), visible = true) }
                 }
@@ -571,6 +704,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (mutableAccount.value.connected) syncPhotos()
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) {
+                mutableDetails.value = GalleryPage(location.value, account.value.generation, GalleryLoad.Failed)
                 mutableState.update { it.copy(message = "Your library couldn’t be opened. Try again.", error = true) }
             } finally { opening = false }
         }
@@ -928,8 +1062,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun backUpNow() {
         if (!mutableAccount.value.connected) return showAccount()
-        Backup.now(getApplication())
-        mutableState.update { it.copy(message = if (settings.wifiOnly) "Backup starts when you’re on Wi‑Fi" else "Backup started", error = false) }
+        if (!mutableBackup.value.automatic || mutableBackup.value.request?.active == true) return
+        trackBackup()
+    }
+
+    private var backupRequestJob: Job? = null
+
+    private fun trackBackup(items: List<PhoneRef>? = null) {
+        val generation = account.value.generation
+        val request = Backup.request(getApplication(), items)
+        backupRequestJob?.cancel()
+        mutableBackup.update { it.copy(request = BackupRequest("Backup queued", true)) }
+        mutableState.update { it.copy(message = "Backup queued", error = false) }
+        backupRequestJob = viewModelScope.launch(guard) {
+            request.collect { status ->
+                if (account.value.generation == generation) {
+                    mutableBackup.update { it.copy(request = status) }
+                    if (!status.active) mutableState.update { it.copy(message = status.message) }
+                }
+            }
+        }
     }
 
     /** Upload chosen phone items now, on any network. */
@@ -958,7 +1110,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Hide photos on this phone: put them into a hidden album, `album` or a
+     * Hide photos in Gallery by putting them into a hidden album, `album` or a
      * new one named Hidden. Phone photos not backed up yet are backed up and
      * then go in.
      */
@@ -978,8 +1130,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 Backup.upload(getApplication(), waiting.map { PhoneRef(it.phoneId!!, it.isVideo) })
             }
             buildString {
-                append(if (added + waiting.size == 1) "Hidden on this phone" else "${added + waiting.size} hidden on this phone")
-                if (waiting.isNotEmpty()) append(". ${if (waiting.size == 1) "1 goes" else "${waiting.size} go"} after backing up")
+                if (added > 0) append(if (added == 1) "1 item hidden in Gallery" else "$added items hidden in Gallery")
+                if (waiting.isNotEmpty()) {
+                    if (isNotEmpty()) append(". ")
+                    append(if (waiting.size == 1) "1 item will be hidden after backup" else "${waiting.size} items will be hidden after backup")
+                }
+                if (proton.size > added) {
+                    if (isNotEmpty()) append(". ")
+                    append("${proton.size - added} couldn’t be added to the hidden album")
+                }
                 if (items.any { it.phoneId != null }) append(". Other gallery apps still show the phone’s copy")
             }
         }
@@ -992,8 +1151,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             mutableState.update { it.copy(message = "These are already in Proton Photos", error = false) }
             return
         }
-        Backup.upload(getApplication(), refs)
-        mutableState.update { it.copy(message = if (refs.size == 1) "Backing up 1 item" else "Backing up ${refs.size} items", error = false) }
+        trackBackup(refs)
     }
 
     private companion object {

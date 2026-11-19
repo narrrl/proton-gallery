@@ -48,6 +48,37 @@ fn item_folder(key: &AssetKey) -> String {
 }
 
 impl App {
+    /// Decrypt a bounded original into memory for an unlocked hidden album.
+    pub async fn original_in_memory(&self, key: &AssetKey, limit: u64) -> Result<Vec<u8>> {
+        let _operations = self.operations.read().await;
+        let account = self.auth.account().await?;
+        self.owns(&account.id, key)?;
+        self.require_gallery_visibility().await?;
+        let photos_volume = self.photos_volume(&account.id).await?;
+        let uid = pg_drive::node_uid(key);
+        let mut out = LimitedWriter {
+            inner: Vec::new(),
+            left: limit,
+        };
+        let download = async {
+            if photos_volume.as_ref() == Some(&key.volume) {
+                proton_drive_rs::ProtonPhotosClient::from_drive_client(account.drive.clone())
+                    .download_photo_to(&uid, &mut out)
+                    .await
+            } else {
+                account.drive.download_file_to(&uid, &mut out).await
+            }
+        };
+        tokio::select! { biased;
+            _ = account.cancel.cancelled() => return Err(Error::Cancelled),
+            result = download => result.map_err(|e| {
+                tracing::warn!("hidden original download failed: {}", pg_drive::auth::cause_chain(&e));
+                Error::message("Couldn’t open the original within the memory limit.")
+            })?,
+        }
+        Ok(out.inner)
+    }
+
     /// The volume of the account's Photos, from the open source or the catalog.
     async fn photos_volume(
         &self,

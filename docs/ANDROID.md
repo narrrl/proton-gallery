@@ -60,12 +60,18 @@ Drive → + (Add gallery) opens a folder chooser over My files. The chosen folde
 
 Photos sync and Drive gallery work run independently, each with its own lock and progress counter in `pg-mobile` (`sync_progress`, `drive_progress`) and its own job in the view model. A gallery can be added while a large Photos library is still syncing.
 
-Each album has local settings (catalog schema v5, `album_settings` and `album_tags`). None of them is written back to Drive:
+Album presentation settings and selected Drive roots sync through a dedicated Proton Gallery
+device. The app uses these settings when browsing and leaves the ordinary Drive folders and
+Proton albums in place. Refresh Android first after upgrading to import settings from your phone.
+
+The **Public link** action on an owned Drive folder can create, copy, and revoke
+a viewer link. Gallery checks for hidden contents before creating it. Existing
+public links can still be revoked from an unlocked hidden folder.
 
 - Name and description. The folder keeps its Drive name.
 - Cover: a chosen photo or video from the album or one of its subalbums. By default, the album uses its newest item.
 - Tags (up to 20, case-insensitive). The Drive tab filters by tag across all galleries.
-- Pin to top, and hide. Hidden albums stay out of every album list until the phone's fingerprint, face or screen lock confirms the user (platform `BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`); they lock again whenever the app leaves the screen, and an open hidden album closes then too. Without a screen lock the app offers to set one up. Photos in a hidden album also leave the Photos timeline and the system photo picker, on this phone only. "Hide" in the selection bar or the viewer asks which hidden album to use, or creates one.
+- Pin to top, and hide. Open hidden albums using Android’s fingerprint, face or screen lock (`BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`). They lock when the app leaves the screen. Their photos leave the visible timeline and system picker in Gallery after sync. "Hide" asks which hidden album to use or creates one. Proton Photos still shows the originals.
 
 The interface shows everything newest first, and the grid's zoom sets the date headings. The catalog still stores grouping and order per album (`album_settings.grouping`, `sort_order`, with a case-insensitive name index), but the app no longer offers them.
 

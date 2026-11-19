@@ -28,7 +28,7 @@ jobs:
         with:
           key: linux-packages
       - name: Install platform and packaging dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev rpm cpio file desktop-file-utils
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev rpm cpio file desktop-file-utils
       - name: Build packages
         run: scripts/package-linux.sh
       - name: Check the packaged launcher and icon

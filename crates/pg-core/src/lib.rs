@@ -3,6 +3,7 @@
 pub mod backup_albums;
 pub mod bytes;
 pub mod catalog;
+pub mod configuration;
 pub mod error;
 pub mod grid;
 pub mod indexer;

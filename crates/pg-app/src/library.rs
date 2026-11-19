@@ -168,6 +168,22 @@ impl App {
 
     /// Filter compact identities in SQLite, without reading every media record.
     pub async fn outline_filtered(&self, view: View, favorites: bool) -> Result<Outline> {
+        self.outline_with_visibility(view, favorites, false).await
+    }
+
+    pub async fn outline_with_visibility(
+        &self,
+        view: View,
+        favorites: bool,
+        unlocked: bool,
+    ) -> Result<Outline> {
+        let remote = matches!(
+            view,
+            View::Photos | View::PhotoAlbum(_) | View::DriveAlbum { .. }
+        );
+        if remote {
+            self.require_gallery_visibility().await?;
+        }
         let entries = if matches!(view, View::Photos) {
             if favorites {
                 self.catalog
@@ -179,10 +195,29 @@ impl App {
                     .await?
             }
         } else {
-            match self.view_source(view).await? {
+            let source = if let View::PhotoAlbum(id) = &view
+                && unlocked
+            {
+                let account = self.auth.account_id().ok_or(pg_core::Error::NotFound)?;
+                let id = SourceId::new(id)?;
+                Some(
+                    self.catalog
+                        .photo_album(account, id.clone())
+                        .await?
+                        .ok_or(pg_core::Error::NotFound)?
+                        .id,
+                )
+            } else {
+                self.view_source(view).await?
+            };
+            match source {
                 Some(source) => {
                     let order = self.catalog.album_settings(source.clone()).await?.order;
-                    if favorites {
+                    if remote && !unlocked {
+                        self.catalog
+                            .visible_source_outline(source, order, favorites)
+                            .await?
+                    } else if favorites {
                         self.catalog.source_favorites_outline(source, order).await?
                     } else {
                         self.catalog.source_outline(source, order).await?

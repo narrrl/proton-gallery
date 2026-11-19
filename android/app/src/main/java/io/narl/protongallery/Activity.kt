@@ -21,20 +21,18 @@ import java.text.NumberFormat
 data class Activity(val label: String, val fraction: Float? = null)
 
 /** The most important thing going on, or null when the app is idle. */
-fun currentActivity(state: LibraryState, account: AccountState, backup: BackupState): Activity? {
+fun currentActivity(state: LibraryState, account: AccountState, backup: BackupState, section: GallerySection): Activity? {
     val number = NumberFormat.getIntegerInstance()
     val progress = backup.progress
     return when {
         !state.ready && !state.error -> Activity("Opening your library")
         state.preparing != null -> Activity(state.preparing)
-        progress.uploading -> Activity("Backing up ${minOf(progress.done + 1, progress.total)} of ${number.format(progress.total)}", progress.fraction)
-        state.importing -> Activity(state.progress ?: "Saving on this device")
-        account.driveSync != null -> Activity("Reading ${account.driveSync}" +
+        progress.uploading && backup.request?.running == true -> Activity("Backing up ${minOf(progress.done + 1, progress.total)} of ${number.format(progress.total)}", progress.fraction)
+        state.importing && section == GallerySection.Device -> Activity(state.progress ?: "Saving on this device")
+        account.driveSync != null && section == GallerySection.Drive -> Activity("Reading ${account.driveSync}" +
             if (account.driveIndexed > 0) ": ${number.format(account.driveIndexed)} found" else "")
-        account.syncing -> Activity("Updating Proton Photos" + if (account.indexed > 0) ": ${number.format(account.indexed)} found" else "")
-        progress.checking -> Activity(if (progress.toCheck > 0) "Comparing with Proton: ${number.format(progress.toCheck)} left"
-            else "Comparing with Proton Photos", progress.fraction)
-        progress.scanning -> Activity("Reading this phone’s photos")
+        account.syncing && section in listOf(GallerySection.Photos, GallerySection.Albums) ->
+            Activity("Updating Proton Photos" + if (account.indexed > 0) ": ${number.format(account.indexed)} found" else "")
         else -> null
     }
 }

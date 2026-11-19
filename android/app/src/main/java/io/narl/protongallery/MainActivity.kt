@@ -32,7 +32,10 @@ import androidx.core.view.WindowCompat
 import androidx.core.content.edit
 import java.io.File
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -62,7 +65,9 @@ class MainActivity : ComponentActivity() {
             val tags by model.tags.collectAsStateWithLifecycle()
             val tagFilter by model.tagFilter.collectAsStateWithLifecycle()
             val chooser by model.chooser.collectAsStateWithLifecycle()
-            val outline by model.outline.collectAsStateWithLifecycle()
+            val outlinePage by model.outline.collectAsStateWithLifecycle()
+            val detailsPage by model.details.collectAsStateWithLifecycle()
+            val driveLink by model.driveLink.collectAsStateWithLifecycle()
             val preferences = remember { getSharedPreferences("appearance", MODE_PRIVATE) }
             var theme by remember { mutableStateOf(ThemeMode.entries.firstOrNull { it.name == preferences.getString("theme", null) } ?: ThemeMode.System) }
             var zoom by remember { mutableFloatStateOf(preferences.getFloat("zoom", ZOOM_DEFAULT).coerceIn(ZOOM_MIN, ZOOM_MAX)) }
@@ -76,7 +81,7 @@ class MainActivity : ComponentActivity() {
                     isAppearanceLightNavigationBars = !dark
                 }
             }
-            val thumbnails = remember(account.generation) {
+            val thumbnails = remember(account.generation, account.visibilityRevision) {
                 ThumbnailLoader(File(cacheDir, "thumbnails"), model::remoteThumbnail, model::rememberShape) { item ->
                     PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(ThumbnailLoader.EDGE, ThumbnailLoader.EDGE), null) }
                 }
@@ -90,6 +95,14 @@ class MainActivity : ComponentActivity() {
                     notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
             LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.phoneAccessChanged() }
+            LaunchedEffect(model) {
+                lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    while (isActive) {
+                        model.refreshGallerySettings()
+                        delay(120_000)
+                    }
+                }
+            }
             val backupActions = remember {
                 BackupActions(
                     allowAccess = {
@@ -146,13 +159,23 @@ class MainActivity : ComponentActivity() {
             val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, stream = model::videoStream, delete = model::delete,
                 favorite = model::favorite, forgetPrivate = model::forgetPrivate) }
             GalleryTheme(theme) {
+                val page = outlinePage?.takeIf { it.matches(location, account.generation) }
+                val details = detailsPage?.takeIf { it.matches(location, account.generation) }?.value
+                val load = when {
+                    details == GalleryLoad.Failed || (page != null && page.value == null) -> GalleryLoad.Failed
+                    location.nativeView() == null -> details ?: GalleryLoad.Loading
+                    page?.value == null || (location.section != GallerySection.Photos && details != GalleryLoad.Ready) -> GalleryLoad.Loading
+                    else -> GalleryLoad.Ready
+                }
                 GalleryApp(
-                    state, outline, thumbnails, theme, zoom,
+                    state, page?.value, thumbnails, theme, zoom,
                     onImport = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
                     onTheme = { theme = it; preferences.edit { putString("theme", it.name) } },
                     onZoom = { zoom = it; preferences.edit { putFloat("zoom", it) } },
                     onRetry = model::open, onDismissMessage = model::dismissMessage,
-                    location = location, albums = albums, onNavigate = model::navigate,
+                    location = location, albums = albums, onNavigate = model::navigate, load = load,
+                    onRetryView = { model.navigate(location) },
+                    onDriveLink = model::openDriveLink,
                     account = account, onAccount = model::showAccount, onRefresh = model::refresh,
                     onCloseAccount = model::closeAccount, onSignIn = model::signIn,
                     onCode = model::secondFactor, onMailbox = model::mailboxPassword,
@@ -174,6 +197,10 @@ class MainActivity : ComponentActivity() {
                     albumActions = AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
                         model::removeFromAlbum, model::deleteAlbum, model::hide),
                 )
+                driveLink?.let { link ->
+                    DriveLinkDialog(link, location.private, model::openDriveLink, model::createDriveLink,
+                        model::revokeDriveLink, model::closeDriveLink)
+                }
             }
         }
     }

@@ -478,16 +478,26 @@ class GalleryUiTest {
         compose.onNodeWithText("1 selected").assertIsDisplayed()
     }
 
-    @Test fun background_work_shows_as_one_line_a_bar_and_the_account_ring() {
+    @Test fun requested_backup_shows_progress_in_the_bar_and_account_ring() {
         val progress = BackupProgress(uploading = true, done = 1, total = 5, bytes = 50, size = 100)
         render(fixtureItems(), ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
-            backup = BackupState(progress = progress),
+            backup = BackupState(progress = progress, request = BackupRequest("Backing up", true, true)),
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)))
         compose.onNodeWithText("Backing up 2 of 5").assertExists()
         compose.onNodeWithContentDescription("Account and settings").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Backing up 2 of 5"))
         // The bar and the ring both show how far the upload is.
         compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo(0.3f, 0f..1f))).assertCountEquals(2)
         compose.onRoot().captureRoboImage("build/screenshots/activity-light.png")
+    }
+
+    @Test fun opening_photos_never_offers_refresh_while_the_outline_is_loading() {
+        render(emptyList(), ThemeMode.Light, initialLocation = GalleryLocation(),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            backup = BackupState(progress = BackupProgress(checking = true)),
+            load = GalleryLoad.Loading)
+        compose.onNodeWithText("Loading Photos…").assertIsDisplayed()
+        compose.onNodeWithText("Refresh").assertDoesNotExist()
+        compose.onNodeWithText("Comparing with Proton Photos").assertDoesNotExist()
     }
 
     @Test fun free_up_space_keeps_recent_days_and_asks_before_removing() {
@@ -529,7 +539,7 @@ class GalleryUiTest {
         backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false,
         media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
         photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions(),
-        driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock()) {
+        driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock(), load: GalleryLoad = GalleryLoad.Ready) {
         val thumbnailDirectory = if (System.getProperty("pg.screenshot.photos") == null) "build/test-thumbnails-smart" else "build/screenshot-photo-thumbnails"
         val directory = File(thumbnailDirectory).apply { mkdirs() }
         val thumbnailLoader = ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) })
@@ -555,12 +565,12 @@ class GalleryUiTest {
             var zoom by remember { mutableFloatStateOf(ZOOM_DEFAULT) }
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 GalleryTheme(theme) {
-                    GalleryApp(state ?: LibraryState(ready = true, count = visible.size.toLong(), bytes = 12_000_000), outline,
+                    GalleryApp(state ?: LibraryState(ready = true, bytes = 12_000_000), outline,
                         remember { thumbnailLoader }, theme, zoom, onImport, { theme = it },
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == "coast") options else null,
                         account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick,
-                        albumActions = albumActions, privacy = privacy)
+                        albumActions = albumActions, privacy = privacy, load = load)
                 }
             }
         }

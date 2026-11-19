@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -124,7 +125,7 @@ fun GalleryApp(
     theme: ThemeMode, zoom: Float, onImport: () -> Unit, onTheme: (ThemeMode) -> Unit,
     onZoom: (Float) -> Unit, onRetry: () -> Unit, onDismissMessage: () -> Unit,
     location: GalleryLocation = GalleryLocation(), albums: List<FolderAlbum> = emptyList(),
-    onNavigate: (GalleryLocation) -> Unit = {},
+    onNavigate: (GalleryLocation) -> Unit = {}, load: GalleryLoad = GalleryLoad.Ready, onRetryView: () -> Unit = {},
     account: AccountState = AccountState(), onAccount: () -> Unit = {}, onRefresh: () -> Unit = {},
     onCloseAccount: () -> Unit = {}, onSignIn: (String, String) -> Unit = { _, _ -> },
     onCode: (String) -> Unit = {}, onMailbox: (String) -> Unit = {},
@@ -140,6 +141,7 @@ fun GalleryApp(
     pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, onCancelPick: () -> Unit = {},
     albumActions: AlbumActions = AlbumActions(),
     privacy: PrivacyLock = PrivacyLock(),
+    onDriveLink: () -> Unit = {},
 ) {
     var backupSheet by rememberSaveable { mutableStateOf(false) }
     // Selected timeline items by id, in the order they were chosen.
@@ -203,9 +205,14 @@ fun GalleryApp(
     val driveRoot = drive && location.album == null
     val albumsRoot = location.section == GallerySection.Albums && location.album == null
     val canAddToAlbum = (location.section == GallerySection.Photos || location.section == GallerySection.Albums) && account.connected
-    val refreshing = if (drive) account.driveSync != null else account.syncing
-    val activity = currentActivity(state, account, backup)
-    LaunchedEffect(account.generation) { selected = null }
+    val refreshing = !device && if (drive) account.driveSync != null else account.syncing
+    val activity = currentActivity(state, account, backup, location.section)
+    val count = outline?.count?.toLong() ?: 0L
+    LaunchedEffect(account.generation, account.visibilityRevision) {
+        selected = null
+        selection = emptyMap()
+        lock()
+    }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); onDismissMessage() }
     }
@@ -238,7 +245,7 @@ fun GalleryApp(
     Box(Modifier.fillMaxSize().nestedScroll(hideOnScroll)) {
         val album = location.album
         val gridHeader: (@Composable () -> Unit)? = when {
-            album != null -> { { AlbumHeader(album, state.count, albums.size) } }
+            album != null -> { { AlbumHeader(album, count, albums.size) } }
             photosRoot && (!backup.access || backup.partial) ->
                 { { PhotosHeader(backup, backupActions.allowAccess) } }
             else -> null
@@ -247,14 +254,20 @@ fun GalleryApp(
             when {
                 !state.ready -> EmptyLibrary(onRetry, !state.error, if (state.error) "Your library is unavailable" else "Opening your library",
                     if (state.error) "Your cached library is still stored on this device. Try again." else "", "Try again", top)
-                device && state.count == 0L && !state.importing -> EmptyLibrary(onImport, false, "A place for every moment",
+                !device && account.connected && !account.visibilityReady -> EmptyLibrary(onRefresh, !account.visibilityStale,
+                    "Checking hidden albums", if (account.visibilityStale) "Connect to Proton to check visibility before opening your library." else "",
+                    "Try again", top)
+                load == GalleryLoad.Failed -> EmptyLibrary(onRetryView, false, "Couldn’t open ${location.title}", "", "Try again", top)
+                load == GalleryLoad.Loading || (count == 0L && albums.isEmpty() && refreshing) ->
+                    EmptyLibrary({}, true, "Loading ${location.title}…", "", "", top)
+                device && count == 0L && !state.importing -> EmptyLibrary(onImport, false, "A place for every moment",
                     "Add photos and videos from your device. They stay here and are kept separate from Proton Photos.", "Choose photos", top)
-                photosRoot && state.count == 0L && !backup.access -> EmptyLibrary(backupActions.allowAccess, false,
+                photosRoot && count == 0L && !backup.access -> EmptyLibrary(backupActions.allowAccess, false,
                     "Your photos, one timeline", "See the photos on this phone next to Proton Photos, and back them up end-to-end encrypted.",
                     "Show this phone’s photos", top)
-                !device && !albumsRoot && state.count == 0L && albums.isEmpty() && tagFilter == null -> EmptyLibrary(
+                !device && !albumsRoot && count == 0L && albums.isEmpty() && tagFilter == null -> EmptyLibrary(
                     if (!account.connected) onAccount else if (driveRoot) chooserActions.open else onRefresh,
-                    if (drive) account.driveSync != null else account.syncing,
+                    false,
                     if (!drive) "Your Proton Photos" else if (location.album == null) "Your Drive galleries" else "This album is empty",
                     if (!drive) if (account.connected) "Your backed-up photos and videos will appear here." else "Sign in to bring your backed-up photos and videos into one beautiful timeline."
                     else if (location.album == null) "Add a Drive folder as a gallery. Folders inside it become albums, with photos and videos together."
@@ -299,7 +312,7 @@ fun GalleryApp(
             Column {
                 when {
                     pick != null -> PickBar(pick.multiple, selection.size, onCancelPick) { onPick(selection.values.toList()) }
-                    selection.isNotEmpty() && pick == null -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
+                    selection.isNotEmpty() -> SelectionBar(selection.values.toList(), onClose = { selection = emptyMap() },
                         onBackUp = { backupActions.upload(selection.values.toList()); selection = emptyMap() },
                         onShare = { media.share(selection.values.toList()); selection = emptyMap() },
                         onDelete = if (selection.values.any { it.deletable }) { { confirmDelete = selection.values.filter { it.deletable } } } else null,
@@ -315,10 +328,14 @@ fun GalleryApp(
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (device && state.ready && !state.importing) IconButton(onClick = onImport) { Icon(Icons.Outlined.AddPhotoAlternate, "Add photos") }
                         if (location.album != null && options != null) IconButton(onClick = { editing = true }) { Icon(Icons.Outlined.Edit, "Edit album") }
+                        if (drive && location.album != null && account.visibilityReady) {
+                            IconButton(onClick = onDriveLink) { Icon(Icons.Outlined.Share, "Public link") }
+                        }
                     }
                     else -> Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         SectionSwitch(location.section) { onNavigate(GalleryLocation(it)) }
-                        Text(activity?.label ?: "", Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.labelMedium,
+                        Text(activity?.label ?: if (!device && account.visibilityStale && account.visibilityReady) "Visibility may be out of date" else "",
+                            Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (driveRoot && account.connected) IconButton(onClick = chooserActions.open) { Icon(Icons.Outlined.Add, "Add gallery") }
                         AccountButton(account, activity) { menu = true }
@@ -353,7 +370,7 @@ fun GalleryApp(
     }
     hiding?.let { items ->
         if (hiddenChoices != null && (hiddenUnlocked || hiddenChoices.isEmpty())) AlbumChooserSheet("Hide in",
-            "Hidden on this phone: these leave the timeline and the photo picker. Other Proton apps still show them.",
+            "Hides these photos from Proton Gallery and its picker. Other Gallery devices apply this after syncing. The originals remain visible in Proton Photos.",
             hiddenChoices, thumbnails, suggestion = if (hiddenChoices.isEmpty()) "Hidden" else "",
             onChoose = { album -> albumActions.hide(items, album, album.name); hiding = null; selection = emptyMap(); selected = null },
             onCreate = { name -> albumActions.hide(items, null, name); hiding = null; selection = emptyMap(); selected = null },

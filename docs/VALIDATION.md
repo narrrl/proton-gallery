@@ -1,5 +1,28 @@
 # Validation
 
+## Signing, settings sync, and desktop media — 2026-11-19
+
+- Signed the same RPM on Arch with RPM 6 and in Ubuntu 24.04 with RPM 4.18.
+  The committed public key verified the package. An empty RPM trust store and
+  a modified package both failed verification. The published v0.1.0 release
+  predates this signing setup.
+- Proton rejected a public link for an empty Photos album with
+  `IncompatibleState` (HTTP 422). Public link actions apply to owned Drive
+  folders. A live test created a password-protected, expiring Drive-folder
+  link, opened it as a signed-out visitor, revoked it, and verified that the
+  old link no longer opened. An invitation round trip requires a second
+  disposable Proton account.
+- The desktop decoder test creates a short WebM, decodes a video frame, pauses,
+  changes volume and seeks. The disposable-account checks run separately from
+  workspace tests. Android UI tests use Robolectric.
+- Built Arch package `0.1.0-3` and validated the extracted launcher icon and
+  GStreamer linkage. The extracted executable completed the 100,000-item
+  X11 smoke test at 125% scaling. Peak RSS was about 295 MiB.
+- Two independent SDK sessions on the disposable account round-tripped an
+  actual Gallery hide record through the device’s settings subfolder. The
+  second session saw the write in Proton’s main-volume event feed and
+  applied the hide to its own catalog.
+
 ## Desktop collections and launcher packaging — 2026-11-18
 
 - An X11 fixture run opened the Albums list and a 12-item album, returned with

@@ -16,6 +16,9 @@ data class AccountState(
     val driveIndexed: Long = 0,
     // Changes on account boundaries; clears remote previews and paging sessions.
     val generation: Int = 0,
+    val visibilityReady: Boolean = true,
+    val visibilityStale: Boolean = false,
+    val visibilityRevision: Int = 0,
     // Plain-text connection check a tester can copy; no secrets.
     val report: String? = null,
     val checking: Boolean = false,

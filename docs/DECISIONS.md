@@ -84,3 +84,38 @@ still viewing; video, albums/Drive controls, backup and packaging are later work
 The Compose skeleton is retained as an acceptance fallback, not an active migration target.
 Encoded demo fixtures use the real media-provider/decoder path. Linux/Windows CI compilation
 is distinct from runtime acceptance, and unperformed checks remain explicit in VALIDATION.md.
+
+## 2026-11-19 — Incremental sync from Proton volume events
+
+Use the Proton Photos and main Drive volume event cursors as the change signal.
+Proton’s SDK exposes cursor polling. A foreground client can check on focus,
+resume, or manual refresh and back off when idle or offline. An empty event batch
+requires no album listing, metadata reads, or thumbnail downloads. Persist the
+opaque cursor separately for each account and volume.
+
+The background settings check now keeps a cursor for each volume and skips
+settings and hidden-album reads when the feed is idle and the local outbox is
+empty. A new cursor starts with a settings refresh. A device with local changes
+flushes the outbox even if the server has no events. These cursors track settings
+only. The current Photos and Drive media scans still use their own full refresh.
+
+Capture the starting cursor before a first scan and replay from it after the scan
+commits. For ordinary events, resolve changed IDs in batches, remove trashed or
+deleted items, and refresh the affected album or parent folder. A move can dirty
+two parents. If an event omits its old parent, use the catalog’s parent edge and
+reconcile the affected branch when the destination is outside the index. Keep
+thumbnail and range caches keyed by media revision.
+
+For the settings device, a changed operation filename identifies the exact
+record to download. The current journal already reuses validated records by
+content hash. The event consumer should watch the settings folder and prioritize
+Hide and Unhide before publishing new timeline or picker entries. Track settings
+and media application independently so a failed download delays only the
+affected work. Keep known hides enforced while the account is offline.
+
+Commit the last applied event cursor in the same SQLite transaction as its
+effects or a durable queue of the work it identified. Network errors retain the
+last committed cursor. Expired cursors and missing event continuity trigger a
+scoped baseline rebuild, followed by replay from a newly captured head. An
+explicit repair refresh can also rebuild a scope. Proton Drive for Linux’s
+volume-event loop is the starting reference for replay and cache invalidation.

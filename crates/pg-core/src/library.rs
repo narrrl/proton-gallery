@@ -9,6 +9,17 @@ use crate::{Error, Result};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+// Hide media inherited from a hidden folder even when the same source is
+// available through a second gallery or a public album.
+pub(crate) const HIDDEN_SOURCES: &str = "WITH RECURSIVE
+    hidden_folders(gallery,source) AS (
+        SELECT n.gallery,n.source FROM album_nodes n JOIN album_settings a ON a.source=n.source WHERE a.hidden=1
+        UNION SELECT n.gallery,n.source FROM album_nodes n JOIN hidden_folders h ON (n.gallery,n.parent)=(h.gallery,h.source)
+    ), hidden_sources(source) AS (SELECT DISTINCT source FROM hidden_folders)";
+pub(crate) const VISIBLE_MEMBERSHIP: &str = "AND NOT EXISTS (
+    SELECT 1 FROM memberships h JOIN hidden_sources x ON x.source=h.source
+    WHERE (h.account,h.volume,h.node)=(m.account,m.volume,m.node))";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
@@ -129,7 +140,7 @@ impl AlbumSettings {
     }
 }
 
-fn load_settings(conn: &rusqlite::Connection, source: &str) -> Result<AlbumSettings> {
+pub(crate) fn load_settings(conn: &rusqlite::Connection, source: &str) -> Result<AlbumSettings> {
     let row = conn
         .query_row(
             "SELECT title,description,cover_account,cover_volume,cover_node,grouping,sort_order,pinned,hidden FROM album_settings WHERE source=?1",
@@ -188,12 +199,22 @@ fn resolve_cover(
     source: &str,
     chosen: Option<&AssetKey>,
     order: SortOrder,
+    album_hidden: bool,
 ) -> Result<Option<Asset>> {
-    const TREE: &str = "WITH RECURSIVE tree(source) AS (SELECT ?1 UNION SELECT c.source FROM album_nodes c JOIN tree t ON c.parent=t.source WHERE c.gallery=?2)";
+    const TREE: &str = "tree(source) AS (SELECT ?1 UNION SELECT c.source FROM album_nodes c JOIN tree t ON c.parent=t.source WHERE c.gallery=?2)";
+    let (hidden, tree, visibility) = if album_hidden {
+        ("", format!("WITH RECURSIVE {TREE}"), "")
+    } else {
+        (
+            HIDDEN_SOURCES,
+            format!("{HIDDEN_SOURCES}, {TREE}"),
+            VISIBLE_MEMBERSHIP,
+        )
+    };
     if let Some(key) = chosen {
         let payload: Option<String> = conn
             .query_row(
-                &format!("{TREE} SELECT a.payload FROM assets a WHERE (a.account,a.volume,a.node)=(?3,?4,?5) AND EXISTS(SELECT 1 FROM memberships m WHERE m.source IN tree AND (m.account,m.volume,m.node)=(?3,?4,?5))"),
+                &format!("{tree} SELECT a.payload FROM assets a WHERE (a.account,a.volume,a.node)=(?3,?4,?5) AND EXISTS(SELECT 1 FROM memberships m WHERE m.source IN tree AND (m.account,m.volume,m.node)=(?3,?4,?5) {visibility})"),
                 params![source, gallery, key.account.as_str(), key.volume.as_str(), key.node.as_str()],
                 |r| r.get(0),
             )
@@ -211,7 +232,7 @@ fn resolve_cover(
     let order = if order.ascending() { "ASC" } else { "DESC" };
     let direct: Option<String> = conn
         .query_row(
-            &format!("SELECT a.payload FROM memberships m JOIN assets a USING(account,volume,node) WHERE m.source=?1 ORDER BY m.{first} {order},m.account {order},m.volume {order},m.node {order} LIMIT 1"),
+            &format!("{hidden} SELECT a.payload FROM memberships m JOIN assets a USING(account,volume,node) WHERE m.source=?1 {visibility} ORDER BY m.{first} {order},m.account {order},m.volume {order},m.node {order} LIMIT 1"),
             [source],
             |r| r.get(0),
         )
@@ -220,13 +241,41 @@ fn resolve_cover(
         Some(payload) => Some(payload),
         None => conn
             .query_row(
-                &format!("{TREE} SELECT a.payload FROM memberships m JOIN assets a USING(account,volume,node) WHERE m.source IN tree ORDER BY m.{first} {order},m.account {order},m.volume {order},m.node {order} LIMIT 1"),
+                &format!("{tree} SELECT a.payload FROM memberships m JOIN assets a USING(account,volume,node) WHERE m.source IN tree {visibility} ORDER BY m.{first} {order},m.account {order},m.volume {order},m.node {order} LIMIT 1"),
                 params![source, gallery],
                 |r| r.get(0),
             )
             .optional()?,
     };
     payload.map(|p| Ok(serde_json::from_str(&p)?)).transpose()
+}
+
+pub(crate) fn write_settings(
+    tx: &rusqlite::Connection,
+    source: &SourceId,
+    settings: &AlbumSettings,
+) -> Result<()> {
+    let cover = settings.cover.as_ref();
+    tx.execute(
+        "INSERT INTO album_settings(source,title,description,cover_account,cover_volume,cover_node,grouping,sort_order,pinned,hidden)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+         ON CONFLICT(source) DO UPDATE SET title=excluded.title,description=excluded.description,cover_account=excluded.cover_account,
+         cover_volume=excluded.cover_volume,cover_node=excluded.cover_node,grouping=excluded.grouping,sort_order=excluded.sort_order,
+         pinned=excluded.pinned,hidden=excluded.hidden",
+        params![
+            source.as_str(), settings.title, settings.description,
+            cover.map(|c| c.account.as_str()), cover.map(|c| c.volume.as_str()), cover.map(|c| c.node.as_str()),
+            settings.grouping.as_str(), settings.order.as_str(), settings.pinned, settings.hidden
+        ],
+    )?;
+    tx.execute("DELETE FROM album_tags WHERE source=?1", [source.as_str()])?;
+    for tag in &settings.tags {
+        tx.execute(
+            "INSERT INTO album_tags(source,tag) VALUES (?1,?2)",
+            params![source.as_str(), tag],
+        )?;
+    }
+    Ok(())
 }
 
 impl Catalog {
@@ -272,6 +321,28 @@ impl Catalog {
     }
     pub async fn source_belongs_to(&self, source: SourceId, account: AccountId) -> Result<bool> {
         self.run(move |conn| Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM sources WHERE id=?1 AND json_extract(payload,'$.account')=?2)",params![source.as_str(),account.as_str()],|r|r.get(0))?)).await
+    }
+
+    pub async fn account_source(
+        &self,
+        kind: SourceKind,
+        account: AccountId,
+        id: SourceId,
+    ) -> Result<Option<SourceSpec>> {
+        self.run(move |conn| {
+            let payload = conn
+                .query_row(
+                    "SELECT s.payload FROM sources s JOIN source_kinds k ON k.source=s.id
+                 WHERE s.id=?1 AND k.kind=?2 AND json_extract(s.payload,'$.account')=?3",
+                    params![id.as_str(), kind.as_str(), account.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            Ok(payload
+                .map(|payload| serde_json::from_str(&payload))
+                .transpose()?)
+        })
+        .await
     }
 
     /// Register a stable folder in one selected gallery. Overlapping gallery
@@ -408,23 +479,12 @@ impl Catalog {
                     return Err(Error::Invalid("the cover must be a photo or video from this album".into()));
                 }
             }
-            let cover = settings.cover.as_ref();
-            tx.execute(
-                "INSERT INTO album_settings(source,title,description,cover_account,cover_volume,cover_node,grouping,sort_order,pinned,hidden)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
-                 ON CONFLICT(source) DO UPDATE SET title=excluded.title,description=excluded.description,cover_account=excluded.cover_account,
-                 cover_volume=excluded.cover_volume,cover_node=excluded.cover_node,grouping=excluded.grouping,sort_order=excluded.sort_order,
-                 pinned=excluded.pinned,hidden=excluded.hidden",
-                params![
-                    source.as_str(), settings.title, settings.description,
-                    cover.map(|c| c.account.as_str()), cover.map(|c| c.volume.as_str()), cover.map(|c| c.node.as_str()),
-                    settings.grouping.as_str(), settings.order.as_str(), settings.pinned, settings.hidden
-                ],
-            )?;
-            tx.execute("DELETE FROM album_tags WHERE source=?1", [source.as_str()])?;
-            for tag in &settings.tags {
-                tx.execute("INSERT INTO album_tags(source,tag) VALUES (?1,?2)", params![source.as_str(), tag])?;
+            if let Some((account, identity)) = crate::configuration::album_identity(&tx, &source)? {
+                let before = load_settings(&tx, source.as_str())?;
+                let changes = crate::configuration::changes(&tx, &account, &identity, &before, &settings)?;
+                crate::configuration::append(&tx, &account, identity, changes)?;
             }
+            write_settings(&tx, &source, &settings)?;
             let saved = load_settings(&tx, source.as_str())?;
             tx.commit()?;
             Ok(saved)
@@ -435,6 +495,20 @@ impl Catalog {
     /// Forget a gallery's album tree. Media and settings stay: another
     /// gallery can still contain the same folders.
     pub async fn remove_gallery(&self, gallery: SourceId, account: AccountId) -> Result<()> {
+        self.forget_gallery_tree(gallery, account, true).await
+    }
+
+    /// Remove a gallery selected on another device, without publishing an echo.
+    pub async fn apply_gallery_removal(&self, gallery: SourceId, account: AccountId) -> Result<()> {
+        self.forget_gallery_tree(gallery, account, false).await
+    }
+
+    async fn forget_gallery_tree(
+        &self,
+        gallery: SourceId,
+        account: AccountId,
+        record: bool,
+    ) -> Result<()> {
         self.run(move |conn| {
             let tx = conn.transaction()?;
             let owned: bool = tx.query_row(
@@ -443,7 +517,10 @@ impl Catalog {
                 |r| r.get(0),
             )?;
             if !owned {
-                return Err(Error::NotFound);
+                return if record { Err(Error::NotFound) } else { Ok(()) };
+            }
+            if record && let Some((owner, identity)) = crate::configuration::album_identity(&tx, &gallery)? {
+                crate::configuration::append(&tx, &owner, identity, vec![crate::configuration::Change::Gallery(false)])?;
             }
             // Children before parents: the parent edge is a foreign key.
             tx.execute_batch("PRAGMA defer_foreign_keys=ON")?;
@@ -487,7 +564,7 @@ impl Catalog {
                 .map(|(gallery, payload, parent, items, children)| {
                     let source: SourceSpec = serde_json::from_str(&payload)?;
                     let settings = load_settings(conn, source.id.as_str())?;
-                    let cover = resolve_cover(conn, &gallery, source.id.as_str(), settings.cover.as_ref(), settings.order)?;
+                    let cover = resolve_cover(conn, &gallery, source.id.as_str(), settings.cover.as_ref(), settings.order, settings.hidden)?;
                     Ok(Album {
                         gallery: SourceId::new(gallery)?,
                         source,

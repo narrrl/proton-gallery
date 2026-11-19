@@ -389,6 +389,9 @@ impl GalleryEngine {
             return Ok(vec![]);
         };
         self.runtime.block_on(async {
+            if !self.app.gallery_visibility_cached().await? {
+                return Ok(vec![]);
+            }
             let albums = self
                 .catalog
                 .albums_scoped(

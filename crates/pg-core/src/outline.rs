@@ -72,7 +72,8 @@ impl Catalog {
         source: SourceId,
         order: SortOrder,
     ) -> Result<Vec<OutlineEntry>> {
-        self.source_outline_filtered(source, order, false).await
+        self.source_outline_filtered(source, order, false, false)
+            .await
     }
 
     pub async fn source_favorites_outline(
@@ -80,7 +81,18 @@ impl Catalog {
         source: SourceId,
         order: SortOrder,
     ) -> Result<Vec<OutlineEntry>> {
-        self.source_outline_filtered(source, order, true).await
+        self.source_outline_filtered(source, order, true, false)
+            .await
+    }
+
+    pub async fn visible_source_outline(
+        &self,
+        source: SourceId,
+        order: SortOrder,
+        favorites: bool,
+    ) -> Result<Vec<OutlineEntry>> {
+        self.source_outline_filtered(source, order, favorites, true)
+            .await
     }
 
     async fn source_outline_filtered(
@@ -88,8 +100,17 @@ impl Catalog {
         source: SourceId,
         order: SortOrder,
         favorites: bool,
+        only_visible: bool,
     ) -> Result<Vec<OutlineEntry>> {
         let filter = favorite_filter(favorites);
+        let (hidden, visibility) = if only_visible {
+            (
+                crate::library::HIDDEN_SOURCES,
+                crate::library::VISIBLE_MEMBERSHIP,
+            )
+        } else {
+            ("", "")
+        };
         let first = if order.by_name() {
             "sort_name"
         } else {
@@ -97,9 +118,9 @@ impl Catalog {
         };
         let direction = if order.ascending() { "ASC" } else { "DESC" };
         let sql = format!(
-            "SELECT m.account,m.volume,m.node,m.sort_time,s.width,s.height FROM memberships m
+            "{hidden} SELECT m.account,m.volume,m.node,m.sort_time,s.width,s.height FROM memberships m
              LEFT JOIN media_shapes s ON (s.account,s.volume,s.node)=(m.account,m.volume,m.node)
-             WHERE m.source=?1 {filter}
+             WHERE m.source=?1 {filter} {visibility}
              ORDER BY m.{first} {direction},m.account {direction},m.volume {direction},m.node {direction} LIMIT ?2"
         );
         let values = vec![

@@ -16,7 +16,9 @@ use iced::widget::{
 use iced::{
     Alignment, Color, ContentFit, Element, Length, Size, Subscription, Task, Theme, window,
 };
+use pg_app::drive_galleries::{FolderChoice, FolderListing};
 use pg_app::fixtures::{FixtureMedia, MediaProvider};
+use pg_app::sharing::{PublicLink, PublicLinkAction};
 use pg_app::{AccountState, App, Generation, MediaItem, Outline, SignInStage, View};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -75,6 +77,8 @@ struct SyncState {
     running: bool,
     indexed: u64,
     error: Option<String>,
+    settings_busy: bool,
+    visibility_stale: bool,
 }
 
 /// The photo open in the viewer.
@@ -84,6 +88,10 @@ struct Viewer {
     image: Option<Decoded>,
     loading: bool,
     message: Option<String>,
+    #[cfg(target_os = "linux")]
+    player: Option<Arc<crate::video::Player>>,
+    #[cfg(target_os = "linux")]
+    playback: crate::video::Playback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +99,7 @@ pub enum Section {
     Photos,
     Favorites,
     Albums,
+    Drive,
 }
 impl std::fmt::Display for Section {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -98,8 +107,43 @@ impl std::fmt::Display for Section {
             Self::Photos => "Photos",
             Self::Favorites => "Favorites",
             Self::Albums => "Albums",
+            Self::Drive => "Drive",
         })
     }
+}
+
+#[derive(Default)]
+struct DriveNavigation {
+    trail: Vec<pg_core::library::Album>,
+    chooser: Option<Vec<FolderChoice>>,
+    listing: Option<FolderListing>,
+    request: u64,
+    busy: bool,
+}
+
+#[derive(Default)]
+struct HiddenAccess {
+    unlocked: bool,
+    prompt: bool,
+    private_album: bool,
+    busy: bool,
+    request: u64,
+    passphrase: Zeroizing<String>,
+    error: Option<String>,
+}
+
+#[derive(Default)]
+struct DriveLinkPanel {
+    request: u64,
+    open: bool,
+    busy: bool,
+    loaded: bool,
+    confirming_revoke: bool,
+    copied: bool,
+    link: Option<PublicLink>,
+    expiry: String,
+    password: Zeroizing<String>,
+    error: Option<String>,
 }
 
 pub struct Gallery {
@@ -116,6 +160,9 @@ pub struct Gallery {
     albums: Vec<pg_core::library::Album>,
     albums_request: u64,
     albums_loading: bool,
+    drive: DriveNavigation,
+    hidden: HiddenAccess,
+    drive_link: DriveLinkPanel,
     row_target: u32,
     favorite_request: u64,
     favorite_busy: bool,
@@ -177,6 +224,8 @@ pub enum Message {
     SignedOut(Result<(), String>),
     Sync,
     SyncTick,
+    CheckSettings,
+    SettingsChecked(Generation, bool, Result<Option<bool>, String>),
     Synced(Generation, Result<u64, pg_app::Error>),
     DemoReady(Result<usize, String>),
     OutlineLoaded(u64, Generation, Result<Arc<Outline>, String>),
@@ -200,9 +249,42 @@ pub enum Message {
     RetryViewer,
     Step(i32),
     ViewerLoaded(u64, Generation, Result<Box<Loaded>, String>),
+    #[cfg(target_os = "linux")]
+    VideoOpened(u64, Generation, Result<Arc<crate::video::Player>, String>),
+    #[cfg(target_os = "linux")]
+    VideoTick,
+    #[cfg(target_os = "linux")]
+    VideoToggle,
+    #[cfg(target_os = "linux")]
+    VideoSeek(f64),
+    #[cfg(target_os = "linux")]
+    VideoVolume(f64),
     Key(keyboard::Event),
     Navigate(Section),
     OpenAlbum(String),
+    BackToAlbums,
+    OpenHiddenPrompt,
+    HiddenPassphrase(String),
+    SubmitHiddenPassphrase,
+    HiddenUnlocked(u64, Generation, Result<(), String>),
+    LockHidden,
+    OpenDriveLink,
+    CloseDriveLink,
+    DriveLinkPassword(String),
+    DriveLinkExpiry(String),
+    CreateDriveLink,
+    CopyDriveLink,
+    ConfirmRevokeDriveLink,
+    RevokeDriveLink,
+    DriveLinkLoaded(u64, Generation, Result<Option<PublicLink>, String>),
+    ChooseDriveFolder,
+    CloseDriveChooser,
+    BrowseDriveFolder(usize),
+    BackDriveFolder,
+    DriveFoldersLoaded(u64, Generation, Result<FolderListing, String>),
+    AddDriveGallery,
+    RemoveDriveGallery,
+    DriveChanged(Generation, bool, Result<(), String>),
     AlbumsLoaded(
         u64,
         Generation,
@@ -272,6 +354,9 @@ impl Gallery {
             albums: Vec::new(),
             albums_request: 0,
             albums_loading: false,
+            drive: DriveNavigation::default(),
+            hidden: HiddenAccess::default(),
+            drive_link: DriveLinkPanel::default(),
             row_target: ROW_TARGET,
             favorite_request: 0,
             favorite_busy: false,
@@ -372,9 +457,27 @@ impl Gallery {
             subscriptions
                 .push(iced::time::every(Duration::from_millis(700)).map(|_| Message::SyncTick));
         }
+        if self.browsing() && !self.demo() {
+            subscriptions
+                .push(iced::time::every(Duration::from_secs(120)).map(|_| Message::CheckSettings));
+            subscriptions.push(iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Window(window::Event::Focused) => Some(Message::CheckSettings),
+                iced::Event::Window(window::Event::Unfocused) => Some(Message::LockHidden),
+                _ => None,
+            }));
+        }
         if self.relayout {
             subscriptions
                 .push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Relayout));
+        }
+        #[cfg(target_os = "linux")]
+        if self
+            .viewer
+            .as_ref()
+            .is_some_and(|viewer| viewer.player.is_some())
+        {
+            subscriptions
+                .push(iced::time::every(Duration::from_millis(33)).map(|_| Message::VideoTick));
         }
         Subscription::batch(subscriptions)
     }
@@ -438,11 +541,7 @@ impl Gallery {
                     );
                 }
                 if self.browsing() {
-                    return Task::batch([
-                        self.load_outline(),
-                        self.load_albums(),
-                        self.start_sync(),
-                    ]);
+                    return self.start_sync();
                 }
                 Task::none()
             }
@@ -649,11 +748,7 @@ impl Gallery {
                                 temporary: self.form.temporary,
                                 ..SignInForm::default()
                             };
-                            return Task::batch([
-                                self.load_outline(),
-                                self.load_albums(),
-                                self.start_sync(),
-                            ]);
+                            return self.start_sync();
                         }
                     }
                     Err(error) => {
@@ -701,7 +796,9 @@ impl Gallery {
             Message::Sync => {
                 self.pages_failed.clear();
                 self.thumbs_failed.clear();
-                if self.demo() {
+                if self.section == Section::Drive {
+                    self.refresh_drive()
+                } else if self.demo() {
                     Task::batch([self.load_outline(), self.load_albums()])
                 } else {
                     self.start_sync()
@@ -721,6 +818,48 @@ impl Gallery {
                     }
                 }
                 Task::none()
+            }
+            Message::CheckSettings => self.check_settings(false),
+            Message::SettingsChecked(generation, index_photos, result) => {
+                if !self.current(generation) {
+                    return Task::none();
+                }
+                self.sync.settings_busy = false;
+                match result {
+                    Ok(None) => {
+                        self.sync.visibility_stale = false;
+                        Task::none()
+                    }
+                    Ok(Some(visibility_changed)) => {
+                        self.sync.visibility_stale = false;
+                        let mut drop_cached = Task::none();
+                        if visibility_changed {
+                            self.close_hidden_access();
+                            self.clear_media();
+                            if self.album_open {
+                                self.album_open = false;
+                                self.drive.trail.clear();
+                                self.view = View::Photos;
+                            }
+                            let originals = self.originals.clone();
+                            drop_cached = Task::perform(
+                                async move { tokio::fs::remove_dir_all(originals).await },
+                                |_| Message::Ignored,
+                            );
+                        }
+                        let index = if index_photos {
+                            self.index_photos()
+                        } else {
+                            Task::none()
+                        };
+                        Task::batch([self.load_outline(), self.load_albums(), index, drop_cached])
+                    }
+                    Err(error) => {
+                        self.sync.visibility_stale = true;
+                        self.sync.error = Some(error);
+                        Task::batch([self.load_outline(), self.load_albums()])
+                    }
+                }
             }
             Message::Synced(generation, result) => {
                 let Some(app) = self.app() else {
@@ -849,21 +988,132 @@ impl Gallery {
                     match result {
                         Ok(loaded) => {
                             let (item, image, message) = *loaded;
+                            #[cfg(target_os = "linux")]
+                            let video = item.is_video
+                                && (item.remote || item.local_path.is_some())
+                                && self.options.demo.is_none();
                             viewer.item = Some(item);
                             if image.is_some() {
                                 viewer.image = image;
                             }
                             viewer.message = message;
+                            #[cfg(target_os = "linux")]
+                            if video {
+                                let item = viewer.item.as_ref().unwrap().clone();
+                                viewer.loading = true;
+                                viewer.message = None;
+                                let Some(app) = self.app().cloned() else {
+                                    return Task::none();
+                                };
+                                let (task, handle) = spawn(
+                                    &app,
+                                    move |app| async move {
+                                        let stream = if item.local_path.is_none() {
+                                            Some(app.stream_video(&item.key).await.map_err(shown)?)
+                                        } else {
+                                            None
+                                        };
+                                        let runtime = tokio::runtime::Handle::current();
+                                        tokio::task::spawn_blocking(move || {
+                                            crate::video::Player::open(
+                                                stream,
+                                                item.local_path.as_deref(),
+                                                runtime,
+                                            )
+                                            .map(Arc::new)
+                                        })
+                                        .await
+                                        .map_err(
+                                            |_| "Couldn’t start the video player.".to_owned(),
+                                        )?
+                                    },
+                                    move |result| Message::VideoOpened(request, generation, result),
+                                )
+                                .abortable();
+                                self.viewer_work = Some(handle.abort_on_drop());
+                                return task;
+                            }
                         }
                         Err(error) => viewer.message = Some(error),
                     }
                 }
                 Task::none()
             }
+            #[cfg(target_os = "linux")]
+            Message::VideoOpened(request, generation, result) => {
+                if request == self.viewer_request
+                    && self.current(generation)
+                    && let Some(viewer) = &mut self.viewer
+                {
+                    self.viewer_work = None;
+                    viewer.loading = false;
+                    match result {
+                        Ok(player) => {
+                            viewer.player = Some(player);
+                            viewer.playback.playing = true;
+                            viewer.playback.volume = 1.0;
+                        }
+                        Err(error) => viewer.message = Some(error),
+                    }
+                }
+                Task::none()
+            }
+            #[cfg(target_os = "linux")]
+            Message::VideoTick
+            | Message::VideoToggle
+            | Message::VideoSeek(_)
+            | Message::VideoVolume(_) => {
+                let Some(viewer) = &mut self.viewer else {
+                    return Task::none();
+                };
+                let Some(player) = &viewer.player else {
+                    return Task::none();
+                };
+                let state = &mut viewer.playback;
+                let result = match message {
+                    Message::VideoToggle => {
+                        let start = if state.ended {
+                            player.seek(0.0)
+                        } else {
+                            Ok(())
+                        };
+                        state.ended = false;
+                        state.playing = !state.playing;
+                        start
+                            .and_then(|()| player.set_playing(state.playing && !state.buffering))
+                            .map(|()| None)
+                    }
+                    Message::VideoSeek(seconds) => {
+                        state.ended = false;
+                        player.seek(seconds).map(|()| None)
+                    }
+                    Message::VideoVolume(volume) => {
+                        state.volume = volume;
+                        player.volume(volume);
+                        Ok(None)
+                    }
+                    _ => player.poll(state),
+                };
+                match result {
+                    Ok(Some(frame)) => viewer.image = Some(frame),
+                    Ok(None) => {}
+                    Err(error) => {
+                        viewer.message = Some(error);
+                        viewer.player = None;
+                    }
+                }
+                Task::none()
+            }
             Message::Navigate(section) => {
-                if !self.browsing() || (self.section == section && !self.album_open) {
+                if !self.browsing()
+                    || (self.section == section && !self.album_open)
+                    || (section == Section::Drive && self.demo())
+                {
                     return Task::none();
                 }
+                self.reset_drive_navigation();
+                self.hidden.private_album = false;
+                self.hidden.prompt = false;
                 self.clear_media();
                 self.section = section;
                 self.album_open = false;
@@ -872,30 +1122,270 @@ impl Gallery {
                 } else {
                     View::Photos
                 };
-                if section == Section::Albums {
+                if matches!(section, Section::Albums | Section::Drive) {
                     self.load_albums()
                 } else {
                     self.load_outline()
                 }
             }
             Message::OpenAlbum(id) => {
+                if self.section == Section::Drive {
+                    if self.drive.busy {
+                        return Task::none();
+                    }
+                    if let Some(album) = self.albums.iter().find(|a| {
+                        a.source.id.as_str() == id && (self.hidden.unlocked || !a.settings.hidden)
+                    }) {
+                        self.drive.trail.push(album.clone());
+                        return self.show_drive_place();
+                    }
+                    return Task::none();
+                }
                 if !self.browsing()
-                    || !self
-                        .albums
-                        .iter()
-                        .any(|a| a.source.id.as_str() == id && !a.settings.hidden)
+                    || !self.albums.iter().any(|a| {
+                        a.source.id.as_str() == id && (self.hidden.unlocked || !a.settings.hidden)
+                    })
                 {
                     return Task::none();
                 }
                 self.clear_media();
                 self.section = Section::Albums;
                 self.album_open = true;
+                self.hidden.private_album = self
+                    .albums
+                    .iter()
+                    .any(|album| album.source.id.as_str() == id && album.settings.hidden);
                 self.view = if self.demo() {
                     View::Source(id)
                 } else {
                     View::PhotoAlbum(id)
                 };
                 self.load_outline()
+            }
+            Message::BackToAlbums => {
+                if self.section == Section::Drive {
+                    self.drive.trail.pop();
+                    self.show_drive_place()
+                } else {
+                    self.update(Message::Navigate(Section::Albums))
+                }
+            }
+            Message::OpenHiddenPrompt => {
+                if self.browsing() && !self.demo() {
+                    self.hidden.prompt = true;
+                }
+                Task::none()
+            }
+            Message::HiddenPassphrase(value) => {
+                if self.hidden.prompt && value.len() <= 1024 {
+                    self.hidden.passphrase = Zeroizing::new(value);
+                }
+                Task::none()
+            }
+            Message::SubmitHiddenPassphrase => {
+                if !self.hidden.prompt || self.hidden.busy || self.hidden.passphrase.is_empty() {
+                    return Task::none();
+                }
+                let Some(app) = self.app() else {
+                    return Task::none();
+                };
+                let generation = app.generation();
+                let username = self.account.username.clone();
+                let passphrase = std::mem::take(&mut self.hidden.passphrase);
+                self.hidden.busy = true;
+                self.hidden.request += 1;
+                let request = self.hidden.request;
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            vault::unlock_hidden(&username, &passphrase)
+                        })
+                        .await
+                        .map_err(|_| "Couldn’t read the hidden album passphrase.".to_owned())?
+                    },
+                    move |result| Message::HiddenUnlocked(request, generation, result),
+                )
+            }
+            Message::HiddenUnlocked(request, generation, result) => {
+                if request != self.hidden.request || !self.current(generation) {
+                    return Task::none();
+                }
+                self.hidden.busy = false;
+                match result {
+                    Ok(()) => {
+                        self.hidden.prompt = false;
+                        self.hidden.unlocked = true;
+                        self.hidden.error = None;
+                        self.load_albums()
+                    }
+                    Err(error) => {
+                        self.hidden.error = Some(error);
+                        Task::none()
+                    }
+                }
+            }
+            Message::LockHidden => {
+                let reload = self.hidden.unlocked;
+                let was_private = self.hidden.private_album;
+                self.close_hidden_access();
+                if was_private {
+                    self.clear_media();
+                    self.album_open = false;
+                    self.drive.trail.clear();
+                    self.view = View::Photos;
+                }
+                if reload {
+                    self.load_albums()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::OpenDriveLink => {
+                self.drive_link.open = true;
+                self.drive_link_task(PublicLinkAction::Read)
+            }
+            Message::CloseDriveLink => {
+                self.close_drive_link();
+                Task::none()
+            }
+            Message::DriveLinkPassword(value) => {
+                self.drive_link.password = Zeroizing::new(value);
+                Task::none()
+            }
+            Message::DriveLinkExpiry(value) => {
+                self.drive_link.expiry = value;
+                Task::none()
+            }
+            Message::CreateDriveLink => {
+                let Some(expires) = self.drive_link_expiry() else {
+                    return Task::none();
+                };
+                let password = std::mem::take(&mut self.drive_link.password);
+                self.drive_link_task(PublicLinkAction::Create { password, expires })
+            }
+            Message::CopyDriveLink => {
+                if let Some(url) = self
+                    .drive_link
+                    .link
+                    .as_ref()
+                    .and_then(|link| link.url.clone())
+                {
+                    self.drive_link.copied = true;
+                    iced::clipboard::write(url)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::ConfirmRevokeDriveLink => {
+                self.drive_link.confirming_revoke = true;
+                Task::none()
+            }
+            Message::RevokeDriveLink => {
+                self.drive_link.confirming_revoke = false;
+                self.drive_link_task(PublicLinkAction::Revoke)
+            }
+            Message::DriveLinkLoaded(request, generation, result) => {
+                if request == self.drive_link.request && self.current(generation) {
+                    self.drive_link.busy = false;
+                    match result {
+                        Ok(link) => {
+                            self.drive_link.loaded = true;
+                            self.drive_link.link = link;
+                            self.drive_link.copied = false;
+                        }
+                        Err(error) => self.drive_link.error = Some(error),
+                    }
+                }
+                Task::none()
+            }
+            Message::ChooseDriveFolder => {
+                if self.section != Section::Drive || self.drive.busy {
+                    return Task::none();
+                }
+                self.drive.chooser = Some(vec![]);
+                self.load_drive_folders()
+            }
+            Message::CloseDriveChooser => {
+                self.drive.request += 1;
+                self.drive.chooser = None;
+                self.drive.listing = None;
+                Task::none()
+            }
+            Message::BrowseDriveFolder(index) => {
+                if let (Some(trail), Some(folder)) = (
+                    &mut self.drive.chooser,
+                    self.drive
+                        .listing
+                        .as_ref()
+                        .and_then(|listing| listing.children.get(index)),
+                ) {
+                    trail.push(folder.clone());
+                    return self.load_drive_folders();
+                }
+                Task::none()
+            }
+            Message::BackDriveFolder => {
+                if let Some(trail) = &mut self.drive.chooser {
+                    trail.pop();
+                    return self.load_drive_folders();
+                }
+                Task::none()
+            }
+            Message::DriveFoldersLoaded(request, generation, result) => {
+                if request == self.drive.request && self.current(generation) {
+                    match result {
+                        Ok(listing) => self.drive.listing = Some(listing),
+                        Err(error) => self.sync.error = Some(error),
+                    }
+                }
+                Task::none()
+            }
+            Message::AddDriveGallery => {
+                let Some(uid) = self
+                    .drive
+                    .listing
+                    .as_ref()
+                    .map(|listing| listing.folder.uid.clone())
+                else {
+                    return Task::none();
+                };
+                let _ = self.update(Message::CloseDriveChooser);
+                self.scan_drive_folders(vec![uid], true)
+            }
+            Message::RemoveDriveGallery => {
+                let Some(app) = self.app().cloned() else {
+                    return Task::none();
+                };
+                let Some(root) = self
+                    .drive
+                    .trail
+                    .first()
+                    .filter(|_| self.drive.trail.len() == 1 && !self.drive.busy)
+                else {
+                    return Task::none();
+                };
+                let id = root.gallery.clone();
+                self.drive.busy = true;
+                let generation = app.generation();
+                spawn(
+                    &app,
+                    move |app| async move { app.forget_drive_gallery(id).await.map_err(shown) },
+                    move |result| Message::DriveChanged(generation, true, result),
+                )
+            }
+            Message::DriveChanged(generation, removed, result) => {
+                if !self.current(generation) {
+                    return Task::none();
+                }
+                self.drive.busy = false;
+                if removed && result.is_ok() {
+                    self.drive.trail.clear();
+                }
+                self.sync.error = result.err();
+                if self.section == Section::Drive {
+                    return Task::batch([self.show_drive_place(), self.check_settings(false)]);
+                }
+                Task::none()
             }
             Message::AlbumsLoaded(request, generation, result) => {
                 if request != self.albums_request || !self.current(generation) {
@@ -963,6 +1453,41 @@ impl Gallery {
     }
 
     fn start_sync(&mut self) -> Task<Message> {
+        self.check_settings(true)
+    }
+
+    fn check_settings(&mut self, index_photos: bool) -> Task<Message> {
+        if !self.browsing()
+            || self.demo()
+            || self.sync.settings_busy
+            || self.sync.running
+            || self.drive.busy
+        {
+            return Task::none();
+        }
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        self.sync.settings_busy = true;
+        self.sync.error = None;
+        let generation = app.generation();
+        spawn(
+            &app,
+            move |app| async move {
+                if index_photos {
+                    app.refresh_gallery_configuration(false)
+                        .await
+                        .map(Some)
+                        .map_err(shown)
+                } else {
+                    app.poll_gallery_configuration(false).await.map_err(shown)
+                }
+            },
+            move |result| Message::SettingsChecked(generation, index_photos, result),
+        )
+    }
+
+    fn index_photos(&mut self) -> Task<Message> {
         if !self.browsing() {
             return Task::none();
         }
@@ -995,10 +1520,26 @@ impl Gallery {
         let request = self.albums_request;
         let generation = app.generation();
         let demo = self.demo();
+        let drive = self.section == Section::Drive;
+        let unlocked = self.hidden.unlocked;
+        let folder = self
+            .drive
+            .trail
+            .last()
+            .map(|a| (a.gallery.to_string(), a.source.id.to_string()));
         spawn(
             &app,
             move |app| async move {
-                if demo {
+                if drive {
+                    app.drive_albums(
+                        folder
+                            .as_ref()
+                            .map(|(gallery, album)| (gallery.as_str(), album.as_str())),
+                        unlocked,
+                    )
+                    .await
+                    .map_err(shown)
+                } else if demo {
                     app.catalog
                         .photo_albums(
                             pg_core::model::AccountId::new("synthetic")
@@ -1007,10 +1548,161 @@ impl Gallery {
                         .await
                         .map_err(|e| e.to_string())
                 } else {
-                    app.photo_albums().await.map_err(shown)
+                    app.photo_albums_with_hidden(unlocked).await.map_err(shown)
                 }
             },
             move |result| Message::AlbumsLoaded(request, generation, result),
+        )
+    }
+
+    fn reset_drive_navigation(&mut self) {
+        self.close_drive_link();
+        self.drive.trail.clear();
+        self.drive.chooser = None;
+        self.drive.listing = None;
+        self.drive.request += 1;
+        self.albums.clear();
+        self.albums_request += 1;
+    }
+
+    fn close_hidden_access(&mut self) {
+        self.hidden = HiddenAccess {
+            request: self.hidden.request + 1,
+            ..HiddenAccess::default()
+        };
+    }
+
+    fn show_drive_place(&mut self) -> Task<Message> {
+        self.close_drive_link();
+        self.clear_media();
+        self.albums.clear();
+        self.album_open = !self.drive.trail.is_empty();
+        self.hidden.private_album = self.drive.trail.iter().any(|album| album.settings.hidden);
+        if let Some(album) = self.drive.trail.last() {
+            self.view = View::DriveAlbum {
+                gallery: album.gallery.to_string(),
+                album: album.source.id.to_string(),
+            };
+        }
+        Task::batch([self.load_albums(), self.load_outline()])
+    }
+
+    fn close_drive_link(&mut self) {
+        self.drive_link = DriveLinkPanel {
+            request: self.drive_link.request + 1,
+            ..DriveLinkPanel::default()
+        };
+    }
+
+    fn drive_link_expiry(&self) -> Option<Option<i64>> {
+        let days = self.drive_link.expiry.trim();
+        if days.is_empty() {
+            return Some(None);
+        }
+        let days = days
+            .parse::<i64>()
+            .ok()
+            .filter(|days| (1..=3650).contains(days))?;
+        Some(Some(chrono::Utc::now().timestamp() + days * 86_400))
+    }
+
+    fn drive_link_task(&mut self, action: PublicLinkAction) -> Task<Message> {
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        let Some(folder) = self
+            .drive
+            .trail
+            .last()
+            .filter(|_| self.drive_link.open && !self.drive_link.busy)
+        else {
+            return Task::none();
+        };
+        let gallery = folder.gallery.to_string();
+        let album = folder.source.id.to_string();
+        self.drive_link.busy = true;
+        self.drive_link.error = None;
+        self.drive_link.request += 1;
+        let request = self.drive_link.request;
+        let generation = app.generation();
+        spawn(
+            &app,
+            move |app| async move {
+                app.drive_public_link(gallery, album, action)
+                    .await
+                    .map_err(shown)
+            },
+            move |result| Message::DriveLinkLoaded(request, generation, result),
+        )
+    }
+
+    fn load_drive_folders(&mut self) -> Task<Message> {
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        let folder = self
+            .drive
+            .chooser
+            .as_ref()
+            .and_then(|trail| trail.last())
+            .map(|folder| folder.uid.clone());
+        self.drive.listing = None;
+        self.sync.error = None;
+        self.drive.request += 1;
+        let request = self.drive.request;
+        let generation = app.generation();
+        spawn(
+            &app,
+            move |app| async move { app.browse_drive_folders(folder).await.map_err(shown) },
+            move |result| Message::DriveFoldersLoaded(request, generation, result),
+        )
+    }
+
+    fn refresh_drive(&mut self) -> Task<Message> {
+        if self.drive.chooser.is_some() {
+            return self.load_drive_folders();
+        }
+        let folder_uid = |album: &pg_core::library::Album| {
+            proton_sdk::ids::NodeUid::new(
+                album.source.volume.to_string().into(),
+                album.source.root.to_string().into(),
+            )
+        };
+        let folders = if let Some(root) = self.drive.trail.first() {
+            vec![folder_uid(root)]
+        } else {
+            self.albums.iter().map(folder_uid).collect()
+        };
+        self.scan_drive_folders(folders, false)
+    }
+
+    fn scan_drive_folders(
+        &mut self,
+        folders: Vec<proton_sdk::ids::NodeUid>,
+        add: bool,
+    ) -> Task<Message> {
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        if self.drive.busy {
+            return Task::none();
+        }
+        self.drive.busy = true;
+        self.sync.error = None;
+        let generation = app.generation();
+        spawn(
+            &app,
+            move |app| async move {
+                for folder in folders {
+                    if add {
+                        app.add_drive_folder(folder).await.map_err(shown)?;
+                    } else {
+                        app.scan_drive_folder(folder).await.map_err(shown)?;
+                    }
+                }
+                Ok(())
+            },
+            move |result| Message::DriveChanged(generation, false, result),
         )
     }
 
@@ -1063,7 +1755,9 @@ impl Gallery {
     }
 
     fn load_outline(&mut self) -> Task<Message> {
-        if !self.browsing() || (self.section == Section::Albums && !self.album_open) {
+        if !self.browsing()
+            || (matches!(self.section, Section::Albums | Section::Drive) && !self.album_open)
+        {
             return Task::none();
         }
         let Some(app) = self.app().cloned() else {
@@ -1075,10 +1769,11 @@ impl Gallery {
         let generation = app.generation();
         let view = self.view.clone();
         let favorites = self.section == Section::Favorites;
+        let unlocked = self.hidden.unlocked && self.hidden.private_album;
         let (task, handle) = spawn(
             &app,
             move |app| async move {
-                app.outline_filtered(view, favorites)
+                app.outline_with_visibility(view, favorites, unlocked)
                     .await
                     .map(Arc::new)
                     .map_err(shown)
@@ -1323,7 +2018,9 @@ impl Gallery {
     }
 
     fn open(&mut self, index: usize) -> Task<Message> {
-        if (self.section == Section::Albums && !self.album_open) || !self.browsing() {
+        if (matches!(self.section, Section::Albums | Section::Drive) && !self.album_open)
+            || !self.browsing()
+        {
             return Task::none();
         }
         let Some(app) = self.app().cloned() else {
@@ -1346,6 +2043,10 @@ impl Gallery {
             image: placeholder,
             loading: true,
             message: None,
+            #[cfg(target_os = "linux")]
+            player: None,
+            #[cfg(target_os = "linux")]
+            playback: crate::video::Playback::default(),
         });
         if let Some(work) = self.viewer_work.take() {
             work.abort();
@@ -1354,7 +2055,10 @@ impl Gallery {
         let provider = self.provider(&app);
         let (task, handle) = spawn(
             &app,
-            move |app| load_full(app, provider, outline, index, originals),
+            {
+                let private = self.hidden.private_album;
+                move |app| load_full_with_privacy(app, provider, outline, index, originals, private)
+            },
             move |result: Result<Loaded, String>| {
                 Message::ViewerLoaded(request, generation, result.map(Box::new))
             },
@@ -1423,8 +2127,14 @@ impl Gallery {
         }
         if self.browsing() {
             match &key {
+                Key::Named(Named::Escape) if self.drive_link.open => {
+                    return self.update(Message::CloseDriveLink);
+                }
+                Key::Named(Named::Escape) if self.drive.chooser.is_some() => {
+                    return self.update(Message::CloseDriveChooser);
+                }
                 Key::Named(Named::Escape) if self.album_open => {
-                    return self.update(Message::Navigate(Section::Albums));
+                    return self.update(Message::BackToAlbums);
                 }
                 Key::Character(value) if value == "+" || value == "=" => {
                     return self.update(Message::GridSize(self.row_target + 20));
@@ -1474,6 +2184,9 @@ impl Gallery {
 
     /// Drop everything shown of the library.
     fn forget_library(&mut self) {
+        self.close_hidden_access();
+        self.reset_drive_navigation();
+        self.drive.busy = false;
         self.albums.clear();
         self.albums_request += 1;
         self.albums_loading = false;
@@ -1779,12 +2492,15 @@ impl Gallery {
         ]
         .spacing(10)
         .align_y(Alignment::Center);
-        let navigation = column![
+        let mut navigation = column![
             self.navigation(Section::Photos, Icon::Photos, "All photos"),
             self.navigation(Section::Favorites, Icon::Heart, "Favorites"),
             self.navigation(Section::Albums, Icon::Albums, "Albums"),
         ]
         .spacing(6);
+        if !self.demo() {
+            navigation = navigation.push(self.navigation(Section::Drive, Icon::Folder, "Drive"));
+        }
         let mut side = column![
             container(brand).padding([12, 8]),
             Space::new().height(28),
@@ -1868,6 +2584,13 @@ impl Gallery {
     }
 
     fn section_title(&self) -> &str {
+        if let Some(album) = self.drive.trail.last() {
+            return album
+                .settings
+                .title
+                .as_deref()
+                .unwrap_or(&album.source.label);
+        }
         if self.album_open {
             let id = match &self.view {
                 View::PhotoAlbum(id) | View::Source(id) => Some(id.as_str()),
@@ -1889,17 +2612,26 @@ impl Gallery {
             Section::Photos => "Photos",
             Section::Favorites => "Favorites",
             Section::Albums => "Albums",
+            Section::Drive => "Drive galleries",
         }
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
-        let status = if self.sync.running {
+        let at_albums =
+            matches!(self.section, Section::Albums | Section::Drive) && !self.album_open;
+        let status = if self.sync.settings_busy {
+            "Checking Gallery settings…".into()
+        } else if self.sync.visibility_stale {
+            "Visibility may be out of date".into()
+        } else if self.section == Section::Drive && self.drive.busy {
+            "Updating Drive galleries…".into()
+        } else if self.sync.running && self.section != Section::Drive {
             if self.demo() {
                 "Preparing sample media…".into()
             } else {
                 format!("Syncing your library… {} indexed", self.sync.indexed)
             }
-        } else if self.section == Section::Albums && !self.album_open {
+        } else if at_albums {
             count_label(self.albums.len(), "album", "albums")
         } else {
             count_label(self.ratios.len(), "item", "items")
@@ -1925,32 +2657,88 @@ impl Gallery {
             .align_y(Alignment::Center),
         )
         .padding([10, 14])
-        .on_press_maybe((!self.sync.running).then_some(Message::Sync))
+        .on_press_maybe(
+            (if self.section == Section::Drive {
+                !self.drive.busy
+            } else {
+                !self.sync.running
+            })
+            .then_some(Message::Sync),
+        )
         .style(design::secondary);
         let mut controls = row![].spacing(12).align_y(Alignment::Center);
         if self.album_open {
             controls = controls.push(
                 button(
-                    row![design::icon(Icon::Back, 16.0), text("Albums").size(13)]
-                        .spacing(6)
-                        .align_y(Alignment::Center),
+                    row![
+                        design::icon(Icon::Back, 16.0),
+                        text(if self.section == Section::Drive {
+                            "Back"
+                        } else {
+                            "Albums"
+                        })
+                        .size(13)
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
                 )
                 .padding([10, 12])
-                .on_press(Message::Navigate(Section::Albums))
+                .on_press(Message::BackToAlbums)
                 .style(design::secondary),
             );
         } else if self.window.width < 760.0 {
+            let mut sections = vec![Section::Photos, Section::Favorites, Section::Albums];
+            if !self.demo() {
+                sections.push(Section::Drive);
+            }
             controls = controls.push(
-                pick_list(
-                    [Section::Photos, Section::Favorites, Section::Albums],
-                    Some(self.section),
-                    Message::Navigate,
-                )
-                .text_size(13)
-                .padding(8),
+                pick_list(sections, Some(self.section), Message::Navigate)
+                    .text_size(13)
+                    .padding(8),
             );
         }
-        if self.window.width >= 950.0 && !(self.section == Section::Albums && !self.album_open) {
+        if self.section == Section::Drive && self.drive.chooser.is_none() {
+            if !self.album_open {
+                controls = controls.push(
+                    button("Add gallery")
+                        .padding([10, 12])
+                        .style(design::primary)
+                        .on_press_maybe((!self.drive.busy).then_some(Message::ChooseDriveFolder)),
+                );
+            } else if self.drive.trail.len() == 1 {
+                controls = controls.push(
+                    button("Remove gallery")
+                        .padding([10, 12])
+                        .style(design::secondary)
+                        .on_press_maybe((!self.drive.busy).then_some(Message::RemoveDriveGallery)),
+                );
+            }
+            if self.album_open && !self.drive_link.open {
+                controls = controls.push(
+                    button("Public link")
+                        .padding([10, 12])
+                        .on_press(Message::OpenDriveLink)
+                        .style(design::secondary),
+                );
+            }
+        }
+        if at_albums && !self.demo() && self.drive.chooser.is_none() && !self.hidden.prompt {
+            controls = controls.push(
+                button(if self.hidden.unlocked {
+                    "Lock hidden albums"
+                } else {
+                    "Hidden albums"
+                })
+                .padding([10, 12])
+                .style(design::secondary)
+                .on_press(if self.hidden.unlocked {
+                    Message::LockHidden
+                } else {
+                    Message::OpenHiddenPrompt
+                }),
+            );
+        }
+        if self.window.width >= 950.0 && !at_albums {
             controls = controls
                 .push(text("Size").size(12).style(design::muted))
                 .push(
@@ -1982,22 +2770,38 @@ impl Gallery {
                     design::icon(Icon::Albums, 40.0),
                     text(if self.albums_loading {
                         "Loading your albums…"
+                    } else if self.section == Section::Drive {
+                        "No Drive galleries yet"
                     } else {
                         "No albums yet"
                     })
                     .size(22)
                     .font(design::MEDIUM),
-                    text("Your Proton Photos albums appear after refreshing the library.")
-                        .size(14)
-                        .style(design::muted),
+                    text(if self.section == Section::Drive {
+                        "Choose a Drive folder to browse its photos, videos, and subfolders."
+                    } else {
+                        "Your Proton Photos albums appear after refreshing the library."
+                    })
+                    .size(14)
+                    .style(design::muted),
                 ]
                 .spacing(16)
                 .align_x(Alignment::Center),
             )
             .into();
         }
+        scrollable(container(self.album_rows()).padding([0, GUTTER as u16]))
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn album_rows(&self) -> iced::widget::Column<'_, Message> {
         let mut list = column![].spacing(10).width(Length::Fill);
-        for album in &self.albums {
+        for album in self
+            .albums
+            .iter()
+            .filter(|album| self.hidden.unlocked || !album.settings.hidden)
+        {
             let title = album
                 .settings
                 .title
@@ -2011,9 +2815,23 @@ impl Gallery {
                             .style(design::soft),
                         column![
                             text(title).font(design::MEDIUM).size(17),
-                            text(count_label(album.direct_items as usize, "item", "items"))
-                                .size(13)
-                                .style(design::muted)
+                            text(
+                                if self.section == Section::Drive && album.child_albums > 0 {
+                                    format!(
+                                        "{} · {}",
+                                        count_label(album.direct_items as usize, "item", "items"),
+                                        count_label(
+                                            album.child_albums as usize,
+                                            "folder",
+                                            "folders"
+                                        )
+                                    )
+                                } else {
+                                    count_label(album.direct_items as usize, "item", "items")
+                                }
+                            )
+                            .size(13)
+                            .style(design::muted)
                         ]
                         .spacing(6)
                         .width(Length::Fill),
@@ -2028,15 +2846,199 @@ impl Gallery {
                 .style(design::secondary),
             );
         }
-        scrollable(container(list).padding([0, GUTTER as u16]))
-            .height(Length::Fill)
-            .into()
+        list
+    }
+
+    fn drive_chooser<'a>(&'a self, trail: &'a [FolderChoice]) -> Element<'a, Message> {
+        let name = trail
+            .last()
+            .map_or("My files", |folder| folder.name.as_str());
+        let mut rows = column![
+            row![
+                button("Back")
+                    .on_press_maybe((!trail.is_empty()).then_some(Message::BackDriveFolder)),
+                text(name).font(design::MEDIUM).size(20),
+                Space::new().width(Length::Fill),
+                button("Cancel")
+                    .on_press(Message::CloseDriveChooser)
+                    .style(design::secondary),
+                button("Use this folder")
+                    .on_press_maybe(
+                        self.drive
+                            .listing
+                            .as_ref()
+                            .map(|_| Message::AddDriveGallery)
+                    )
+                    .style(design::primary),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+        ]
+        .spacing(10);
+        if let Some(listing) = &self.drive.listing {
+            for (index, folder) in listing.children.iter().enumerate() {
+                rows = rows.push(
+                    button(
+                        row![design::icon(Icon::Folder, 18.0), text(folder.name.as_str())]
+                            .spacing(12)
+                            .align_y(Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding(10)
+                    .style(design::secondary)
+                    .on_press(Message::BrowseDriveFolder(index)),
+                );
+            }
+        } else if self.sync.error.is_none() {
+            rows = rows.push(text("Loading folders…").style(design::muted));
+        }
+        scrollable(container(rows).padding([0, GUTTER as u16])).into()
     }
 
     fn content(&self) -> Element<'_, Message> {
-        if self.section == Section::Albums && !self.album_open {
+        if self.drive_link.open {
+            return self.drive_link_panel();
+        }
+        if self.hidden.prompt {
+            let mut form = column![
+                text("Hidden albums").size(24).font(design::MEDIUM),
+                text("Enter your Gallery passphrase. On first use, choose a passphrase for this device."),
+                text_input("Gallery passphrase", &self.hidden.passphrase)
+                    .secure(true)
+                    .on_input(Message::HiddenPassphrase)
+                    .on_submit(Message::SubmitHiddenPassphrase)
+                    .padding(12),
+                row![
+                    button("Cancel").on_press(Message::LockHidden).style(design::secondary),
+                    button(if self.hidden.busy { "Checking…" } else { "Unlock" })
+                        .on_press_maybe((!self.hidden.busy).then_some(Message::SubmitHiddenPassphrase))
+                        .style(design::primary),
+                ].spacing(8),
+            ].spacing(12).max_width(420);
+            if let Some(error) = &self.hidden.error {
+                form = form.push(text(error.as_str()));
+            }
+            return center(form).into();
+        }
+        if self.section == Section::Drive
+            && let Some(trail) = &self.drive.chooser
+        {
+            return self.drive_chooser(trail);
+        }
+        if matches!(self.section, Section::Albums | Section::Drive) && !self.album_open {
             return self.albums_view();
         }
+        if self.section == Section::Drive && !self.albums.is_empty() {
+            return column![
+                container(scrollable(self.album_rows()))
+                    .max_height(228)
+                    .padding([0, GUTTER as u16]),
+                self.media_grid(),
+            ]
+            .spacing(12)
+            .height(Length::Fill)
+            .into();
+        }
+        self.media_grid()
+    }
+
+    fn drive_link_panel(&self) -> Element<'_, Message> {
+        let state = &self.drive_link;
+        let mut panel = column![text("Public link").size(24).font(design::MEDIUM)]
+            .spacing(12)
+            .max_width(440);
+        if let Some(error) = &state.error {
+            panel = panel.push(text(error.as_str()));
+        }
+        if state.busy {
+            panel = panel.push(text("Contacting Proton…").style(design::muted));
+        }
+        let mut actions = row![].spacing(10);
+        if let Some(link) = &state.link {
+            panel = panel.push(text(if link.has_custom_password {
+                "People with the link and its password can view this folder."
+            } else {
+                "People with the link can view this folder."
+            }));
+            if let Some(expiry) = link
+                .expiration_time
+                .and_then(|epoch| chrono::DateTime::from_timestamp(epoch, 0))
+            {
+                panel = panel.push(text(format!(
+                    "Expires {}",
+                    expiry.format("%Y-%m-%d %H:%M UTC")
+                )));
+            }
+            if state.confirming_revoke {
+                panel = panel.push(text("Revoke access for everyone using this link?"));
+                actions = actions.push(
+                    button("Revoke")
+                        .on_press_maybe((!state.busy).then_some(Message::RevokeDriveLink))
+                        .style(design::secondary),
+                );
+            } else {
+                if link.url.is_some() {
+                    actions = actions.push(
+                        button(if state.copied { "Copied" } else { "Copy link" })
+                            .on_press(Message::CopyDriveLink)
+                            .style(design::primary),
+                    );
+                }
+                actions = actions.push(
+                    button("Revoke link")
+                        .on_press_maybe((!state.busy).then_some(Message::ConfirmRevokeDriveLink))
+                        .style(design::secondary),
+                );
+            }
+        } else if state.loaded && self.hidden.private_album {
+            panel = panel.push(text("This folder is hidden in Gallery."));
+        } else if state.loaded {
+            panel = panel
+                .push(text(
+                    "Anyone with the link can view this Drive folder. You can revoke access here.",
+                ))
+                .push(
+                    text_input("Password (optional)", &state.password)
+                        .secure(true)
+                        .on_input(Message::DriveLinkPassword)
+                        .padding(10),
+                )
+                .push(
+                    text_input("Expires in days (optional)", &state.expiry)
+                        .on_input(Message::DriveLinkExpiry)
+                        .padding(10),
+                );
+            if self.drive_link_expiry().is_none() {
+                panel = panel.push(text("Enter a number from 1 to 3650."));
+            }
+            actions = actions.push(
+                button("Create viewer link")
+                    .style(design::primary)
+                    .on_press_maybe(
+                        (!state.busy && self.drive_link_expiry().is_some())
+                            .then_some(Message::CreateDriveLink),
+                    ),
+            );
+        } else if !state.busy {
+            actions = actions.push(
+                button("Retry")
+                    .on_press(Message::OpenDriveLink)
+                    .style(design::secondary),
+            );
+        }
+        center(
+            panel.push(
+                actions.push(
+                    button("Close")
+                        .on_press(Message::CloseDriveLink)
+                        .style(design::secondary),
+                ),
+            ),
+        )
+        .into()
+    }
+
+    fn media_grid(&self) -> Element<'_, Message> {
         if self.outline.as_ref().is_none_or(|o| o.is_empty()) {
             let (message, hint) = if self.sync.running {
                 (
@@ -2249,6 +3251,20 @@ impl Gallery {
                 .into(),
             None => Space::new().width(Length::Fill).height(Length::Fill).into(),
         };
+        #[cfg(target_os = "linux")]
+        let body: Element<'_, Message> = if viewer.player.is_some() {
+            if let Some(decoded) = &viewer.image {
+                image(decoded.handle.clone())
+                    .content_fit(ContentFit::Contain)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                center(text("Buffering video…")).into()
+            }
+        } else {
+            body
+        };
         let body = iced::widget::keyed_column([(
             self.viewer_request,
             // Keyed columns diff children directly. Keep the child's widget type
@@ -2290,9 +3306,17 @@ impl Gallery {
                 .height(Length::Fill),
             container(
                 text(if self.window.width < 760.0 {
-                    "Scroll to zoom   /   Drag to pan"
+                    if viewer.item.as_ref().is_some_and(|item| item.is_video) {
+                        ""
+                    } else {
+                        "Scroll to zoom   /   Drag to pan"
+                    }
                 } else {
-                    "Scroll to zoom   /   Drag to pan   /   ← → Navigate   /   Esc Close"
+                    if viewer.item.as_ref().is_some_and(|item| item.is_video) {
+                        "← → Navigate   /   Esc Close"
+                    } else {
+                        "Scroll to zoom   /   Drag to pan   /   ← → Navigate   /   Esc Close"
+                    }
                 })
                 .size(12)
                 .color(Color::from_rgb8(166, 166, 180))
@@ -2300,6 +3324,45 @@ impl Gallery {
             .padding([14, 24])
             .center_x(Length::Fill)
         ];
+        #[cfg(target_os = "linux")]
+        if viewer.player.is_some() {
+            let state = &viewer.playback;
+            let mut controls = row![
+                button(if state.playing { "Pause" } else { "Play" })
+                    .style(viewer_button)
+                    .on_press(Message::VideoToggle),
+                text(video_time(state.position)).size(13),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center);
+            if state.duration > 0.0 {
+                controls = controls
+                    .push(
+                        slider(
+                            0.0..=state.duration,
+                            state.position.min(state.duration),
+                            Message::VideoSeek,
+                        )
+                        .step(0.1)
+                        .width(Length::Fill),
+                    )
+                    .push(text(video_time(state.duration)).size(13));
+            }
+            if state.buffering {
+                controls = controls.push(text("Buffering…").size(13));
+            }
+            page = page.push(
+                container(
+                    controls.push(text("Volume").size(13)).push(
+                        slider(0.0..=1.0, state.volume, Message::VideoVolume)
+                            .step(0.05)
+                            .width(72),
+                    ),
+                )
+                .padding([0, 24])
+                .width(Length::Fill),
+            );
+        }
         if let Some(message) = &viewer.message {
             page = page.push(
                 container(
@@ -2325,6 +3388,12 @@ impl Gallery {
             })
             .into()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn video_time(seconds: f64) -> String {
+    let seconds = seconds as u64;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
 fn count_label(count: usize, singular: &str, plural: &str) -> String {
@@ -2371,12 +3440,24 @@ async fn load_thumbnail(
 
 /// The viewer's photo: Proton's screen-size preview, or the decrypted
 /// original when there is none. Videos show their thumbnail only.
+#[cfg(test)]
 async fn load_full(
     app: Arc<App>,
     provider: Arc<dyn MediaProvider>,
     outline: Arc<Outline>,
     index: usize,
     originals: PathBuf,
+) -> Result<(MediaItem, Option<Decoded>, Option<String>), String> {
+    load_full_with_privacy(app, provider, outline, index, originals, false).await
+}
+
+async fn load_full_with_privacy(
+    app: Arc<App>,
+    provider: Arc<dyn MediaProvider>,
+    outline: Arc<Outline>,
+    index: usize,
+    originals: PathBuf,
+    private: bool,
 ) -> Result<(MediaItem, Option<Decoded>, Option<String>), String> {
     let item = app
         .outline_items(&outline, index, 1)
@@ -2396,6 +3477,10 @@ async fn load_full(
     }
     let bytes = match provider.preview(&item.key).await.map_err(shown)? {
         Some(bytes) => bytes,
+        None if private => app
+            .original_in_memory(&item.key, ORIGINAL_LIMIT)
+            .await
+            .map_err(shown)?,
         None => {
             let path = provider
                 .original(&item.key, &item.name, &originals, ORIGINAL_LIMIT)

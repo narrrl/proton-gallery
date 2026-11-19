@@ -54,6 +54,9 @@ impl GalleryEngine {
             return Ok(vec![]);
         };
         self.runtime.block_on(async {
+            if !self.app.gallery_visibility_cached().await? {
+                return Ok(vec![]);
+            }
             let albums = self.catalog.photo_albums(account).await?;
             self.folder_albums(albums).await
         })

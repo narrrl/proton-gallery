@@ -5,7 +5,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
@@ -18,7 +22,9 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
+import androidx.work.await
 import androidx.work.workDataOf
 import io.narl.protongallery.bridge.GalleryException
 import io.narl.protongallery.bridge.MediaReader
@@ -37,13 +43,19 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.io.InputStream
 import java.text.NumberFormat
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 
@@ -78,6 +90,12 @@ data class BackupProgress(
         checking && checkTotal > 0 -> (1f - toCheck.toFloat() / checkTotal).coerceIn(0f, 1f)
         else -> null
     }
+}
+
+data class BackupRequest(val message: String, val active: Boolean, val running: Boolean = false)
+
+data class BackupOutcome(val considered: Int = 0, val failed: Int = 0) {
+    operator fun plus(other: BackupOutcome) = BackupOutcome(considered + other.considered, failed + other.failed)
 }
 
 /** User choices for automatic backup. Folders live in the catalog. */
@@ -165,15 +183,14 @@ object PhoneBackup {
      * Upload `items` right away, or, when `items` is null, scan, compare and
      * upload everything missing from the backup folders. Uploads start as
      * soon as the check finds something missing; they never wait for the
-     * whole library to be compared. Returns how many uploads failed.
+     * whole library to be compared.
      */
-    suspend fun run(context: Context, items: List<PhoneRef>?): Int {
+    suspend fun run(context: Context, items: List<PhoneRef>?): BackupOutcome {
         val repository = GalleryRepository.get(context)
         try {
             repository.ensureSession()
             if (repository.accountStatus().stage != SignInStage.CONNECTED) {
-                if (items != null) mutableProgress.update { it.copy(message = "Sign in to Proton to back up") }
-                return 0
+                throw IllegalStateException("Sign in to Proton to back up")
             }
             // Albums of earlier backups that failed to fill go first.
             flushAlbums(repository)
@@ -182,19 +199,19 @@ object PhoneBackup {
             return coroutineScope {
                 val checker = launch { check(context, repository) }
                 val tried = HashSet<String>()
-                var failed = 0
+                var result = BackupOutcome()
                 uploadSession {
                     while (true) {
                         val finished = !checker.isActive
                         val queue = repository.backupQueue(500).filter { tried.add(it.id) }
-                        if (queue.isNotEmpty()) failed += upload(context, repository, queue)
+                        if (queue.isNotEmpty()) result += upload(context, repository, queue)
                         else if (finished) break
                         else delay(1_500)
                     }
                 }
                 checker.join()
                 flushAlbums(repository)
-                failed
+                result
             }
         } catch (cancel: CancellationException) {
             throw cancel
@@ -225,7 +242,7 @@ object PhoneBackup {
         finally {
             if (runs.decrementAndGet() == 0) mutableProgress.update {
                 val sent = it.done - it.failed
-                if (it.total == 0) it.copy(uploading = false)
+                if (it.total == 0) it.copy(uploading = false, message = "Everything is backed up")
                 else it.copy(uploading = false, done = 0, total = 0, failed = 0, bytes = 0, size = 0, message = when {
                     it.failed > 0 -> "${if (it.failed == 1) "1 item" else "${it.failed} items"} couldn’t be backed up. ${it.message ?: ""}".trim()
                     sent == 1 -> "1 item backed up"
@@ -236,8 +253,8 @@ object PhoneBackup {
         }
     }
 
-    private suspend fun upload(context: Context, repository: GalleryRepository, queue: List<PhoneRef>): Int {
-        if (queue.isEmpty()) return 0
+    private suspend fun upload(context: Context, repository: GalleryRepository, queue: List<PhoneRef>): BackupOutcome {
+        if (queue.isEmpty()) return BackupOutcome()
         mutableProgress.update { it.copy(uploading = true, total = it.total + queue.size, message = if (it.total == 0) null else it.message) }
         var failed = 0
         for (item in queue) {
@@ -257,7 +274,7 @@ object PhoneBackup {
                     message = if (error != null) describe(error) else it.message)
             }
         }
-        return failed
+        return BackupOutcome(queue.size, failed)
     }
 
     private fun describe(error: Exception): String = when (error) {
@@ -308,14 +325,15 @@ class BackupWorker(context: Context, parameters: WorkerParameters) : CoroutineWo
                 delay(1_000)
             }
         }
-        val failed = try {
+        val outcome = try {
             PhoneBackup.run(applicationContext, items)
         } catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) { return@coroutineScope Result.retry() }
+        catch (_: Exception) { return@coroutineScope if (runAttemptCount < 3) Result.retry() else Result.failure() }
         finally { notification.cancel() }
         PhotoPicker.changed(applicationContext)
         if (items == null) Backup.watchNewMedia(applicationContext)
-        if (failed > 0 && runAttemptCount < 3) Result.retry() else Result.success()
+        if (outcome.failed > 0 && runAttemptCount < 3) Result.retry()
+        else Result.success(workDataOf(CONSIDERED to outcome.considered, FAILED to outcome.failed))
     }
 
     override suspend fun getForegroundInfo() = foreground(PhoneBackup.progress.value.copy(checking = true))
@@ -348,6 +366,8 @@ class BackupWorker(context: Context, parameters: WorkerParameters) : CoroutineWo
 
     companion object {
         const val ITEMS = "items"
+        const val CONSIDERED = "considered"
+        const val FAILED = "failed"
         private const val CHANNEL = "backup"
         private const val NOTIFICATION = 7301
     }
@@ -362,6 +382,7 @@ object Backup {
     private const val NEW_MEDIA = "backup-new-media"
     private const val NOW = "backup-now"
     private const val SELECTED = "backup-selected"
+    private const val REQUESTED = "backup-requested"
 
     private fun constraints(context: Context, manual: Boolean = false): Constraints {
         val settings = BackupSettings(context)
@@ -376,6 +397,7 @@ object Backup {
         val work = WorkManager.getInstance(context)
         if (!BackupSettings(context).automatic) {
             work.cancelUniqueWork(PERIODIC); work.cancelUniqueWork(NEW_MEDIA); work.cancelUniqueWork(NOW)
+            work.cancelUniqueWork(REQUESTED)
             return
         }
         work.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE,
@@ -389,6 +411,66 @@ object Backup {
         if (!BackupSettings(context).automatic) return
         WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<BackupWorker>().setConstraints(constraints(context)).build())
+    }
+
+    suspend fun stop(context: Context) {
+        WorkManager.getInstance(context).cancelAllWorkByTag(BackupWorker::class.java.name).await()
+    }
+
+    fun request(context: Context, items: List<PhoneRef>? = null): Flow<BackupRequest> {
+        val manager = WorkManager.getInstance(context)
+        val settings = BackupSettings(context)
+        val tag = "backup-request-${UUID.randomUUID()}"
+        val chunks = items?.chunked(300) ?: listOf(null)
+        val requests = chunks.map { part ->
+            OneTimeWorkRequestBuilder<BackupWorker>().setConstraints(constraints(context, manual = items != null))
+                .addTag(tag).apply {
+                    if (part != null) setInputData(workDataOf(BackupWorker.ITEMS to part.map { it.encode() }.toTypedArray()))
+                }.build()
+        }
+        var work = manager.beginUniqueWork(if (items == null) REQUESTED else SELECTED,
+            ExistingWorkPolicy.APPEND_OR_REPLACE, requests.first())
+        for (request in requests.drop(1)) work = work.then(request)
+        val enqueue = work.enqueue()
+        val wifi = items == null && settings.wifiOnly
+        val charging = items == null && settings.chargingOnly
+        return manager.getWorkInfosByTagFlow(tag).map { infos ->
+            if (infos.any { it.state == WorkInfo.State.RUNNING }) BackupRequest("Backing up to Proton Photos…", true, true)
+            else if (infos.size != requests.size || infos.any { !it.state.isFinished }) {
+                BackupRequest(waitingForBackup(context, wifi, charging, infos.any { it.state == WorkInfo.State.ENQUEUED && it.runAttemptCount > 0 }), true)
+            }
+            else if (infos.any { it.state == WorkInfo.State.CANCELLED }) BackupRequest("Backup cancelled", false)
+            else {
+                val done = infos.sumOf {
+                    it.outputData.getInt(BackupWorker.CONSIDERED, 0) - it.outputData.getInt(BackupWorker.FAILED, 0)
+                }
+                val failed = infos.sumOf { it.outputData.getInt(BackupWorker.FAILED, 0) }
+                val message = when {
+                    infos.any { it.state == WorkInfo.State.FAILED } -> "Backup stopped. $done completed. Try again."
+                    failed > 0 -> "$done backed up. $failed couldn’t be backed up."
+                    done == 0 -> "Everything is backed up"
+                    done == 1 -> "1 item backed up"
+                    else -> "$done items backed up"
+                }
+                BackupRequest(message, false)
+            }
+        }.onStart { enqueue.await() }
+            .catch { emit(BackupRequest("Couldn’t queue backup. Try again.", false)) }
+            .distinctUntilChanged()
+    }
+
+    private fun waitingForBackup(context: Context, wifi: Boolean, charging: Boolean, retrying: Boolean): String {
+        val connection = context.getSystemService(ConnectivityManager::class.java)
+        val network = connection.getNetworkCapabilities(connection.activeNetwork)
+        val battery = if (charging) context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) else null
+        val power = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+        return when {
+            wifi && network?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true -> "Backup waiting for Wi‑Fi"
+            network == null -> "Backup waiting for a connection"
+            charging && power != BatteryManager.BATTERY_STATUS_CHARGING && power != BatteryManager.BATTERY_STATUS_FULL -> "Backup waiting for charging"
+            retrying -> "Backup waiting to retry"
+            else -> "Backup queued"
+        }
     }
 
     /** Run again shortly after new photos or videos appear. */

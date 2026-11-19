@@ -173,6 +173,7 @@ pub enum Icon {
     Play,
     Heart,
     Albums,
+    Folder,
 }
 
 // Small native SVGs share a 24px grid and 1.7px stroke; no icon font required.
@@ -194,6 +195,9 @@ pub fn icon<'a>(kind: Icon, size: f32) -> svg::Svg<'a> {
             "<rect x='6' y='7' width='15' height='14' rx='3'/><path d='M17 3H6a3 3 0 0 0-3 3v11'/>"
         }
         Icon::Play => "<path d='m9 5 10 7-10 7Z'/>",
+        Icon::Folder => {
+            "<path d='M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'/>"
+        }
     };
     let source = format!(
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>{path}</svg>"

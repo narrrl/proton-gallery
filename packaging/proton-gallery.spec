@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 %global _lto_cflags %{nil}
 %{!?version: %global version 0.1.0}
-%{!?package_release: %global package_release 2}
+%{!?package_release: %global package_release 3}
 %{!?git_dir: %global git_dir %{getenv:PWD}}
 %{!?binary: %global binary %{git_dir}/target/release/proton-gallery}
 Name: proton-gallery
@@ -17,6 +17,8 @@ BuildRequires: rust >= 1.96
 BuildRequires: gcc
 BuildRequires: pkgconf-pkg-config
 BuildRequires: dbus-devel
+BuildRequires: gstreamer1-devel
+BuildRequires: gstreamer1-plugins-base-devel
 Requires: dbus-libs
 Requires: fontconfig
 Requires: libxkbcommon
@@ -34,11 +36,14 @@ Requires: vulkan-loader
 Requires: hicolor-icon-theme
 Requires: xdg-utils
 Requires: ca-certificates
+Requires: gstreamer1-plugins-base
+Requires: gstreamer1-plugins-good
+Recommends: gstreamer1-plugin-libav
 Suggests: gnome-keyring
 
 %description
-Browse Proton Photos in a native desktop timeline with account access, albums,
-favorites and still-photo viewing. Unofficial and not affiliated with Proton AG.
+Browse Proton Photos and Drive galleries with a native photo and video viewer.
+Unofficial and not affiliated with Proton AG.
 
 %prep
 test -f "%{git_dir}/Cargo.toml"

@@ -48,6 +48,9 @@ impl GalleryEngine {
         let Some(account) = self.auth.account_id() else {
             return Ok(None);
         };
+        if !self.app.gallery_visibility_cached().await? {
+            return Ok(None);
+        }
         Ok(self
             .catalog
             .account_sources(SourceKind::Photos, account)

@@ -73,6 +73,18 @@ class GalleryRepository private constructor(private val context: Context) {
     suspend fun cancelSignIn() = withContext(Native) { engine.cancelSignIn() }
     suspend fun signOut() = withContext(Native) { engine.signOut() }
     suspend fun syncPhotos() = withContext(Native) { engine.syncPhotos() }
+    suspend fun syncGallerySettings() = withContext(Native) { engine.syncGallerySettings() }
+    suspend fun pollGallerySettings() = withContext(Native) { engine.pollGallerySettings() }
+    suspend fun publicDriveLink(album: FolderAlbum) = withContext(Native) {
+        engine.publicDriveLink(album.gallery, album.id)
+    }
+    suspend fun createDriveLink(album: FolderAlbum, password: String, expires: Long?) = withContext(Native) {
+        engine.createPublicDriveLink(album.gallery, album.id, password, expires)
+    }
+    suspend fun revokeDriveLink(album: FolderAlbum) = withContext(Native) {
+        engine.revokePublicDriveLink(album.gallery, album.id)
+    }
+    suspend fun galleryVisibilityReady() = withContext(Native) { engine.galleryVisibilityReady() }
     suspend fun driveProgress() = withContext(Native) { engine.driveProgress() }
     suspend fun syncProgress() = withContext(Native) { engine.syncProgress() }
     suspend fun thumbnail(item: GalleryItem): ByteArray? = withContext(Native) { item.remoteKey?.let(engine::photoThumbnail) }
@@ -82,8 +94,8 @@ class GalleryRepository private constructor(private val context: Context) {
     }
 
     /** The whole of `view` for the grid; records load through it page by page. */
-    suspend fun outline(view: LibraryView, scope: CoroutineScope): GalleryOutline = withContext(Native) {
-        val native = engine.outlineAt(view)
+    suspend fun outline(view: LibraryView, scope: CoroutineScope, unlocked: Boolean): GalleryOutline = withContext(Native) {
+        val native = if (unlocked) engine.unlockedAlbumOutline(view) else engine.outlineAt(view)
         GalleryOutline(native.ids(), native.times().toLongArray(), native.ratios().toFloatArray(), scope) { start, count ->
             withContext(Native) { engine.outlineItems(native, start.toUInt(), count.toUInt()) }
         }
@@ -126,7 +138,6 @@ class GalleryRepository private constructor(private val context: Context) {
     }
 
     suspend fun totals() = withContext(Native) { engine.totals() }
-    suspend fun count(location: GalleryLocation) = withContext(Native) { location.nativeView()?.let(engine::countAt)?.toLong() ?: 0L }
     suspend fun albums(location: GalleryLocation) = withContext(Native) {
         when {
             location.section == GallerySection.Albums && location.album == null -> engine.photoAlbums()

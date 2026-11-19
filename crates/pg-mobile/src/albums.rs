@@ -271,7 +271,16 @@ impl GalleryEngine {
     /// Runs alongside a Photos sync.
     pub fn add_drive_gallery(&self, folder: String) -> Result<String, GalleryError> {
         let uid = folder_uid(&folder)?;
-        self.scan_drive_gallery(Some(uid), None)
+        let generation = self.app.generation();
+        let gallery = self.scan_drive_gallery(Some(uid), None)?;
+        self.runtime.block_on(async {
+            let account = self.auth.account_id().ok_or(pg_core::Error::NotFound)?;
+            self.app.ensure_current(generation)?;
+            self.catalog
+                .set_gallery_configuration_membership(account, SourceId::new(&gallery)?)
+                .await?;
+            Ok::<_, GalleryError>(gallery)
+        })
     }
 
     /// Fetch new and changed media for a gallery and its albums.
@@ -376,5 +385,66 @@ impl GalleryEngine {
             })?;
             Ok(gallery.to_string())
         })
+    }
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct PublicDriveLink {
+    pub url: Option<String>,
+    pub expires: Option<i64>,
+    pub password_protected: bool,
+}
+
+#[uniffi::export]
+impl GalleryEngine {
+    pub fn public_drive_link(
+        &self,
+        gallery: String,
+        album: String,
+    ) -> Result<Option<PublicDriveLink>, GalleryError> {
+        self.drive_link(gallery, album, pg_app::sharing::PublicLinkAction::Read)
+    }
+
+    pub fn create_public_drive_link(
+        &self,
+        gallery: String,
+        album: String,
+        password: String,
+        expires: Option<i64>,
+    ) -> Result<Option<PublicDriveLink>, GalleryError> {
+        self.drive_link(
+            gallery,
+            album,
+            pg_app::sharing::PublicLinkAction::Create {
+                password: password.into(),
+                expires,
+            },
+        )
+    }
+
+    pub fn revoke_public_drive_link(
+        &self,
+        gallery: String,
+        album: String,
+    ) -> Result<Option<PublicDriveLink>, GalleryError> {
+        self.drive_link(gallery, album, pg_app::sharing::PublicLinkAction::Revoke)
+    }
+}
+
+impl GalleryEngine {
+    fn drive_link(
+        &self,
+        gallery: String,
+        album: String,
+        action: pg_app::sharing::PublicLinkAction,
+    ) -> Result<Option<PublicDriveLink>, GalleryError> {
+        let link = self
+            .runtime
+            .block_on(self.app.drive_public_link(gallery, album, action))?;
+        Ok(link.map(|link| PublicDriveLink {
+            url: link.url,
+            expires: link.expiration_time,
+            password_protected: link.has_custom_password,
+        }))
     }
 }

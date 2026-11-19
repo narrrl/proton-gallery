@@ -129,6 +129,24 @@ impl GalleryEngine {
     pub fn sync_photos(&self) -> Result<u64, GalleryError> {
         Ok(self.runtime.block_on(self.app.sync_photos(|_| {}))?)
     }
+
+    pub fn sync_gallery_settings(&self) -> Result<bool, GalleryError> {
+        Ok(self
+            .runtime
+            .block_on(self.app.refresh_gallery_configuration(true))?)
+    }
+
+    pub fn poll_gallery_settings(&self) -> Result<Option<bool>, GalleryError> {
+        Ok(self
+            .runtime
+            .block_on(self.app.poll_gallery_configuration(true))?)
+    }
+
+    pub fn gallery_visibility_ready(&self) -> Result<bool, GalleryError> {
+        Ok(self
+            .runtime
+            .block_on(self.app.gallery_visibility_cached())?)
+    }
     /// Small decrypted previews stay in the caller's bounded memory cache.
     pub fn photo_thumbnail(&self, key: String) -> Result<Option<Vec<u8>>, GalleryError> {
         let key = parse_key(&key)?;

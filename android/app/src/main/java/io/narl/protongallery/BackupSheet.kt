@@ -51,11 +51,14 @@ val KEEP_CHOICES = listOf(30 to "30 days", 90 to "3 months", 365 to "1 year")
 
 fun backupSummary(backup: BackupState): String {
     val progress = backup.progress
+    val request = backup.request
     return when {
         !backup.access -> "Allow access to see and back up this phone’s photos"
+        request != null && request.active && !request.running -> request.message
         progress.uploading -> "Backing up ${minOf(progress.done + 1, progress.total)} of ${progress.total}"
         progress.checking -> if (progress.toCheck > 0) "Comparing with Proton Photos: ${progress.toCheck} left" else "Comparing with Proton Photos…"
         progress.scanning -> "Reading this phone’s photos…"
+        request != null -> request.message
         progress.message != null -> progress.message
         backup.automatic -> {
             val waiting = backup.folders.filter { it.backup }.sumOf { it.notBackedUp.toLong() }
@@ -166,8 +169,9 @@ fun BackupSheet(backup: BackupState, connected: Boolean, actions: BackupActions,
                     SwitchRow("Only on Wi‑Fi", "Mobile data is never used for automatic backup", backup.wifiOnly, actions.setWifiOnly)
                     SwitchRow("Only while charging", null, backup.chargingOnly, actions.setChargingOnly)
                     Button(onClick = actions.backUpNow, Modifier.padding(horizontal = 24.dp).padding(top = 16.dp),
-                        enabled = backup.automatic && !backup.progress.uploading) {
-                        Icon(Icons.Outlined.CloudUpload, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Back up now")
+                        enabled = backup.automatic && !backup.progress.uploading && backup.request?.active != true) {
+                        Icon(Icons.Outlined.CloudUpload, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                        Text(if (backup.request?.active == true) "Backup requested" else "Back up now")
                     }
                     HorizontalDivider(Modifier.padding(top = 24.dp, bottom = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
                     FreeUpSection(backup, actions)

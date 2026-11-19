@@ -22,7 +22,8 @@ for Debian/Ubuntu and Fedora installers, prerequisites and Secret Service setup.
 
 Install Rust (workspace minimum 1.96) and the platform development libraries. On
 Debian/Ubuntu the CI dependencies are `libdbus-1-dev libxkbcommon-dev libwayland-dev
-libudev-dev libegl1-mesa-dev`. A functioning Wayland or X11 display and graphics driver
+libudev-dev libegl1-mesa-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev`.
+Install the GStreamer base, good and libav plugins for runtime codecs. A functioning Wayland or X11 display and graphics driver
 are needed to run; Windows builds use the MSVC toolchain and Windows SDK.
 
 ```sh
@@ -62,14 +63,21 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
   the sidebar collapses into a toolbar; account sign-out remains available.
 - Albums lists the account's synced Proton Photos albums. Open an album to browse
   its photos. The Albums button or Escape returns to the list.
+- Drive lets you add a gallery from the account’s My files. Open folders to browse their direct media
+  and subfolders. **Remove gallery** removes it from this app and leaves its Drive files in place.
+  Open **Public link** to create, copy or revoke a viewer link for an owned Drive folder.
+- Hidden albums unlock with a local Gallery passphrase. The desktop stores a salted
+  verifier in the system keyring and locks again when the window loses focus. Refresh
+  Android first to import existing hidden settings, then refresh desktop.
 - Choose Favorite or Unfavorite in the viewer, or press F. Favorites shows tagged
   photos from the timeline. The Size slider and +/− keys adjust the grid density.
 - Arrow keys, Page Up/Down, Home/End and Tab move visible grid focus. Enter/Space opens;
   Escape closes; Left/Right navigate the viewer. R/F5 retries the viewer; F5 refreshes the grid. Tiles are buttons with a visible focus
   border. This does **not** establish screen-reader accessibility; see acceptance gaps.
 - The still viewer uses Proton's preview, falling back to a streamed original when absent.
-  Scroll to zoom, drag to pan. Retry reloads an unsuccessful item. Video shows a preview
-  and an explicit playback-unavailable message; desktop video is outside this milestone.
+  Scroll to zoom, drag to pan. Retry reloads an unsuccessful item. Linux videos play in the viewer
+  with pause, seeking, and volume. Proton video blocks decrypt on demand in memory. Codec support
+  depends on installed GStreamer plugins. Windows shows a preview for video.
 - The light and dark Gallery palettes follow Iced's system-theme notifications. `PG_SCALE_FACTOR=1.25`
   adds an application scaling override for reproducible layout checks (default 1).
 

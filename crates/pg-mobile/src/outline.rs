@@ -48,6 +48,16 @@ impl GalleryEngine {
         Ok(Arc::new(ViewOutline(outline)))
     }
 
+    pub fn unlocked_album_outline(
+        &self,
+        view: LibraryView,
+    ) -> Result<Arc<ViewOutline>, GalleryError> {
+        let outline =
+            self.runtime
+                .block_on(self.app.outline_with_visibility(view.into(), false, true))?;
+        Ok(Arc::new(ViewOutline(outline)))
+    }
+
     /// The records of `count` items from `start` of `outline`. An item removed
     /// since the outline was taken is `None`.
     pub fn outline_items(

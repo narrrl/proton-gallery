@@ -106,6 +106,10 @@ impl Catalog {
                 "DELETE FROM assets WHERE account=?1",
                 "DELETE FROM sources WHERE id IN forgotten_sources",
                 "DELETE FROM picker_changes WHERE account=?1",
+                "DELETE FROM gallery_configuration WHERE account=?1",
+                "DELETE FROM gallery_configuration_imported WHERE account=?1",
+                "DELETE FROM gallery_visibility_verified WHERE account=?1",
+                "DELETE FROM gallery_event_cursors WHERE account=?1",
             ] {
                 if sql.contains("?1") {
                     tx.execute(sql, [account])?;

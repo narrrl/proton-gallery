@@ -22,11 +22,15 @@ use std::sync::{
 
 pub mod account;
 pub mod albums;
+pub mod config_sync;
+pub mod drive_galleries;
 pub mod favorites;
 pub mod fixtures;
 pub mod library;
 pub mod media;
+pub mod sharing;
 pub mod sync;
+pub mod video;
 
 pub use account::{AccountState, SignInStage};
 pub use library::{MediaItem, Outline, View};
@@ -85,6 +89,8 @@ pub struct App {
     pub photos_sync: tokio::sync::Mutex<()>,
     pub indexed: AtomicU64,
     pub drive_sync: tokio::sync::Mutex<()>,
+    configuration_sync: tokio::sync::Mutex<()>,
+    configuration_poll: tokio::sync::Mutex<()>,
     pub drive_indexed: AtomicU64,
     pub backup_check: tokio::sync::Mutex<()>,
     /// Serializes restore, challenge continuations and account cleanup.
@@ -138,6 +144,8 @@ impl App {
             photos_sync: tokio::sync::Mutex::new(()),
             indexed: AtomicU64::new(0),
             drive_sync: tokio::sync::Mutex::new(()),
+            configuration_sync: tokio::sync::Mutex::new(()),
+            configuration_poll: tokio::sync::Mutex::new(()),
             drive_indexed: AtomicU64::new(0),
             backup_check: tokio::sync::Mutex::new(()),
             transition: tokio::sync::Mutex::new(()),

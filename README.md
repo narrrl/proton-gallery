@@ -41,8 +41,8 @@ This is an independent, unofficial client and is not affiliated with or endorsed
   view, hide the controls with a tap, select multiple items, and share phone or Proton
   originals with other apps.
 - **Hidden albums.** Hide photos into a hidden album in one step. Hidden albums and their
-  photos stay out of the timeline, album lists, and Android's photo picker until the phone's
-  fingerprint, face, or screen lock confirms you.
+  photos leave the timeline, visible album lists, and Android’s photo picker. Open a
+  hidden album with your phone’s screen lock or a local Gallery passphrase on desktop.
 
 **Backup and storage**
 
@@ -66,6 +66,9 @@ This is an independent, unofficial client and is not affiliated with or endorsed
   or hide an album behind the phone's lock.
 - **Keep Photos and Drive separate.** The top bar switches between the Photos timeline and
   your chosen folder galleries, while both use the same grid and viewer.
+- **Public Drive links.** Share an owned gallery folder with viewer access, an
+  optional password, and an optional expiry. Open the folder’s public-link panel
+  to copy or revoke its link.
 
 The app also offers light, dark, and device themes, native sign-in with two-factor
 authentication, and photo selection for other Android apps. Android 13+ cloud photo-picker
@@ -96,7 +99,7 @@ source using the steps below.
 | --- | --- |
 | Android app | Native Compose gallery, connected to Proton Photos and Drive |
 | Rust core and CLI | Local catalog, indexing, and headless diagnostics |
-| Linux and Windows desktop apps | Native Rust/Iced Photos browser in `crates/pg-desktop` with account access, a virtualized timeline, albums, favorites and a still-photo viewer ([instructions and acceptance gaps](docs/DESKTOP.md)) |
+| Linux and Windows desktop apps | Native Rust/Iced gallery with a virtualized Photos timeline, albums, favorites, and nested Drive galleries. Linux also supports in-app video playback. ([Desktop guide](docs/DESKTOP.md)) |
 
 Run the desktop browser with `cargo run -p pg-desktop --bin proton-gallery --locked`,
 or browse account-free fixtures with `-- --demo 100000`. Android retains its Compose
@@ -132,10 +135,12 @@ The [Android guide](docs/ANDROID.md) describes current behavior and platform lim
   (up to 256 MB) in the app's cache. Opened and shared originals and system-picker previews
   are decrypted into app-private cache storage; copies older than a day are removed. The
   metadata database and these caches are not encrypted beyond Android's app sandbox.
-- **Hidden albums are an app-level privacy control.** While a hidden album is open, the app
-  blocks screenshots and screen recording. Its thumbnails and originals stay in memory or
-  are deleted when hidden albums lock. Proton has no hidden albums, so the photos remain
-  visible in Proton Photos on other devices.
+- **Hidden albums are an app-level privacy control.** Refresh the upgraded Android
+  app first to import the hides you already made on your phone. Then refresh your other
+  Gallery devices. Gallery stores these settings in an end-to-end encrypted Proton Drive
+  device named **Proton Gallery settings**. Changes reach each device during its next
+  successful sync. Originals remain visible in Proton Photos, older Gallery versions,
+  and to recipients who already have access.
 - **Signing out removes the account's local data.** The catalog forgets decrypted names,
   album titles, backup state, and photo-picker previews for that account.
 

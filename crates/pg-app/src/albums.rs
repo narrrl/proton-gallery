@@ -43,16 +43,24 @@ pub fn album_failure(what: &'static str) -> impl Fn(proton_sdk::error::ProtonErr
 impl App {
     /// Visible albums of the active account; hidden mobile albums stay hidden.
     pub async fn photo_albums(&self) -> Result<Vec<pg_core::library::Album>> {
+        self.photo_albums_with_hidden(false).await
+    }
+
+    pub async fn photo_albums_with_hidden(
+        &self,
+        unlocked: bool,
+    ) -> Result<Vec<pg_core::library::Album>> {
         let generation = self.generation();
         let _operations = self.operations.read().await;
         let Some(account) = self.auth.account_id() else {
             return Ok(vec![]);
         };
+        self.require_gallery_visibility().await?;
         let albums = self.catalog.photo_albums(account).await?;
         self.ensure_current(generation)?;
         Ok(albums
             .into_iter()
-            .filter(|album| !album.settings.hidden)
+            .filter(|album| unlocked || !album.settings.hidden)
             .collect())
     }
 
@@ -98,7 +106,7 @@ impl App {
 
     /// Catalog records for album photos; photos the timeline does not hold
     /// (kept only in the album) are read from Proton.
-    async fn album_assets(
+    pub(crate) async fn album_assets(
         &self,
         photos: &ProtonPhotosClient,
         account: &AccountId,
