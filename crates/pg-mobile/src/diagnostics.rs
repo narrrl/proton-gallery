@@ -2,7 +2,7 @@
 //! the latest warnings, and a step-by-step check of the way to Proton.
 //!
 //! Nothing here records credentials. Warnings carry request paths, status
-//! codes and error causes only; see `pg_drive::auth::friendly`.
+//! codes and error causes only; see `proton_gallery_drive_rs::auth::friendly`.
 use crate::GalleryEngine;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -136,7 +136,7 @@ pub(crate) async fn connection_report() -> String {
         env!("CARGO_PKG_VERSION"),
         std::env::consts::ARCH
     );
-    let _ = writeln!(out, "Client: {}", pg_drive::APP_VERSION);
+    let _ = writeln!(out, "Client: {}", proton_gallery_drive_rs::APP_VERSION);
     let _ = writeln!(
         out,
         "Certificate check: {}",
@@ -184,7 +184,7 @@ pub(crate) async fn connection_report() -> String {
     }
 
     let start = Instant::now();
-    let config = pg_drive::client_configuration();
+    let config = proton_gallery_drive_rs::client_configuration();
     let request = proton_sdk::http::get_unauthenticated::<serde_json::Value>(&config, "tests/ping");
     let _ = match tokio::time::timeout(Duration::from_secs(60), request).await {
         Ok(Ok(_)) => writeln!(out, "Proton API: ok in {}", elapsed(start)),
@@ -192,7 +192,7 @@ pub(crate) async fn connection_report() -> String {
             out,
             "Proton API: FAILED after {}: {}",
             elapsed(start),
-            pg_drive::auth::cause_chain(&error)
+            proton_gallery_drive_rs::auth::cause_chain(&error)
         ),
         Err(_) => writeln!(out, "Proton API: TIMED OUT after {}", elapsed(start)),
     };

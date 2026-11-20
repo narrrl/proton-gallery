@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The catalog, Proton adapter and app services moved to the
+  [proton-rs](https://github.com/narrrl/proton-rs) workspace as
+  `proton-gallery-rs`, `proton-gallery-drive-rs` and `proton-gallery-app-rs`,
+  shared with Proton Drive Linux through crates.io. No behaviour change.
+
 - Unlock Hidden albums on desktop with your system sign-in through polkit on
   Linux or Windows Hello on Windows. Existing hidden settings are preserved.
 

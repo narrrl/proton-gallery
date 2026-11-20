@@ -101,8 +101,8 @@ val buildRust by tasks.registering(Exec::class) {
     // Native tools never need signing credentials, including in diagnostic output.
     environment = environment.filterKeys { it !in setOf("PG_ANDROID_STORE_PASSWORD", "PG_ANDROID_KEY_PASSWORD") }
     inputs.property("nativeAbis", nativeAbis)
-    inputs.files(fileTree("../../crates/pg-app"), fileTree("../../crates/pg-core/src"), fileTree("../../crates/pg-core/data"), fileTree("../../crates/pg-drive/src"), fileTree("../../crates/pg-mobile"))
-    inputs.files("../../Cargo.toml", "../../Cargo.lock", "../../crates/pg-core/Cargo.toml", "../../crates/pg-drive/Cargo.toml", "../../scripts/build-android.sh")
+    inputs.files(fileTree("../../crates/pg-mobile"))
+    inputs.files("../../Cargo.toml", "../../Cargo.lock", "../../scripts/build-android.sh")
     outputs.dir(layout.buildDirectory.dir("generated/uniffi"))
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
 }

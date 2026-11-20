@@ -72,7 +72,8 @@ impl Layout {
         let sections = sections(times);
         let starts: Vec<u32> = sections.iter().map(|(start, _)| *start as u32).collect();
         let ratios: Vec<f64> = ratios.iter().map(|&r| f64::from(r)).collect();
-        let Ok(grid) = pg_core::grid::plan_sections(&ratios, &starts, width, target, GAP) else {
+        let Ok(grid) = proton_gallery_rs::grid::plan_sections(&ratios, &starts, width, target, GAP)
+        else {
             return Self {
                 width,
                 ..Self::default()

@@ -2,10 +2,10 @@
 //! against Proton Photos, and uploads. The host reads files; Rust never opens
 //! a phone path itself.
 use super::*;
-use pg_core::phone::{self as core, BackupState};
 use proton_drive_rs::{
     PhotoTag, PhotoTagsUpdate, PhotoUploadMetadata, ProtonPhotosClient, Thumbnail, ThumbnailType,
 };
+use proton_gallery_rs::phone::{self as core, BackupState};
 use proton_sdk::api::ResponseCode;
 use proton_sdk::error::ProtonError;
 use std::io::Read;
@@ -114,7 +114,10 @@ impl Read for HostReader {
 
 fn remote_failure(what: &'static str) -> impl Fn(ProtonError) -> GalleryError {
     move |e| {
-        tracing::warn!("{what} failed: {}", pg_drive::auth::cause_chain(&e));
+        tracing::warn!(
+            "{what} failed: {}",
+            proton_gallery_drive_rs::auth::cause_chain(&e)
+        );
         GalleryError::Operation {
             detail: format!("Couldn’t {what}. Check your connection and try again."),
         }
@@ -123,7 +126,10 @@ fn remote_failure(what: &'static str) -> impl Fn(ProtonError) -> GalleryError {
 
 /// Why an upload failed, in words that suggest what to do about it.
 fn upload_failure(error: ProtonError) -> GalleryError {
-    tracing::warn!("upload failed: {}", pg_drive::auth::cause_chain(&error));
+    tracing::warn!(
+        "upload failed: {}",
+        proton_gallery_drive_rs::auth::cause_chain(&error)
+    );
     let detail = match &error {
         ProtonError::Transport(_) => {
             "Couldn’t reach Proton during the upload. It will try again.".to_owned()
@@ -302,7 +308,7 @@ impl GalleryEngine {
                 Ok(confirmed)
             };
             tokio::select! { biased;
-                _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+                _ = account.cancel.cancelled() => Err(proton_gallery_rs::Error::Cancelled.into()),
                 result = work => result,
             }
         })
@@ -374,8 +380,12 @@ impl GalleryEngine {
                             node,
                             match found.get(i).and_then(|matches| matches.first()) {
                                 Some(uid) => BackupState::BackedUp {
-                                    volume: pg_core::model::VolumeId::new(uid.volume_id.as_str())?,
-                                    node: pg_core::model::NodeId::new(uid.link_id.as_str())?,
+                                    volume: proton_gallery_rs::model::VolumeId::new(
+                                        uid.volume_id.as_str(),
+                                    )?,
+                                    node: proton_gallery_rs::model::NodeId::new(
+                                        uid.link_id.as_str(),
+                                    )?,
                                 },
                                 None => BackupState::Missing,
                             },
@@ -388,7 +398,7 @@ impl GalleryEngine {
                 ))
             };
             tokio::select! { biased;
-                _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+                _ = account.cancel.cancelled() => Err(proton_gallery_rs::Error::Cancelled.into()),
                 result = work => result,
             }
         })
@@ -498,7 +508,7 @@ impl GalleryEngine {
                     if let Err(e) = photos.update_photos(&[favorite]).await {
                         tracing::warn!(
                             "marking an uploaded favorite failed: {}",
-                            pg_drive::auth::cause_chain(&e)
+                            proton_gallery_drive_rs::auth::cause_chain(&e)
                         );
                     }
                 }
@@ -507,7 +517,7 @@ impl GalleryEngine {
                 Ok(UploadOutcome::Uploaded)
             };
             tokio::select! { biased;
-                _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+                _ = account.cancel.cancelled() => Err(proton_gallery_rs::Error::Cancelled.into()),
                 result = work => result,
             }
         })
@@ -531,13 +541,13 @@ impl GalleryEngine {
     async fn after_upload(
         &self,
         photos: &ProtonPhotosClient,
-        account: &pg_core::model::AccountId,
+        account: &proton_gallery_rs::model::AccountId,
         phone: &str,
         uid: proton_sdk::ids::NodeUid,
         taken: i64,
     ) -> Result<(), GalleryError> {
-        let volume = pg_core::model::VolumeId::new(uid.volume_id.as_str())?;
-        let node = pg_core::model::NodeId::new(uid.link_id.as_str())?;
+        let volume = proton_gallery_rs::model::VolumeId::new(uid.volume_id.as_str())?;
+        let node = proton_gallery_rs::model::NodeId::new(uid.link_id.as_str())?;
         self.catalog
             .phone_mark(
                 account.clone(),
@@ -553,7 +563,8 @@ impl GalleryEngine {
         };
         // Best effort: the next Photos sync adds it otherwise.
         if let Ok(Some(remote)) = photos.get_node(&uid).await
-            && let Ok(Some(asset)) = pg_drive::photos::photo_asset(account, remote, taken)
+            && let Ok(Some(asset)) =
+                proton_gallery_drive_rs::photos::photo_asset(account, remote, taken)
         {
             let key = asset.key.clone();
             self.catalog.add_to_source(source, asset).await?;

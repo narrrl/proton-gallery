@@ -9,7 +9,7 @@ use super::*;
 /// Every item of a view in display order. Taken once; later changes to the
 /// catalog need a new outline.
 #[derive(uniffi::Object)]
-pub struct ViewOutline(pg_app::Outline);
+pub struct ViewOutline(proton_gallery_app_rs::Outline);
 
 #[uniffi::export]
 impl ViewOutline {
@@ -85,8 +85,11 @@ impl GalleryEngine {
         asset_keys: Vec<String>,
         favorite: bool,
     ) -> Result<FavoriteOutcome, GalleryError> {
-        if asset_keys.len() > pg_app::favorites::MAX_FAVORITE_ITEMS {
-            return Err(pg_core::Error::Invalid("too many items to change at once".into()).into());
+        if asset_keys.len() > proton_gallery_app_rs::favorites::MAX_FAVORITE_ITEMS {
+            return Err(proton_gallery_rs::Error::Invalid(
+                "too many items to change at once".into(),
+            )
+            .into());
         }
         let keys = asset_keys
             .iter()

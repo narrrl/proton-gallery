@@ -3,8 +3,8 @@ use crate::gallery::Message;
 use iced::widget::canvas::{self, Action, Canvas, Path, Program};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Theme, Vector, color, mouse};
-use pg_app::places::{LocatedPhoto, PlacesScan};
-use pg_core::places::{self, Bubble, World};
+use proton_gallery_app_rs::places::{LocatedPhoto, PlacesScan};
+use proton_gallery_rs::places::{self, Bubble, World};
 use std::cell::RefCell;
 use std::sync::Arc;
 

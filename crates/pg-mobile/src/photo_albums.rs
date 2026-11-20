@@ -2,23 +2,23 @@
 //! tab, and changed here (create, rename, add, remove, delete) with the
 //! catalog updated at once so the screen never waits for the next sync.
 use super::*;
-use pg_core::model::AccountId;
 use proton_drive_rs::ProtonPhotosClient;
+use proton_gallery_rs::model::AccountId;
 use proton_sdk::ids::NodeUid;
 
-pub(crate) use pg_app::albums::{album_failure, album_spec, album_uid};
+pub(crate) use proton_gallery_app_rs::albums::{album_failure, album_spec, album_uid};
 
 impl GalleryEngine {
     pub(crate) async fn album_for(
         &self,
         id: &str,
-    ) -> Result<(pg_drive::auth::Account, SourceSpec), GalleryError> {
+    ) -> Result<(proton_gallery_drive_rs::auth::Account, SourceSpec), GalleryError> {
         let account = self.auth.account().await?;
         let spec = self
             .catalog
             .photo_album(account.id.clone(), SourceId::new(id)?)
             .await?
-            .ok_or(pg_core::Error::NotFound)?;
+            .ok_or(proton_gallery_rs::Error::NotFound)?;
         Ok((account, spec))
     }
 
@@ -31,7 +31,7 @@ impl GalleryEngine {
                         detail: "Invalid photo identity".into(),
                     })?;
                 if &key.account != account {
-                    return Err(pg_core::Error::NotFound.into());
+                    return Err(proton_gallery_rs::Error::NotFound.into());
                 }
                 Ok(key)
             })
@@ -66,9 +66,10 @@ impl GalleryEngine {
     pub fn create_album(&self, name: String) -> Result<FolderAlbum, GalleryError> {
         let name = name.trim().to_owned();
         if name.is_empty() || name.chars().count() > 200 {
-            return Err(
-                pg_core::Error::Invalid("An album name needs 1 to 200 characters.".into()).into(),
-            );
+            return Err(proton_gallery_rs::Error::Invalid(
+                "An album name needs 1 to 200 characters.".into(),
+            )
+            .into());
         }
         self.runtime.block_on(async {
             let account = self.auth.account().await?;
@@ -88,7 +89,7 @@ impl GalleryEngine {
                 .await?
                 .into_iter()
                 .next()
-                .ok_or(pg_core::Error::NotFound.into())
+                .ok_or(proton_gallery_rs::Error::NotFound.into())
         })
     }
 
@@ -100,7 +101,7 @@ impl GalleryEngine {
             self.catalog
                 .set_album_settings(
                     spec.id,
-                    pg_core::library::AlbumSettings { hidden, ..settings },
+                    proton_gallery_rs::library::AlbumSettings { hidden, ..settings },
                 )
                 .await?;
             Ok(())
@@ -117,7 +118,7 @@ impl GalleryEngine {
             let (account, spec) = self.album_for(&album).await?;
             let keys = Self::keys_of(&account.id, &asset_keys)?;
             let photos = ProtonPhotosClient::from_drive_client(account.drive.clone());
-            let uids: Vec<NodeUid> = keys.iter().map(pg_drive::node_uid).collect();
+            let uids: Vec<NodeUid> = keys.iter().map(proton_gallery_drive_rs::node_uid).collect();
             let outcomes = photos
                 .add_photos_to_album(&album_uid(&spec), &uids)
                 .await
@@ -132,7 +133,7 @@ impl GalleryEngine {
                         if matches!(e, proton_sdk::error::ProtonError::Api(api) if api.code == proton_sdk::api::ResponseCode::AlreadyExists) {
                             added.push(key.clone());
                         } else {
-                            tracing::warn!("adding one photo failed: {}", pg_drive::auth::cause_chain(e));
+                            tracing::warn!("adding one photo failed: {}", proton_gallery_drive_rs::auth::cause_chain(e));
                             failed += 1;
                         }
                     }
@@ -155,7 +156,7 @@ impl GalleryEngine {
             let (account, spec) = self.album_for(&album).await?;
             let keys = Self::keys_of(&account.id, &asset_keys)?;
             let photos = ProtonPhotosClient::from_drive_client(account.drive.clone());
-            let uids: Vec<NodeUid> = keys.iter().map(pg_drive::node_uid).collect();
+            let uids: Vec<NodeUid> = keys.iter().map(proton_gallery_drive_rs::node_uid).collect();
             let outcomes = photos
                 .remove_photos_from_album(&album_uid(&spec), &uids)
                 .await
@@ -177,9 +178,10 @@ impl GalleryEngine {
     pub fn rename_album(&self, album: String, name: String) -> Result<(), GalleryError> {
         let name = name.trim().to_owned();
         if name.is_empty() || name.chars().count() > 200 {
-            return Err(
-                pg_core::Error::Invalid("An album name needs 1 to 200 characters.".into()).into(),
-            );
+            return Err(proton_gallery_rs::Error::Invalid(
+                "An album name needs 1 to 200 characters.".into(),
+            )
+            .into());
         }
         self.runtime.block_on(async {
             let (account, spec) = self.album_for(&album).await?;

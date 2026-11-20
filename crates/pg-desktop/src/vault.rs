@@ -1,7 +1,7 @@
 //! Where the session is kept: the Linux Secret Service or the Windows
 //! Credential Manager. When neither works, the app says so and signs in only
 //! for this session if the user agrees; it never falls back to a file.
-use pg_drive::auth::{AuthError, CredentialVault, Result};
+use proton_gallery_drive_rs::auth::{AuthError, CredentialVault, Result};
 use std::sync::Mutex;
 
 const SERVICE: &str = "io.narl.protongallery";

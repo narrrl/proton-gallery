@@ -9,10 +9,16 @@ The CLI provides headless account and storage diagnostics. See the
 
 ## Implemented
 
-- Independent Rust workspace with `pg-core`, `pg-drive`, `pg-app`, `pg-cli`,
-  `pg-mobile`, and `pg-desktop`. The manifest and lockfile pin the registry SDK.
+- Rust workspace with `pg-cli`, `pg-mobile`, and `pg-desktop`. The gallery
+  core (`proton-gallery-rs`), Proton adapter (`proton-gallery-drive-rs`) and
+  app services (`proton-gallery-app-rs`) live in the
+  [proton-rs](https://github.com/narrrl/proton-rs) workspace and come from
+  crates.io; to build against a local checkout, put a `[patch.crates-io]` in a
+  `.cargo/config.toml` of the directory holding both checkouts (see the
+  proton-rs README). Never commit one here.
 - Shared account lifecycle, Photos queries, configuration sync, folder
-  galleries, public Drive links, still previews, and video reads in `pg-app`.
+  galleries, public Drive links, still previews, and video reads in
+  `proton-gallery-app-rs`.
 - Typed UniFFI mobile bridge, bidirectional keyset paging, durable content-addressed device imports, and forward-only schema migrations, typed source scopes, nested album trees, and stored media shapes. Kotlin supplies native Compose UI and platform media/picker integration.
 - A bounded async catalog facade over a dedicated SQLite thread. WAL, forward-only schema initialization, application identity checks, and refusal to open a newer or unrelated database.
 - Persistent source membership and timeline assets with full-key pagination, including tied timestamps. Queries can run while a remote scan is waiting for its next page.

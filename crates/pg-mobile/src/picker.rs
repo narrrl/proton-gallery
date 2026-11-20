@@ -3,7 +3,7 @@
 //! originals come from `photo_thumbnail`, `photo_preview` and
 //! `download_original`, keyed by the item's `remote_key`.
 use super::*;
-use pg_core::picker::{PICKER_PAGE_MAX, picker_mime};
+use proton_gallery_rs::picker::{PICKER_PAGE_MAX, picker_mime};
 
 /// What the picker should hold. The identifier changes with the account and
 /// when the catalog is rebuilt; then the picker reads everything again.
