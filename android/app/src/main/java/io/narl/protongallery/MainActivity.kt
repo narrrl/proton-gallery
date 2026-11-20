@@ -19,6 +19,7 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -59,6 +60,9 @@ class MainActivity : ComponentActivity() {
             val model: GalleryViewModel = viewModel()
             val state by model.state.collectAsStateWithLifecycle()
             val account by model.account.collectAsStateWithLifecycle()
+            // Not read here: only the activity line shows it, so its updates
+            // recompose that line instead of the whole screen.
+            val syncProgress = model.syncProgress.collectAsStateWithLifecycle()
             val location by model.location.collectAsStateWithLifecycle()
             val albums by model.albums.collectAsStateWithLifecycle()
             val options by model.options.collectAsStateWithLifecycle()
@@ -86,6 +90,8 @@ class MainActivity : ComponentActivity() {
                     PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(ThumbnailLoader.EDGE, ThumbnailLoader.EDGE), null) }
                 }
             }
+            // A replaced loader must not keep reading ahead for the old account.
+            DisposableEffect(thumbnails) { onDispose { thumbnails.close() } }
             val backup by model.backup.collectAsStateWithLifecycle()
             val access = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.phoneAccessChanged() }
             // Backup progress is shown as a notification; asked for when backup is first used.
@@ -159,6 +165,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val albumChoices by model.albumChoices.collectAsStateWithLifecycle()
+            val chooserActions = remember {
+                ChooserActions(model::openChooser, model::chooserOpen, model::chooserBack, model::chooserRetry, model::addGallery, model::closeChooser)
+            }
+            val placesActions = remember { PlacesActions(model::scanPlaces, model::placePhoto) }
+            val albumActions = remember(albumChoices) {
+                AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
+                    model::removeFromAlbum, model::deleteAlbum, model::hide)
+            }
             val media = remember { MediaActions(share = model::share, largePhoto = model::largePhoto, original = model::original, stream = model::videoStream, delete = model::delete,
                 favorite = model::favorite, forgetPrivate = model::forgetPrivate) }
             GalleryTheme(theme) {
@@ -179,15 +193,14 @@ class MainActivity : ComponentActivity() {
                     location = location, albums = albums, onNavigate = model::navigate, load = load,
                     onRetryView = { model.navigate(location) },
                     onDriveLink = model::openDriveLink,
-                    placesActions = PlacesActions(model::scanPlaces, model::placePhoto),
+                    placesActions = placesActions, syncProgress = { syncProgress.value },
                     account = account, onAccount = model::showAccount, onRefresh = model::refresh,
                     onCloseAccount = model::closeAccount, onSignIn = model::signIn,
                     onCode = model::secondFactor, onMailbox = model::mailboxPassword,
                     onVerification = model::verification, onSignOut = model::signOut, onRepairPhotos = model::repairPhotos,
                     options = options, onSaveOptions = { model.saveOptions(it) }, onCover = model::setCover,
                     tags = tags, tagFilter = tagFilter, onTag = model::filterTag,
-                    chooser = chooser, chooserActions = ChooserActions(model::openChooser, model::chooserOpen, model::chooserBack,
-                        model::chooserRetry, model::addGallery, model::closeChooser),
+                    chooser = chooser, chooserActions = chooserActions,
                     onRemoveGallery = model::removeGallery, onTestConnection = model::testConnection,
                     crashReport = crashReport, onDismissCrash = { crashReport = null },
                     backup = backup, backupActions = backupActions, media = media,
@@ -198,8 +211,7 @@ class MainActivity : ComponentActivity() {
                             setUp = { runCatching { startActivity(DeviceLock.setupIntent()) }.onFailure {
                                 startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } })
                     },
-                    albumActions = AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
-                        model::removeFromAlbum, model::deleteAlbum, model::hide),
+                    albumActions = albumActions,
                 )
                 driveLink?.let { link ->
                     DriveLinkDialog(link, location.private, model::openDriveLink, model::createDriveLink,

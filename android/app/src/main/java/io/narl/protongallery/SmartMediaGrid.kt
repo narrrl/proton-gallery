@@ -196,8 +196,21 @@ fun SmartMediaGrid(
     private: Boolean = false,
 ) {
     val density = LocalDensity.current
-    val hiddenCount = albums.count { it.hidden }
-    val shownAlbums = if (hiddenUnlocked) albums else albums.filterNot { it.hidden }
+    val hiddenCount = remember(albums) { albums.count { it.hidden } }
+    val shownAlbums = remember(albums, hiddenUnlocked) { if (hiddenUnlocked) albums else albums.filterNot { it.hidden } }
+    // Tiles get callbacks that stay the same across selection changes, so
+    // only the tiles whose selection changed recompose.
+    val currentSelection by rememberUpdatedState(selection)
+    val currentOnOpen by rememberUpdatedState(onOpen)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val tileClick = remember {
+        { position: Int, item: GalleryItem ->
+            val longPress = currentOnLongPress
+            if (currentSelection.isNotEmpty() && longPress != null) longPress(item) else currentOnOpen(position, item)
+        }
+    }
+    val tileLongClick = remember { { item: GalleryItem -> currentOnLongPress?.invoke(item); Unit } }
+    val selects = onLongPress != null
     val grouping = groupingFor(zoom)
     // The photo kept in view while pinching.
     var anchor by remember { mutableStateOf<String?>(null) }
@@ -210,8 +223,11 @@ fun SmartMediaGrid(
         val targetPx = with(density) { zoom.dp.roundToPx() }.coerceIn(1, 8192)
         val albumColumns = (maxWidth / 172.dp).toInt().coerceIn(2, 6)
         // The new-album card leads the album cards.
-        val cards: List<FolderAlbum?> = (if (onNewAlbum != null) listOf(null) else emptyList<FolderAlbum?>()) + shownAlbums
-        val albumRows = cards.chunked(albumColumns)
+        val newAlbum = onNewAlbum != null
+        val albumRows = remember(shownAlbums, newAlbum, albumColumns) {
+            val cards: List<FolderAlbum?> = (if (newAlbum) listOf(null) else emptyList<FolderAlbum?>()) + shownAlbums
+            cards.chunked(albumColumns)
+        }
         // Items listed before the photo rows; keep in step with the LazyColumn below.
         val leading = (if (tags.isNotEmpty()) 1 else 0) + (if (header != null) 1 else 0) +
             (if (shownAlbums.isNotEmpty()) 1 else 0) + albumRows.size + (if (hiddenCount > 0) 1 else 0)
@@ -249,8 +265,9 @@ fun SmartMediaGrid(
             catch (_: Exception) { failed = true }
         }
         val currentLayout by rememberUpdatedState(layout)
-        // Read ahead: the records and thumbnails of the next rows in the
-        // direction of travel, once scrolling slows down.
+        // Load the records of the rows on screen, then read ahead: the records
+        // and thumbnails of the next rows in the direction of travel, once
+        // scrolling slows down.
         LaunchedEffect(layout, private) {
             val shown = layout ?: return@LaunchedEffect
             var previous = 0
@@ -262,6 +279,10 @@ fun SmartMediaGrid(
                     val firstRow = (first - currentLeading).coerceIn(0, maxOf(0, rows.size - 1))
                     val lastRow = (last - currentLeading).coerceIn(0, maxOf(0, rows.size - 1))
                     if (rows.isEmpty()) return@collectLatest
+                    if (last - currentLeading >= 0) {
+                        val visible = (firstRow..lastRow).mapNotNull { rows[it] as? GalleryRow.Media }
+                        if (visible.isNotEmpty()) shown.outline.show(visible.first().start until visible.last().end)
+                    }
                     val ahead = if (down) (lastRow + 1)..minOf(rows.size - 1, lastRow + AHEAD_ROWS)
                         else maxOf(0, firstRow - AHEAD_ROWS) until firstRow
                     val items = ahead.flatMap { (rows[it] as? GalleryRow.Media)?.let { row -> row.start until row.end } ?: emptyList() }
@@ -345,10 +366,10 @@ fun SmartMediaGrid(
                                 val item = shown.outline.item(position)
                                 if (item == null) Box(tile.background(MaterialTheme.colorScheme.surfaceContainerHigh))
                                 else MediaTile(item, thumbnails,
-                                    onClick = { if (selection.isNotEmpty() && onLongPress != null) onLongPress(item) else onOpen(position, item) },
+                                    onClick = { tileClick(position, item) },
                                     modifier = tile,
                                     selected = if (selection.isEmpty()) null else item.id in selection,
-                                    onLongClick = onLongPress?.let { { it(item) } }, private = private)
+                                    onLongClick = if (selects) { { tileLongClick(item) } } else null, private = private)
                             }
                         }
                     }

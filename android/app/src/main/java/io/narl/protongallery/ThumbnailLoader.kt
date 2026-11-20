@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -83,6 +84,13 @@ class ThumbnailLoader(private val directory: File,
         }
     }
 
+    /** No longer shown (another account, or visibility changed): stop reading
+     * ahead and free the memory tier now instead of when it is collected. */
+    fun close() {
+        scope.cancel()
+        memory.evictAll()
+    }
+
     /** Hidden albums locked: drop their thumbnails and discard in-flight results. */
     fun forgetPrivate() {
         reading?.cancel()
@@ -109,8 +117,10 @@ class ThumbnailLoader(private val directory: File,
                 }
                 currentCoroutineContext().ensureActive()
                 val file = File(directory, fileName(cacheKey))
+                // Only shown, never read back: the default allocator puts it in
+                // graphics memory instead of the Java heap where it can.
                 val cached = if (!private && file.isFile) {
-                    try { ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE } }
+                    try { ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_DEFAULT } }
                     catch (_: Exception) { file.delete(); null }
                 } else null
                 if (cached != null) {
@@ -118,14 +128,17 @@ class ThumbnailLoader(private val directory: File,
                     memory.put(cacheKey, cached)
                     return@withLock cached
                 }
+                // Decoded in software so it can be written to disk as WebP;
+                // memory keeps a hardware copy for display.
                 val decoded = decode(item) ?: return@withLock null
                 currentCoroutineContext().ensureActive()
+                val shown = forDisplay(decoded)
                 synchronized(memory) {
                     if (private && generation != privateGeneration) return@withLock null
-                    memory.put(cacheKey, decoded)
+                    memory.put(cacheKey, shown)
                 }
                 if (!private) store(file, decoded)
-                decoded
+                shown
             }
         } finally {
             synchronized(locks) {
@@ -159,6 +172,12 @@ class ThumbnailLoader(private val directory: File,
             ThumbnailUtils.createVideoThumbnail(File(item.localPath), size, CancellationSignal())
         } else decodeImage(File(item.localPath), EDGE)
     }
+
+    // A hardware copy keeps grid thumbnails off the Java heap. The software
+    // original is still needed once, to write the disk tier.
+    private fun forDisplay(bitmap: Bitmap): Bitmap =
+        if (bitmap.config == Bitmap.Config.HARDWARE) bitmap
+        else runCatching { bitmap.copy(Bitmap.Config.HARDWARE, false) }.getOrNull() ?: bitmap
 
     // A failed write must not hide the decoded image.
     private fun store(file: File, bitmap: Bitmap) = runCatching {
@@ -204,25 +223,35 @@ class ThumbnailLoader(private val directory: File,
         /** A sixth of the app's memory, between 24 and 160 MB: several screens of tiles. */
         private fun memoryBudget(): Int = (Runtime.getRuntime().maxMemory() / 6).coerceIn(24L shl 20, 160L shl 20).toInt()
 
-        fun decodeUri(context: android.content.Context, uri: android.net.Uri, longestEdge: Int): Bitmap =
+        /** The longest edge of the screen: a photo shown whole never needs
+         * more pixels than that. */
+        fun screenEdge(context: android.content.Context): Int {
+            val metrics = context.resources.displayMetrics
+            return maxOf(metrics.widthPixels, metrics.heightPixels).coerceIn(1024, 4096)
+        }
+
+        // Pass ImageDecoder.ALLOCATOR_DEFAULT for bitmaps that are only shown,
+        // never read back or encoded: they then live in graphics memory.
+        fun decodeUri(context: android.content.Context, uri: android.net.Uri, longestEdge: Int,
+            allocator: Int = ImageDecoder.ALLOCATOR_SOFTWARE): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.allocator = allocator
             }
 
-        fun decodeBytes(bytes: ByteArray, longestEdge: Int): Bitmap =
+        fun decodeBytes(bytes: ByteArray, longestEdge: Int, allocator: Int = ImageDecoder.ALLOCATOR_SOFTWARE): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.allocator = allocator
             }
 
-        fun decodeImage(file: File, longestEdge: Int): Bitmap =
+        fun decodeImage(file: File, longestEdge: Int, allocator: Int = ImageDecoder.ALLOCATOR_SOFTWARE): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.allocator = allocator
             }
     }
 }
