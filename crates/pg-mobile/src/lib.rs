@@ -1,7 +1,7 @@
 //! Thin synchronous ABI. Android calls it on Dispatchers.IO; Rust owns all
 //! catalog/file operations. Only bounded thumbnails cross the media ABI.
-use pg_core::model::AssetKey;
-use pg_drive::auth::{AuthError, CredentialVault};
+use proton_gallery_drive_rs::auth::{AuthError, CredentialVault};
+use proton_gallery_rs::model::AssetKey;
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
 
@@ -21,8 +21,8 @@ mod places;
 mod trash;
 mod video;
 
-use pg_core::library::SourceKind;
-use pg_core::model::{MediaKind, NodeId, PageSize, SourceId, SourceSpec};
+use proton_gallery_rs::library::SourceKind;
+use proton_gallery_rs::model::{MediaKind, NodeId, PageSize, SourceId, SourceSpec};
 
 uniffi::setup_scaffolding!();
 
@@ -34,10 +34,10 @@ pub enum GalleryError {
     Operation { detail: String },
 }
 
-impl From<pg_app::Error> for GalleryError {
-    fn from(error: pg_app::Error) -> Self {
+impl From<proton_gallery_app_rs::Error> for GalleryError {
+    fn from(error: proton_gallery_app_rs::Error) -> Self {
         match error {
-            pg_app::Error::SessionExpired => Self::SessionExpired,
+            proton_gallery_app_rs::Error::SessionExpired => Self::SessionExpired,
             error => Self::Operation {
                 detail: error.to_string(),
             },
@@ -45,8 +45,8 @@ impl From<pg_app::Error> for GalleryError {
     }
 }
 
-impl From<pg_core::Error> for GalleryError {
-    fn from(error: pg_core::Error) -> Self {
+impl From<proton_gallery_rs::Error> for GalleryError {
+    fn from(error: proton_gallery_rs::Error) -> Self {
         Self::Operation {
             detail: error.to_string(),
         }
@@ -133,20 +133,22 @@ pub fn plan_smart_grid(
     target: u32,
     gap: u32,
 ) -> Result<Vec<SmartRow>, GalleryError> {
-    Ok(pg_core::grid::plan_justified(&ratios, width, target, gap)?
-        .into_iter()
-        .map(|row| SmartRow {
-            start: row.start as u32,
-            tiles: row
-                .tiles
-                .into_iter()
-                .map(|t| SmartTile {
-                    width: t.width,
-                    height: t.height,
-                })
-                .collect(),
-        })
-        .collect())
+    Ok(
+        proton_gallery_rs::grid::plan_justified(&ratios, width, target, gap)?
+            .into_iter()
+            .map(|row| SmartRow {
+                start: row.start as u32,
+                tiles: row
+                    .tiles
+                    .into_iter()
+                    .map(|t| SmartTile {
+                        width: t.width,
+                        height: t.height,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    )
 }
 
 /// Every row of a view: see [`plan_grid`].
@@ -172,7 +174,7 @@ pub fn plan_grid(
     gap: u32,
 ) -> Result<GridPlan, GalleryError> {
     let ratios: Vec<f64> = ratios.into_iter().map(f64::from).collect();
-    let grid = pg_core::grid::plan_sections(&ratios, &sections, width, target, gap)?;
+    let grid = proton_gallery_rs::grid::plan_sections(&ratios, &sections, width, target, gap)?;
     Ok(GridPlan {
         row_starts: grid.row_starts,
         row_heights: grid.row_heights,
@@ -199,18 +201,18 @@ pub struct DeviceTotals {
 #[derive(uniffi::Object)]
 pub struct GalleryEngine {
     runtime: tokio::runtime::Runtime,
-    app: pg_app::App,
+    app: proton_gallery_app_rs::App,
 }
 
 /// The adapter's modules reach the catalog, account and locks of the app.
 impl std::ops::Deref for GalleryEngine {
-    type Target = pg_app::App;
-    fn deref(&self) -> &pg_app::App {
+    type Target = proton_gallery_app_rs::App;
+    fn deref(&self) -> &proton_gallery_app_rs::App {
         &self.app
     }
 }
 
-impl From<LibraryView> for pg_app::View {
+impl From<LibraryView> for proton_gallery_app_rs::View {
     fn from(view: LibraryView) -> Self {
         match view {
             LibraryView::Photos => Self::Photos,
@@ -221,7 +223,7 @@ impl From<LibraryView> for pg_app::View {
 }
 
 impl GalleryItem {
-    fn from_media(item: pg_app::MediaItem) -> Result<Self, GalleryError> {
+    fn from_media(item: proton_gallery_app_rs::MediaItem) -> Result<Self, GalleryError> {
         let key = serde_json::to_string(&item.key).map_err(|_| GalleryError::Operation {
             detail: "Invalid asset identity".into(),
         })?;
@@ -274,10 +276,10 @@ impl GalleryEngine {
             .worker_threads(2)
             .enable_all()
             .build()
-            .map_err(pg_core::Error::Io)?;
+            .map_err(proton_gallery_rs::Error::Io)?;
         let root = PathBuf::from(data_dir);
         diagnostics::set_panic_file(root.join("last-panic.txt"));
-        let app = runtime.block_on(pg_app::App::open(root, vault))?;
+        let app = runtime.block_on(proton_gallery_app_rs::App::open(root, vault))?;
         Ok(Arc::new(Self { runtime, app }))
     }
 
@@ -289,7 +291,7 @@ impl GalleryEngine {
     /// Bridge records for catalog assets, with local files and known shapes.
     async fn items(
         &self,
-        assets: Vec<pg_core::model::Asset>,
+        assets: Vec<proton_gallery_rs::model::Asset>,
     ) -> Result<Vec<GalleryItem>, GalleryError> {
         self.app
             .media_items(assets)
@@ -301,7 +303,7 @@ impl GalleryEngine {
 
     async fn folder_albums(
         &self,
-        albums: Vec<pg_core::library::Album>,
+        albums: Vec<proton_gallery_rs::library::Album>,
     ) -> Result<Vec<FolderAlbum>, GalleryError> {
         let covers = self
             .items(albums.iter().filter_map(|a| a.cover.clone()).collect())
@@ -420,7 +422,9 @@ impl GalleryEngine {
         height: u32,
     ) -> Result<(), GalleryError> {
         if width > 1_000_000 || height > 1_000_000 || (width == 0) != (height == 0) {
-            return Err(pg_core::Error::Invalid("invalid media dimensions".into()).into());
+            return Err(
+                proton_gallery_rs::Error::Invalid("invalid media dimensions".into()).into(),
+            );
         }
         self.runtime.block_on(async {
             let key = self
@@ -432,7 +436,7 @@ impl GalleryEngine {
                 // original into a reported failed import (e.g. low disk space).
                 let _ = self.catalog.remember_shape(key, width, height).await;
             }
-            pg_core::Result::Ok(())
+            proton_gallery_rs::Result::Ok(())
         })?;
         Ok(())
     }

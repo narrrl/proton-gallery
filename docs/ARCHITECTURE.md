@@ -1,8 +1,10 @@
 # Architecture
 
 Android calls shared application services through `pg-mobile`. The Rust/Iced
-desktop calls `pg-app` directly. Both use `pg-core` for the SQLite catalog and
-layout and `pg-drive` for Proton SDK access. The sections below record the target
+desktop calls `proton-gallery-app-rs` directly. Both use `proton-gallery-rs` for
+the SQLite catalog and layout and `proton-gallery-drive-rs` for Proton SDK
+access. These three crates live in the proton-rs workspace and are shared with
+Proton Drive Linux. The sections below record the target
 architecture for shared scheduling, media jobs, offline retention, and durable
 media-event reconciliation.
 

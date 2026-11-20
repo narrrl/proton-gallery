@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pg-core", "crates/pg-drive", "crates/pg-app", "crates/pg-cli", "crates/pg-mobile", "crates/pg-desktop"]
+members = ["crates/pg-cli", "crates/pg-mobile", "crates/pg-desktop"]
 
 [workspace.package]
 version = "0.3.0"
@@ -9,9 +9,11 @@ rust-version = "1.96"
 license = "MIT"
 
 [workspace.dependencies]
-pg-core = { path = "crates/pg-core" }
-pg-drive = { path = "crates/pg-drive" }
-pg-app = { path = "crates/pg-app" }
+# Gallery core, Drive adapter and app services, shared with proton-drive-linux
+# through crates.io (https://github.com/narrrl/proton-rs).
+proton-gallery-rs = "0.1.0"
+proton-gallery-drive-rs = "0.1.0"
+proton-gallery-app-rs = "0.1.0"
 proton-sdk = "=0.12.1"
 proton-drive-rs = "=0.12.1"
 aes-gcm = { version = "0.11", features = ["zeroize"] }

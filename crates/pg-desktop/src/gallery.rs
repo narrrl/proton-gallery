@@ -22,10 +22,10 @@ use iced::{
     Alignment, Color, ContentFit, Element, Event, Length, Rectangle, Renderer, Size, Subscription,
     Task, Theme, Vector, window,
 };
-use pg_app::drive_galleries::{FolderChoice, FolderListing};
-use pg_app::fixtures::{FixtureMedia, MediaProvider};
-use pg_app::sharing::{PublicLink, PublicLinkAction};
-use pg_app::{
+use proton_gallery_app_rs::drive_galleries::{FolderChoice, FolderListing};
+use proton_gallery_app_rs::fixtures::{FixtureMedia, MediaProvider};
+use proton_gallery_app_rs::sharing::{PublicLink, PublicLinkAction};
+use proton_gallery_app_rs::{
     AccountState, App, Generation, MediaItem, Outline, PhotosSyncStatus, SignInStage, View,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -294,7 +294,7 @@ impl std::fmt::Display for Section {
 
 #[derive(Default)]
 struct DriveNavigation {
-    trail: Vec<pg_core::library::Album>,
+    trail: Vec<proton_gallery_rs::library::Album>,
     parent_scroll: Vec<f32>,
     restore_scroll: Option<f32>,
     chooser: Option<Vec<FolderChoice>>,
@@ -340,7 +340,7 @@ pub struct Gallery {
     view: View,
     section: Section,
     album_open: bool,
-    albums: Vec<pg_core::library::Album>,
+    albums: Vec<proton_gallery_rs::library::Album>,
     albums_request: u64,
     albums_loading: bool,
     drive: DriveNavigation,
@@ -414,8 +414,14 @@ pub enum Message {
     RetryPhotos,
     RepairPhotos,
     SettingsChecked(Generation, Result<Option<bool>, String>),
-    PhotosStatus(Generation, Result<PhotosSyncStatus, pg_app::Error>),
-    Synced(Generation, Result<PhotosSyncStatus, pg_app::Error>),
+    PhotosStatus(
+        Generation,
+        Result<PhotosSyncStatus, proton_gallery_app_rs::Error>,
+    ),
+    Synced(
+        Generation,
+        Result<PhotosSyncStatus, proton_gallery_app_rs::Error>,
+    ),
     DemoReady(Result<usize, String>),
     OutlineLoaded(u64, Generation, Result<Arc<Outline>, String>),
     Relayout,
@@ -461,9 +467,13 @@ pub enum Message {
     PlacesReady(
         u64,
         Generation,
-        Result<Arc<pg_app::places::PlacesScan>, String>,
+        Result<Arc<proton_gallery_app_rs::places::PlacesScan>, String>,
     ),
-    PlacesBatch(u64, Generation, Result<pg_app::places::PlacesBatch, String>),
+    PlacesBatch(
+        u64,
+        Generation,
+        Result<proton_gallery_app_rs::places::PlacesBatch, String>,
+    ),
     PlacesCamera(Camera),
     PlacesSelect(Vec<usize>),
     PlacesListAll,
@@ -493,7 +503,7 @@ pub enum Message {
     AlbumsLoaded(
         u64,
         Generation,
-        Result<Vec<pg_core::library::Album>, String>,
+        Result<Vec<proton_gallery_rs::library::Album>, String>,
     ),
     GridSize(u32),
     GridZoom(bool),
@@ -501,9 +511,9 @@ pub enum Message {
     FavoriteDone(
         u64,
         Generation,
-        pg_core::model::AssetKey,
+        proton_gallery_rs::model::AssetKey,
         bool,
-        Result<pg_app::favorites::FavoriteOutcome, String>,
+        Result<proton_gallery_app_rs::favorites::FavoriteOutcome, String>,
     ),
     Ignored,
 }
@@ -528,7 +538,7 @@ where
     Task::perform(async move { f(app).await }, done)
 }
 
-fn shown(error: pg_app::Error) -> String {
+fn shown(error: proton_gallery_app_rs::Error) -> String {
     error.to_string()
 }
 
@@ -610,7 +620,7 @@ impl Gallery {
                 let keyring = tokio::task::spawn_blocking(vault::keyring_available)
                     .await
                     .unwrap_or(false);
-                let vault: Arc<dyn pg_drive::auth::CredentialVault> = if keyring {
+                let vault: Arc<dyn proton_gallery_drive_rs::auth::CredentialVault> = if keyring {
                     Arc::new(vault::KeyringVault)
                 } else {
                     Arc::new(vault::TemporaryVault::default())
@@ -742,14 +752,14 @@ impl Gallery {
                     return spawn(
                         &app,
                         move |app| async move {
-                            let source = pg_core::synthetic::SyntheticSource::new(count)
+                            let source = proton_gallery_rs::synthetic::SyntheticSource::new(count)
                                 .map_err(|e| e.to_string())?;
-                            let cancel = pg_core::CancellationToken::new();
+                            let cancel = proton_gallery_rs::CancellationToken::new();
                             let done = app
                                 .index_source(&source, app.generation(), &cancel, |_| {})
                                 .await
                                 .map_err(shown)?;
-                            pg_app::fixtures::seed_collections(&app)
+                            proton_gallery_app_rs::fixtures::seed_collections(&app)
                                 .await
                                 .map_err(shown)?;
                             Ok(done.indexed as usize)
@@ -1010,9 +1020,9 @@ impl Gallery {
                 let expired = self.sync.expired;
                 self.sync = SyncState::default();
                 self.form = SignInForm {
-                    error: result
-                        .err()
-                        .or_else(|| expired.then(|| pg_app::Error::SessionExpired.to_string())),
+                    error: result.err().or_else(|| {
+                        expired.then(|| proton_gallery_app_rs::Error::SessionExpired.to_string())
+                    }),
                     ..SignInForm::default()
                 };
                 Task::none()
@@ -1156,10 +1166,14 @@ impl Gallery {
                         }
                         reload
                     }
-                    Err(pg_app::Error::Cancelled | pg_app::Error::Stale) => Task::none(),
-                    Err(pg_app::Error::SessionExpired) => {
+                    Err(
+                        proton_gallery_app_rs::Error::Cancelled
+                        | proton_gallery_app_rs::Error::Stale,
+                    ) => Task::none(),
+                    Err(proton_gallery_app_rs::Error::SessionExpired) => {
                         self.sync.expired = true;
-                        self.sync.error = Some(pg_app::Error::SessionExpired.to_string());
+                        self.sync.error =
+                            Some(proton_gallery_app_rs::Error::SessionExpired.to_string());
                         self.read_photos_status()
                     }
                     Err(error) => {
@@ -2115,7 +2129,7 @@ impl Gallery {
                 } else if demo {
                     app.catalog
                         .photo_albums(
-                            pg_core::model::AccountId::new("synthetic")
+                            proton_gallery_rs::model::AccountId::new("synthetic")
                                 .map_err(|e| e.to_string())?,
                         )
                         .await
@@ -2256,7 +2270,7 @@ impl Gallery {
         if self.drive.chooser.is_some() {
             return self.load_drive_folders();
         }
-        let folder_uid = |album: &pg_core::library::Album| {
+        let folder_uid = |album: &proton_gallery_rs::library::Album| {
             proton_sdk::ids::NodeUid::new(
                 album.source.volume.to_string().into(),
                 album.source.root.to_string().into(),
@@ -2334,7 +2348,7 @@ impl Gallery {
                         .set_favorite(vec![key], favorite)
                         .await
                         .map_err(|e| e.to_string())?;
-                    Ok(pg_app::favorites::FavoriteOutcome {
+                    Ok(proton_gallery_app_rs::favorites::FavoriteOutcome {
                         changed: 1,
                         failed: 0,
                     })
@@ -2593,7 +2607,7 @@ impl Gallery {
                     load_grid_image(
                         provider.as_ref(),
                         &cover.key,
-                        cover.kind == pg_core::model::MediaKind::Video,
+                        cover.kind == proton_gallery_rs::model::MediaKind::Video,
                         cover.size_bytes.unwrap_or(0),
                     )
                     .await
@@ -4255,7 +4269,7 @@ fn action<'a>(icon: Icon, label: &'a str) -> iced::widget::Button<'a, Message> {
     .padding([7, 10])
 }
 
-fn cover_id(asset: &pg_core::model::Asset) -> String {
+fn cover_id(asset: &proton_gallery_rs::model::Asset) -> String {
     format!("cover:{:?}:{:?}", asset.key, asset.revision)
 }
 
@@ -4268,7 +4282,7 @@ async fn load_thumbnail(
 }
 
 async fn decode_rendition(
-    response: pg_app::Result<Option<Vec<u8>>>,
+    response: proton_gallery_app_rs::Result<Option<Vec<u8>>>,
     side: u32,
 ) -> Result<Option<Decoded>, String> {
     match response.map_err(shown)? {
@@ -4279,7 +4293,7 @@ async fn decode_rendition(
 
 async fn load_grid_image(
     provider: &dyn MediaProvider,
-    key: &pg_core::model::AssetKey,
+    key: &proton_gallery_rs::model::AssetKey,
     video: bool,
     size: u64,
 ) -> Result<Option<Decoded>, String> {
@@ -4407,11 +4421,11 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let source = pg_core::synthetic::SyntheticSource::new(count).unwrap();
+        let source = proton_gallery_rs::synthetic::SyntheticSource::new(count).unwrap();
         app.index_source(
             &source,
             app.generation(),
-            &pg_core::CancellationToken::new(),
+            &proton_gallery_rs::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -4433,34 +4447,34 @@ mod tests {
         impl MediaProvider for FallbackMedia {
             async fn thumbnail(
                 &self,
-                _: &pg_core::model::AssetKey,
-            ) -> pg_app::Result<Option<Vec<u8>>> {
+                _: &proton_gallery_rs::model::AssetKey,
+            ) -> proton_gallery_app_rs::Result<Option<Vec<u8>>> {
                 Ok(Some(b"invalid thumbnail".to_vec()))
             }
 
             async fn preview(
                 &self,
-                _: &pg_core::model::AssetKey,
-            ) -> pg_app::Result<Option<Vec<u8>>> {
+                _: &proton_gallery_rs::model::AssetKey,
+            ) -> proton_gallery_app_rs::Result<Option<Vec<u8>>> {
                 Ok(Some(b"invalid preview".to_vec()))
             }
 
             async fn original_bytes(
                 &self,
-                _: &pg_core::model::AssetKey,
+                _: &proton_gallery_rs::model::AssetKey,
                 limit: u64,
-            ) -> pg_app::Result<Vec<u8>> {
+            ) -> proton_gallery_app_rs::Result<Vec<u8>> {
                 assert_eq!(limit, ORIGINAL_LIMIT);
                 Ok(self.0.clone())
             }
 
             async fn original(
                 &self,
-                _: &pg_core::model::AssetKey,
+                _: &proton_gallery_rs::model::AssetKey,
                 _: &str,
                 _: &std::path::Path,
                 _: u64,
-            ) -> pg_app::Result<PathBuf> {
+            ) -> proton_gallery_app_rs::Result<PathBuf> {
                 panic!("the grid never writes an original")
             }
         }

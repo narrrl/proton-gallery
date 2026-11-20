@@ -15,15 +15,15 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for GalleryError {
 }
 pub struct PlatformVault(pub Box<dyn SessionVault>);
 impl CredentialVault for PlatformVault {
-    fn load(&self) -> pg_drive::auth::Result<Option<Vec<u8>>> {
+    fn load(&self) -> proton_gallery_drive_rs::auth::Result<Option<Vec<u8>>> {
         self.0
             .load()
             .map_err(|_| AuthError("Your saved session couldn’t be read securely. Sign in again."))
     }
-    fn save(&self, bytes: &[u8]) -> pg_drive::auth::Result<()> {
+    fn save(&self, bytes: &[u8]) -> proton_gallery_drive_rs::auth::Result<()> {
         self.0.save(bytes.to_vec()).map_err(|_|AuthError("Your session couldn’t be saved securely. Check available device storage and try again."))
     }
-    fn clear(&self) -> pg_drive::auth::Result<()> {
+    fn clear(&self) -> proton_gallery_drive_rs::auth::Result<()> {
         self.0
             .clear()
             .map_err(|_| AuthError("The saved session couldn’t be removed. Try signing out again."))
@@ -31,13 +31,13 @@ impl CredentialVault for PlatformVault {
 }
 pub struct TransientVault;
 impl CredentialVault for TransientVault {
-    fn load(&self) -> pg_drive::auth::Result<Option<Vec<u8>>> {
+    fn load(&self) -> proton_gallery_drive_rs::auth::Result<Option<Vec<u8>>> {
         Ok(None)
     }
-    fn save(&self, _: &[u8]) -> pg_drive::auth::Result<()> {
+    fn save(&self, _: &[u8]) -> proton_gallery_drive_rs::auth::Result<()> {
         Err(AuthError("A secure platform vault is required to sign in."))
     }
-    fn clear(&self) -> pg_drive::auth::Result<()> {
+    fn clear(&self) -> proton_gallery_drive_rs::auth::Result<()> {
         Ok(())
     }
 }
@@ -64,15 +64,15 @@ pub struct AccountStatus {
     pub persistence_failed: bool,
 }
 
-impl From<pg_app::AccountState> for AccountStatus {
-    fn from(state: pg_app::AccountState) -> Self {
+impl From<proton_gallery_app_rs::AccountState> for AccountStatus {
+    fn from(state: proton_gallery_app_rs::AccountState) -> Self {
         Self {
             stage: match state.stage {
-                pg_app::SignInStage::SignedOut => SignInStage::SignedOut,
-                pg_app::SignInStage::SecondFactor => SignInStage::SecondFactor,
-                pg_app::SignInStage::MailboxPassword => SignInStage::MailboxPassword,
-                pg_app::SignInStage::Verification => SignInStage::Verification,
-                pg_app::SignInStage::Connected => SignInStage::Connected,
+                proton_gallery_app_rs::SignInStage::SignedOut => SignInStage::SignedOut,
+                proton_gallery_app_rs::SignInStage::SecondFactor => SignInStage::SecondFactor,
+                proton_gallery_app_rs::SignInStage::MailboxPassword => SignInStage::MailboxPassword,
+                proton_gallery_app_rs::SignInStage::Verification => SignInStage::Verification,
+                proton_gallery_app_rs::SignInStage::Connected => SignInStage::Connected,
             },
             username: state.username,
             verification_url: state.verification_url,
@@ -89,8 +89,8 @@ pub struct PhotosSyncStatus {
     pub retry: bool,
 }
 
-impl From<pg_app::PhotosSyncStatus> for PhotosSyncStatus {
-    fn from(status: pg_app::PhotosSyncStatus) -> Self {
+impl From<proton_gallery_app_rs::PhotosSyncStatus> for PhotosSyncStatus {
+    fn from(status: proton_gallery_app_rs::PhotosSyncStatus) -> Self {
         Self {
             revision: status.revision,
             last_success: status.last_success,

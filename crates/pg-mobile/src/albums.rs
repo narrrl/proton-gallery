@@ -1,9 +1,9 @@
 //! Drive galleries (a chosen folder; each folder below it is an album) and
 //! local presentation settings for albums and timelines.
 use super::*;
-use pg_core::library::{AlbumSettings, Grouping};
-use pg_core::model::{AccountId, SortOrder};
 use proton_drive_rs::Node;
+use proton_gallery_rs::library::{AlbumSettings, Grouping};
+use proton_gallery_rs::model::{AccountId, SortOrder};
 use proton_sdk::ids::NodeUid;
 
 /// How a grid is divided into headed sections.
@@ -136,7 +136,10 @@ fn folder_uid(id: &str) -> Result<NodeUid, GalleryError> {
 }
 
 fn remote(what: &str, error: &dyn std::error::Error) -> GalleryError {
-    tracing::warn!("{what}: {}", pg_drive::auth::cause_chain(error));
+    tracing::warn!(
+        "{what}: {}",
+        proton_gallery_drive_rs::auth::cause_chain(error)
+    );
     GalleryError::Operation {
         detail: format!("{what}. Check your connection and try again."),
     }
@@ -184,7 +187,7 @@ impl GalleryEngine {
             let source = self
                 .view_source(view)
                 .await?
-                .ok_or(pg_core::Error::NotFound)?;
+                .ok_or(proton_gallery_rs::Error::NotFound)?;
             self::options(
                 self.catalog
                     .set_album_settings_at(gallery, source, settings)
@@ -234,7 +237,7 @@ impl GalleryEngine {
                         .get_node(&folder_uid(id)?)
                         .await
                         .map_err(|e| remote("Couldn’t open this folder", &e))?
-                        .ok_or(pg_core::Error::NotFound)?,
+                        .ok_or(proton_gallery_rs::Error::NotFound)?,
                 };
                 if !folder.is_folder() || folder.trashed {
                     return Err(invalid("Choose an active folder"));
@@ -267,7 +270,7 @@ impl GalleryEngine {
             };
             tokio::select! {
                 biased;
-                _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+                _ = account.cancel.cancelled() => Err(proton_gallery_rs::Error::Cancelled.into()),
                 result = tokio::time::timeout(std::time::Duration::from_secs(90), work) =>
                     result.map_err(|_| invalid("Proton took too long to respond. Try again."))?,
             }
@@ -282,7 +285,10 @@ impl GalleryEngine {
         let generation = self.app.generation();
         let gallery = self.scan_drive_gallery(Some(uid), None)?;
         self.runtime.block_on(async {
-            let account = self.auth.account_id().ok_or(pg_core::Error::NotFound)?;
+            let account = self
+                .auth
+                .account_id()
+                .ok_or(proton_gallery_rs::Error::NotFound)?;
             self.app.ensure_current(generation)?;
             self.catalog
                 .set_gallery_configuration_membership(account, SourceId::new(&gallery)?)
@@ -299,7 +305,10 @@ impl GalleryEngine {
 
     /// Remove a gallery from this app. Nothing is deleted from Drive.
     pub fn remove_drive_gallery(&self, gallery: String) -> Result<(), GalleryError> {
-        let account = self.auth.account_id().ok_or(pg_core::Error::NotFound)?;
+        let account = self
+            .auth
+            .account_id()
+            .ok_or(proton_gallery_rs::Error::NotFound)?;
         self.runtime.block_on(
             self.catalog
                 .remove_gallery(SourceId::new(gallery)?, account),
@@ -314,7 +323,7 @@ impl GalleryEngine {
         account: &AccountId,
         node: &Node,
     ) -> Result<DriveFolder, GalleryError> {
-        let id = pg_drive::folder_source_id(account, node)?;
+        let id = proton_gallery_drive_rs::folder_source_id(account, node)?;
         Ok(DriveFolder {
             id: format!(
                 "{}~{}",
@@ -347,7 +356,7 @@ impl GalleryEngine {
                             .source_belongs_to(gallery.clone(), account.id.clone())
                             .await?
                     {
-                        return Err(pg_core::Error::NotFound.into());
+                        return Err(proton_gallery_rs::Error::NotFound.into());
                     }
                     let spec = self
                         .catalog
@@ -355,22 +364,22 @@ impl GalleryEngine {
                         .await?
                         .into_iter()
                         .find(|s| s.id == gallery)
-                        .ok_or(pg_core::Error::NotFound)?;
+                        .ok_or(proton_gallery_rs::Error::NotFound)?;
                     NodeUid::new(spec.volume.as_str().into(), spec.root.as_str().into())
                 }
-                (None, None) => return Err(pg_core::Error::NotFound.into()),
+                (None, None) => return Err(proton_gallery_rs::Error::NotFound.into()),
             };
             let root = tokio::select! {
                 biased;
-                _ = account.cancel.cancelled() => return Err(pg_core::Error::Cancelled.into()),
+                _ = account.cancel.cancelled() => return Err(proton_gallery_rs::Error::Cancelled.into()),
                 result = account.drive.get_node(&uid) => result
                     .map_err(|e| remote("Couldn’t open this folder", &e))?
-                    .ok_or(pg_core::Error::NotFound)?,
+                    .ok_or(proton_gallery_rs::Error::NotFound)?,
             };
             let indexed = &self.drive_indexed;
             // Media found so far across albums: finished albums plus the current one.
             let (mut done, mut last, mut current) = (0u64, 0u64, None);
-            let gallery = pg_drive::galleries::scan_gallery(
+            let gallery = proton_gallery_drive_rs::galleries::scan_gallery(
                 &self.catalog,
                 account.drive.clone(),
                 account.id.clone(),
@@ -388,7 +397,7 @@ impl GalleryEngine {
             )
             .await
             .map_err(|e| match e {
-                pg_core::Error::Remote(_) => remote("Couldn’t read this Drive folder", &e),
+                proton_gallery_rs::Error::Remote(_) => remote("Couldn’t read this Drive folder", &e),
                 other => other.into(),
             })?;
             Ok(gallery.to_string())
@@ -410,7 +419,11 @@ impl GalleryEngine {
         gallery: String,
         album: String,
     ) -> Result<Option<PublicDriveLink>, GalleryError> {
-        self.drive_link(gallery, album, pg_app::sharing::PublicLinkAction::Read)
+        self.drive_link(
+            gallery,
+            album,
+            proton_gallery_app_rs::sharing::PublicLinkAction::Read,
+        )
     }
 
     pub fn create_public_drive_link(
@@ -423,7 +436,7 @@ impl GalleryEngine {
         self.drive_link(
             gallery,
             album,
-            pg_app::sharing::PublicLinkAction::Create {
+            proton_gallery_app_rs::sharing::PublicLinkAction::Create {
                 password: password.into(),
                 expires,
             },
@@ -435,7 +448,11 @@ impl GalleryEngine {
         gallery: String,
         album: String,
     ) -> Result<Option<PublicDriveLink>, GalleryError> {
-        self.drive_link(gallery, album, pg_app::sharing::PublicLinkAction::Revoke)
+        self.drive_link(
+            gallery,
+            album,
+            proton_gallery_app_rs::sharing::PublicLinkAction::Revoke,
+        )
     }
 }
 
@@ -444,7 +461,7 @@ impl GalleryEngine {
         &self,
         gallery: String,
         album: String,
-        action: pg_app::sharing::PublicLinkAction,
+        action: proton_gallery_app_rs::sharing::PublicLinkAction,
     ) -> Result<Option<PublicDriveLink>, GalleryError> {
         let link = self
             .runtime

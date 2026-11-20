@@ -1,10 +1,10 @@
 use crate::gallery::Message;
 use iced::Task;
-use pg_app::Generation;
+use proton_gallery_app_rs::Generation;
 
 #[cfg(target_os = "linux")]
 pub fn authenticate(request: u64, generation: Generation) -> Task<Message> {
-    use pg_app::desktop_auth::Subject;
+    use proton_gallery_app_rs::desktop_auth::Subject;
 
     Task::perform(
         async {

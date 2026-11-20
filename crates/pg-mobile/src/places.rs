@@ -1,6 +1,6 @@
 use super::*;
-use pg_app::places::PlacesScan;
-use pg_core::places;
+use proton_gallery_app_rs::places::PlacesScan;
+use proton_gallery_rs::places;
 use std::future::{Future, poll_fn};
 use std::pin::pin;
 

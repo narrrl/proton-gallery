@@ -99,7 +99,10 @@ impl GalleryEngine {
                 loop {
                     let adds = self
                         .catalog
-                        .album_adds(account.id.clone(), pg_core::backup_albums::ALBUM_ADDS_MAX)
+                        .album_adds(
+                            account.id.clone(),
+                            proton_gallery_rs::backup_albums::ALBUM_ADDS_MAX,
+                        )
                         .await?;
                     if adds.is_empty() {
                         break;
@@ -120,7 +123,7 @@ impl GalleryEngine {
                         for batch in adds.chunks(100) {
                             let uids: Vec<NodeUid> = batch
                                 .iter()
-                                .map(|a| pg_drive::node_uid(&a.remote))
+                                .map(|a| proton_gallery_drive_rs::node_uid(&a.remote))
                                 .collect();
                             let outcomes = photos
                                 .add_photos_to_album(&album_uid(&spec), &uids)
@@ -140,7 +143,7 @@ impl GalleryEngine {
                                     Some((_, Err(e))) => {
                                         tracing::warn!(
                                             "adding a backup to its album failed: {}",
-                                            pg_drive::auth::cause_chain(e)
+                                            proton_gallery_drive_rs::auth::cause_chain(e)
                                         );
                                         false
                                     }
@@ -168,7 +171,7 @@ impl GalleryEngine {
                 Ok::<_, GalleryError>(total)
             };
             tokio::select! { biased;
-                _ = account.cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+                _ = account.cancel.cancelled() => Err(proton_gallery_rs::Error::Cancelled.into()),
                 result = work => result,
             }
         })

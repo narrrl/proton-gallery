@@ -4,15 +4,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-use pg_core::bytes::{ObjectStore, RangeReader, RevisionDescriptor};
-use pg_core::catalog::Catalog;
-use pg_core::model::*;
-use pg_core::source::{BlockSource, MediaSource};
-use pg_core::synthetic::{SyntheticBlocks, SyntheticSource};
-use pg_core::{CancellationToken, indexer};
-use pg_drive::{ProtonFolderSource, photos::ProtonPhotosSource};
 use proton_drive_rs::ProtonPhotosClient;
 use proton_drive_rs::{Node, ProtonDriveClient};
+use proton_gallery_drive_rs::{ProtonFolderSource, photos::ProtonPhotosSource};
+use proton_gallery_rs::bytes::{ObjectStore, RangeReader, RevisionDescriptor};
+use proton_gallery_rs::catalog::Catalog;
+use proton_gallery_rs::model::*;
+use proton_gallery_rs::source::{BlockSource, MediaSource};
+use proton_gallery_rs::synthetic::{SyntheticBlocks, SyntheticSource};
+use proton_gallery_rs::{CancellationToken, indexer};
 use proton_sdk::error::ProtonError;
 use proton_sdk::ids::NodeUid;
 use proton_sdk::session::{PasswordMode, ProtonApiSession};
@@ -266,7 +266,7 @@ async fn execute(
         } => {
             let (client, account) = sign_in(&username, cancel).await?;
             let root = find_folder(&client, Some(&folder), cancel).await?;
-            let gallery = pg_drive::galleries::scan_gallery(
+            let gallery = proton_gallery_drive_rs::galleries::scan_gallery(
                 &catalog,
                 client,
                 account,
@@ -344,7 +344,7 @@ async fn sign_in(
     let password = Zeroizing::new(rpassword::prompt_password("Proton password: ")?);
     let mut session = cancellable(cancel, async {
         ProtonApiSession::begin(
-            pg_drive::client_configuration(),
+            proton_gallery_drive_rs::client_configuration(),
             username,
             password.as_bytes(),
         )
@@ -441,7 +441,7 @@ async fn cancellable<T>(
 ) -> Result<T> {
     tokio::select! {
         biased;
-        _ = cancel.cancelled() => Err(pg_core::Error::Cancelled.into()),
+        _ = cancel.cancelled() => Err(proton_gallery_rs::Error::Cancelled.into()),
         result = work => result,
     }
 }
@@ -487,7 +487,7 @@ async fn offline_demo(
                 }
             })
             .await;
-        if matches!(result, Err(pg_core::Error::Cancelled)) {
+        if matches!(result, Err(proton_gallery_rs::Error::Cancelled)) {
             println!(
                 "{}",
                 serde_json::json!({ "complete": false, "paused": true, "remote_blocks_fetched": remote.calls() })

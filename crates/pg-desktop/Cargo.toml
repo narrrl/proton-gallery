@@ -11,9 +11,9 @@ name = "proton-gallery"
 path = "src/main.rs"
 
 [dependencies]
-pg-app.workspace = true
-pg-core.workspace = true
-pg-drive.workspace = true
+proton-gallery-app-rs.workspace = true
+proton-gallery-rs.workspace = true
+proton-gallery-drive-rs.workspace = true
 proton-sdk.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true

@@ -3,7 +3,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
-use pg_app::video::VideoStream;
+use proton_gallery_app_rs::video::VideoStream;
 use std::sync::{Arc, Mutex};
 
 type FrameSlot = Arc<Mutex<Option<Result<crate::thumbs::Decoded, String>>>>;
