@@ -7,6 +7,12 @@
   `proton-gallery-rs`, `proton-gallery-drive-rs` and `proton-gallery-app-rs`,
   shared with Proton Drive Linux through crates.io. No behaviour change.
 
+- The desktop app keeps its sign-in through `proton-auth-rs`, the keyring store
+  shared with Proton Drive Linux and Proton Stream. It reconnects when the
+  Secret Service restarts, and on Linux a refreshed sign-in replaces its
+  keyring item instead of editing it, so oo7 before 0.7.0 no longer loses it
+  on reboot. Existing saved sign-ins keep working.
+
 - Unlock Hidden albums on desktop with your system sign-in through polkit on
   Linux or Windows Hello on Windows. Existing hidden settings are preserved.
 

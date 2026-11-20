@@ -14,6 +14,7 @@ license = "MIT"
 proton-gallery-rs = "0.1.0"
 proton-gallery-drive-rs = "0.1.0"
 proton-gallery-app-rs = "0.1.0"
+proton-auth-rs = "0.1"
 proton-sdk = "=0.12.1"
 proton-drive-rs = "=0.12.1"
 aes-gcm = { version = "0.11", features = ["zeroize"] }
