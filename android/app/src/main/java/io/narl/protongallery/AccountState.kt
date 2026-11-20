@@ -10,12 +10,10 @@ data class AccountState(
     val visible: Boolean = false,
     // Proton Photos sync and the Drive gallery sync run independently.
     val syncing: Boolean = false,
-    val indexed: Long = 0,
     val lastPhotosSync: Long? = null,
     val sessionExpired: Boolean = false,
     // The gallery being added or refreshed, e.g. "Holidays" or "your galleries".
     val driveSync: String? = null,
-    val driveIndexed: Long = 0,
     // Changes on account boundaries; clears remote previews and paging sessions.
     val generation: Int = 0,
     val visibilityReady: Boolean = true,
@@ -27,3 +25,8 @@ data class AccountState(
 ) {
     val connected get() = status.stage == SignInStage.CONNECTED
 }
+
+/** Items found so far by the running syncs. Kept apart from [AccountState]: it
+ * changes every few hundred milliseconds while a sync runs, and only the
+ * activity line shows it. */
+data class SyncProgress(val indexed: Long = 0, val driveIndexed: Long = 0)

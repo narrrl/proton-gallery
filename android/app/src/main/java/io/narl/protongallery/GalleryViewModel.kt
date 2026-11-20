@@ -127,6 +127,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
     private val mutableAccount = MutableStateFlow(AccountState())
     val account = mutableAccount.asStateFlow()
+    private val mutableSyncProgress = MutableStateFlow(SyncProgress())
+    val syncProgress = mutableSyncProgress.asStateFlow()
     private var closingAccount = false
     private var authJob: Job? = null
     private var photosJob: Job? = null
@@ -242,6 +244,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     File(getApplication<Application>().cacheDir, "picker").deleteRecursively()
                     Originals.directory(getApplication()).deleteRecursively()
                 }
+                mutableSyncProgress.value = SyncProgress()
                 mutableAccount.update { AccountState(generation = it.generation + 1, visible = expired,
                     error = if (expired) "Your Proton session expired. Sign in again to sync your library." else null) }
                 PhotoPicker.changed(getApplication())
@@ -330,9 +333,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private fun runDrive(label: String, failure: String, after: suspend (GalleryRepository) -> Unit = {}, action: suspend (GalleryRepository) -> Unit) {
         val repo = repository.value ?: return
         if (!mutableAccount.value.connected || driveJob?.isActive == true) return
-        mutableAccount.update { it.copy(driveSync = label, driveIndexed = 0) }
+        mutableSyncProgress.update { it.copy(driveIndexed = 0) }
+        mutableAccount.update { it.copy(driveSync = label) }
         driveJob = viewModelScope.launch(guard) {
-            val progress = watchProgress(repo, { it.driveProgress().toLong() }) { indexed -> mutableAccount.update { it.copy(driveIndexed = indexed) } }
+            val progress = watchProgress(repo, { it.driveProgress().toLong() }) { indexed -> mutableSyncProgress.update { it.copy(driveIndexed = indexed) } }
             try {
                 action(repo)
                 refreshDetails(repo)
@@ -807,9 +811,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             PhotosSync.state.collect { sync ->
                 if (!account.value.connected || account.value.busy) return@collect
                 mutableAccount.update {
-                    it.copy(syncing = sync.running, indexed = sync.indexed, lastPhotosSync = sync.lastSuccess,
+                    it.copy(syncing = sync.running, lastPhotosSync = sync.lastSuccess,
                         sessionExpired = sync.expired, visible = it.visible || sync.expired)
                 }
+                mutableSyncProgress.update { it.copy(indexed = sync.indexed) }
                 if (message != sync.message && sync.message != null && !sync.expired) {
                     mutableState.update { it.copy(message = sync.message, error = true) }
                 }

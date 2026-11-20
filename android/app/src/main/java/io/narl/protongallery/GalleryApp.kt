@@ -145,6 +145,8 @@ fun GalleryApp(
     privacy: PrivacyLock = PrivacyLock(),
     onDriveLink: () -> Unit = {},
     placesActions: PlacesActions = PlacesActions(),
+    // Read only where the counts show, so progress does not recompose the screen.
+    syncProgress: () -> SyncProgress = { SyncProgress() },
 ) {
     var backupSheet by rememberSaveable { mutableStateOf(false) }
     // Selected timeline items by id, in the order they were chosen.
@@ -220,7 +222,10 @@ fun GalleryApp(
     val albumsRoot = location.section == GallerySection.Albums && location.album == null
     val canAddToAlbum = (location.section == GallerySection.Photos || location.section == GallerySection.Albums) && account.connected
     val refreshing = !device && if (drive) account.driveSync != null else account.syncing
+    // What is going on; the bar under the top bar only needs to know that
+    // something is, while the labels also show how far the syncs are.
     val activity = currentActivity(state, account, backup, location.section)
+    val liveActivity = { currentActivity(state, account, backup, location.section, syncProgress()) }
     val count = outline?.count?.toLong() ?: 0L
     LaunchedEffect(account.generation, account.visibilityRevision) {
         selected = null
@@ -371,11 +376,11 @@ fun GalleryApp(
                     }
                     else -> Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         SectionSwitch(location.section) { onNavigate(GalleryLocation(it)) }
-                        Text(activity?.label ?: if (!device && account.visibilityStale && account.visibilityReady) "Visibility may be out of date" else "",
+                        Text(liveActivity()?.label ?: if (!device && account.visibilityStale && account.visibilityReady) "Visibility may be out of date" else "",
                             Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (driveRoot && account.connected) IconButton(onClick = chooserActions.open) { Icon(Icons.Outlined.Add, "Add gallery") }
-                        AccountButton(account, activity) { menu = true }
+                        AccountButton(account, liveActivity()) { menu = true }
                     }
                 }
                 ActivityBar(activity)
@@ -386,7 +391,7 @@ fun GalleryApp(
     }
     }
 
-    if (menu) AppMenu(state, account, activity, theme, onTheme, onDismiss = { menu = false },
+    if (menu) AppMenu(state, account, liveActivity, syncProgress, theme, onTheme, onDismiss = { menu = false },
         onAccount = { menu = false; onAccount() }, onRefresh = { menu = false; onRefresh() },
         backup = backup, onBackup = { menu = false; backupSheet = true })
     if (backupSheet) BackupSheet(backup, account.connected, backupActions, onSignIn = { backupSheet = false; onAccount() },
@@ -552,15 +557,17 @@ private fun AlbumHeader(album: FolderAlbum, items: Long, children: Int) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppMenu(
-    state: LibraryState, account: AccountState, activity: Activity?, theme: ThemeMode, onTheme: (ThemeMode) -> Unit,
+    state: LibraryState, account: AccountState, liveActivity: () -> Activity?, syncProgress: () -> SyncProgress,
+    theme: ThemeMode, onTheme: (ThemeMode) -> Unit,
     onDismiss: () -> Unit, onAccount: () -> Unit, onRefresh: () -> Unit,
     backup: BackupState, onBackup: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            val activity = liveActivity()
             ListItem(
                 headlineContent = { Text(if (account.connected) account.status.username else "Not signed in", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                supportingContent = { Text(activity?.label ?: syncSummary(account)) },
+                supportingContent = { Text(activity?.label ?: syncSummary(account, syncProgress())) },
                 leadingContent = { AccountButton(account, activity, onAccount) },
                 trailingContent = { if (account.connected) TextButton(onClick = onAccount) { Text("Manage") } else Button(onClick = onAccount) { Text("Sign in") } },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -584,12 +591,12 @@ private fun AppMenu(
     }
 }
 
-private fun syncSummary(account: AccountState): String {
+private fun syncSummary(account: AccountState, sync: SyncProgress): String {
     val format = NumberFormat.getIntegerInstance()
     return when {
         !account.connected -> "Sign in to see Proton Photos and Drive"
-        account.driveSync != null -> "Reading ${account.driveSync}" + if (account.driveIndexed > 0) ": ${format.format(account.driveIndexed)} found" else "…"
-        account.syncing -> "Updating Proton Photos" + if (account.indexed > 0) ": ${format.format(account.indexed)} found" else "…"
+        account.driveSync != null -> "Reading ${account.driveSync}" + if (sync.driveIndexed > 0) ": ${format.format(sync.driveIndexed)} found" else "…"
+        account.syncing -> "Updating Proton Photos" + if (sync.indexed > 0) ": ${format.format(sync.indexed)} found" else "…"
         else -> "Proton Photos is up to date"
     }
 }
