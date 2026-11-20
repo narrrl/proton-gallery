@@ -19,7 +19,8 @@
   on reboot. Existing saved sign-ins keep working.
 
 - Sign-in now runs the same password, second-factor and mailbox-password steps
-  as Proton Drive Linux and Proton Stream (`proton-gallery-drive-rs` 0.1.1).
+  as Proton Drive Linux and Proton Stream. The steps live in the SDK as
+  `proton_sdk::login` (proton-sdk 0.12.2, `proton-gallery-drive-rs` 0.1.2).
   Saved sign-ins and messages are unchanged.
 
 - Unlock Hidden albums on desktop with your system sign-in through polkit on
