@@ -18,6 +18,10 @@
   keyring item instead of editing it, so oo7 before 0.7.0 no longer loses it
   on reboot. Existing saved sign-ins keep working.
 
+- Sign-in now runs the same password, second-factor and mailbox-password steps
+  as Proton Drive Linux and Proton Stream (`proton-gallery-drive-rs` 0.1.1).
+  Saved sign-ins and messages are unchanged.
+
 - Unlock Hidden albums on desktop with your system sign-in through polkit on
   Linux or Windows Hello on Windows. Existing hidden settings are preserved.
 
