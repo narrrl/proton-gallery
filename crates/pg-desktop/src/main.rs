@@ -14,6 +14,8 @@ mod thumbs;
 mod vault;
 #[cfg(target_os = "linux")]
 mod video;
+#[cfg(target_os = "linux")]
+mod video_surface;
 
 use gallery::{Gallery, Options};
 

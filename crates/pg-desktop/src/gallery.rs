@@ -709,8 +709,20 @@ impl Gallery {
             .as_ref()
             .is_some_and(|viewer| viewer.player.is_some())
         {
-            subscriptions
-                .push(iced::time::every(Duration::from_millis(33)).map(|_| Message::VideoTick));
+            // Every tick redraws the video surface, which shows the newest
+            // frame; 16 ms keeps 60 fps video at its rate while playing.
+            // Paused, a tick only has to notice a frame a seek brings and the
+            // player's messages, so it slows down instead of redrawing an
+            // unchanged frame 30 times a second.
+            let (playing, buffering) = self.viewer.as_ref().map_or((false, false), |viewer| {
+                (viewer.playback.playing, viewer.playback.buffering)
+            });
+            let tick = Duration::from_millis(match (playing, buffering) {
+                (true, _) => 16,
+                (false, true) => 33,
+                (false, false) => 100,
+            });
+            subscriptions.push(iced::time::every(tick).map(|_| Message::VideoTick));
         }
         Subscription::batch(subscriptions)
     }
@@ -1409,24 +1421,21 @@ impl Gallery {
                         };
                         state.ended = false;
                         state.playing = !state.playing;
-                        start
-                            .and_then(|()| player.set_playing(state.playing && !state.buffering))
-                            .map(|()| None)
+                        start.and_then(|()| player.set_playing(state.playing && !state.buffering))
                     }
                     Message::VideoSeek(seconds) => {
                         state.ended = false;
-                        player.seek(seconds).map(|()| None)
+                        player.seek(seconds)
                     }
                     Message::VideoVolume(volume) => {
                         state.volume = volume;
                         player.volume(volume);
-                        Ok(None)
+                        Ok(())
                     }
                     _ => player.poll(state),
                 };
                 match result {
-                    Ok(Some(frame)) => viewer.image = Some(frame),
-                    Ok(None) => {}
+                    Ok(()) => {}
                     Err(error) => {
                         viewer.message = Some(error);
                         viewer.player = None;
@@ -4100,18 +4109,23 @@ impl Gallery {
             None => Space::new().width(Length::Fill).height(Length::Fill).into(),
         };
         #[cfg(target_os = "linux")]
-        let body: Element<'_, Message> = if viewer.player.is_some() {
-            if let Some(decoded) = &viewer.image {
-                image(decoded.handle.clone())
-                    .content_fit(ContentFit::Contain)
+        let body: Element<'_, Message> = match &viewer.player {
+            Some(player) if player.frames().has_frame() => {
+                iced::widget::shader(crate::video_surface::VideoProgram::new(player.frames()))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .into()
-            } else {
-                center(text("Buffering video…")).into()
             }
-        } else {
-            body
+            // The thumbnail stands in until the first frame is decoded.
+            Some(_) => match &viewer.image {
+                Some(decoded) => image(decoded.handle.clone())
+                    .content_fit(ContentFit::Contain)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into(),
+                None => center(text("Buffering video…")).into(),
+            },
+            None => body,
         };
         let body = iced::widget::keyed_column([(
             self.viewer_request,

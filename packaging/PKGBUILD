@@ -13,11 +13,13 @@ license=('MIT')
 depends=('dbus' 'polkit' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11'
          'libx11' 'libxcursor' 'libxi' 'libxrandr' 'wayland' 'libglvnd'
          'vulkan-icd-loader' 'hicolor-icon-theme' 'xdg-utils' 'ca-certificates'
-         'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav')
+         'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-libav')
 makedepends=('cargo' 'pkgconf')
 optdepends=('gnome-keyring: save sessions using Secret Service'
             'kwallet: save sessions using KDE Secret Service'
-            'ttf-dejavu: fallback fonts for the desktop interface')
+            'ttf-dejavu: fallback fonts for the desktop interface'
+            'gst-plugin-va: hardware video decoding'
+            'gst-plugins-ugly: older video formats')
 options=('!lto' '!debug')
 
 # Sources are already present in the working tree. Cargo may fetch missing
