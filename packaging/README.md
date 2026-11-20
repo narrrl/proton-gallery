@@ -71,8 +71,9 @@ the binary's minimum glibc version.
 A working Wayland or X11 session, graphics driver and fonts are needed. Saved
 sessions require a running Secret Service provider, such as GNOME Keyring or
 KWallet with Secret Service enabled. Without one, the app offers a temporary
-session. GStreamer plugins provide video codec support. On Fedora, install
-`gstreamer1-plugin-libav` if it is available and your video needs codecs
-from that plugin. `xdg-utils` provides the browser-opening command used by
+session. GStreamer plugins provide video codec support; the viewer names a missing
+codec when a video needs one. Fedora's own repositories ship H.264 through
+`gstreamer1-plugin-openh264` and leave HEVC out; phone videos in HEVC need
+`gstreamer1-plugin-libav` from RPM Fusion. `xdg-utils` provides the browser-opening command used by
 CAPTCHA sign-in. [Desktop guide](../docs/DESKTOP.md) ·
 [Signing and release workflow](../docs/RELEASING.md)

@@ -39,7 +39,9 @@ Requires: xdg-utils
 Requires: ca-certificates
 Requires: gstreamer1-plugins-base
 Requires: gstreamer1-plugins-good
+Requires: gstreamer1-plugins-bad-free
 Recommends: gstreamer1-plugin-libav
+Recommends: gstreamer1-plugin-openh264
 Suggests: gnome-keyring
 
 %description

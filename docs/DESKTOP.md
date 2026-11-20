@@ -22,7 +22,8 @@ for Debian/Ubuntu and Fedora installers, prerequisites and Secret Service setup.
 Install Rust (workspace minimum 1.96) and the platform development libraries. On
 Debian/Ubuntu the CI dependencies are `libdbus-1-dev libxkbcommon-dev libwayland-dev
 libudev-dev libegl1-mesa-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev`.
-Install the GStreamer base, good and libav plugins for runtime codecs. A functioning Wayland or X11 display and graphics driver
+Install the GStreamer base, good, bad and libav plugins for runtime codecs.
+When a video needs a codec that is not installed, the viewer names it. A functioning Wayland or X11 display and graphics driver
 are needed to run; Windows builds use the MSVC toolchain and Windows SDK.
 
 ```sh

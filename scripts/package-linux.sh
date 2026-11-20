@@ -51,7 +51,7 @@ Section: graphics
 Priority: optional
 Architecture: amd64
 Maintainer: Nils Pukropp <contact@narl.io>
-Depends: polkitd, libc6 (>= $glibc), libgcc-s1, libdbus-1-3, libfontconfig1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxi6, libxrandr2, libwayland-client0, libwayland-cursor0, libwayland-egl1, libegl1, libgl1, libvulkan1, hicolor-icon-theme, xdg-utils, ca-certificates, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav
+Depends: polkitd, libc6 (>= $glibc), libgcc-s1, libdbus-1-3, libfontconfig1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxi6, libxrandr2, libwayland-client0, libwayland-cursor0, libwayland-egl1, libegl1, libgl1, libvulkan1, hicolor-icon-theme, xdg-utils, ca-certificates, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav
 Suggests: gnome-keyring
 Installed-Size: $(du -sk "$stage/deb/usr" | cut -f1)
 Homepage: https://github.com/narrrl/proton-gallery

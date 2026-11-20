@@ -2,16 +2,19 @@
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
-use gstreamer_video as gst_video;
+use gstreamer_pbutils as gst_pbutils;
 use proton_gallery_app_rs::video::VideoStream;
 use std::sync::{Arc, Mutex};
 
-type FrameSlot = Arc<Mutex<Option<Result<crate::thumbs::Decoded, String>>>>;
+use crate::video_surface::FrameSlot;
 
 pub struct Player {
     pipeline: gst::Element,
-    frame: FrameSlot,
+    frame: Arc<FrameSlot>,
     stream: Option<Arc<VideoStream>>,
+    /// Codecs GStreamer looked for and did not find, in Proton's words for
+    /// them ("H.265 (Main Profile) decoder").
+    missing: Mutex<Vec<String>>,
 }
 
 impl std::fmt::Debug for Player {
@@ -46,19 +49,20 @@ impl Player {
             .drop(true)
             .sync(true)
             .build();
-        let frame = Arc::new(Mutex::new(None));
+        // Samples go to the GPU as they are; no copy on this side.
+        let frame = Arc::new(FrameSlot::default());
         let output = frame.clone();
         let preroll = frame.clone();
         sink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
                     let sample = sink.pull_sample().map_err(|_| gst::FlowError::Flushing)?;
-                    *output.lock().unwrap_or_else(|e| e.into_inner()) = Some(decode(sample));
+                    output.store(sample);
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .new_preroll(move |sink| {
                     let sample = sink.pull_preroll().map_err(|_| gst::FlowError::Flushing)?;
-                    *preroll.lock().unwrap_or_else(|e| e.into_inner()) = Some(decode(sample));
+                    preroll.store(sample);
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -94,6 +98,7 @@ impl Player {
             pipeline,
             frame,
             stream,
+            missing: Mutex::default(),
         };
         player.set_playing(true)?;
         Ok(player)
@@ -123,7 +128,12 @@ impl Player {
         self.pipeline.set_property("volume", volume.clamp(0.0, 1.0));
     }
 
-    pub fn poll(&self, state: &mut Playback) -> Result<Option<crate::thumbs::Decoded>, String> {
+    /// The frames, for the video surface.
+    pub fn frames(&self) -> Arc<FrameSlot> {
+        self.frame.clone()
+    }
+
+    pub fn poll(&self, state: &mut Playback) -> Result<(), String> {
         if let Some(bus) = self.pipeline.bus() {
             for message in bus.iter() {
                 use gst::MessageView;
@@ -139,12 +149,31 @@ impl Player {
                         state.ended = true;
                         state.playing = false;
                     }
+                    MessageView::Element(_) => {
+                        let Ok(missing) = gst_pbutils::MissingPluginMessage::parse(&message) else {
+                            continue;
+                        };
+                        let description = missing.description().to_string();
+                        let detail = missing.installer_detail();
+                        tracing::warn!("GStreamer plugin missing: {description} ({detail})");
+                        self.missing
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(description.clone());
+                        // playbin carries on without a stream it can't decode:
+                        // silently for audio, which is fine, but a video that
+                        // never shows a frame needs saying why.
+                        if detail.contains("decoder-video/") {
+                            return Err(missing_codec(Some(&description)));
+                        }
+                    }
                     MessageView::Error(error) => {
-                        tracing::debug!("video decoder: {}", error.error());
-                        return Err(
-                            "Couldn’t play this video. Check your connection and installed codecs."
-                                .into(),
+                        tracing::warn!(
+                            "video playback failed: {} ({:?})",
+                            error.error(),
+                            error.debug()
                         );
+                        return Err(self.explain(error.error()));
                     }
                     _ => {}
                 }
@@ -156,11 +185,37 @@ impl Player {
         if let Some(time) = self.pipeline.query_position::<gst::ClockTime>() {
             state.position = time.mseconds() as f64 / 1000.0;
         }
-        self.frame
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .transpose()
+        Ok(())
+    }
+
+    /// Say what went wrong in terms the user can act on.
+    fn explain(&self, error: gst::glib::Error) -> String {
+        let missing = self.missing.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(description) = missing.first() {
+            return missing_codec(Some(description));
+        }
+        if error.matches(gst::StreamError::CodecNotFound)
+            || error.matches(gst::StreamError::TypeNotFound)
+            || error.matches(gst::StreamError::WrongType)
+        {
+            return missing_codec(None);
+        }
+        if error.matches(gst::ResourceError::Read) {
+            return "Couldn’t load this video. Check your connection.".into();
+        }
+        "Couldn’t play this video.".into()
+    }
+}
+
+fn missing_codec(description: Option<&str>) -> String {
+    match description {
+        Some(description) => format!(
+            "This video needs the {description}, which isn’t installed. \
+             Install GStreamer’s gst-plugins-bad and gst-libav."
+        ),
+        None => "This video’s format isn’t supported by the installed GStreamer plugins. \
+                 Install gst-plugins-bad and gst-libav."
+            .into(),
     }
 }
 
@@ -169,41 +224,6 @@ fn upright_filter() -> Option<gst::Element> {
     let flip = gst::ElementFactory::make("videoflip").build().ok()?;
     flip.set_property_from_str("video-direction", "auto");
     Some(flip)
-}
-
-fn decode(sample: gst::Sample) -> Result<crate::thumbs::Decoded, String> {
-    let info = gst_video::VideoInfo::from_caps(sample.caps().ok_or("Video frame has no format.")?)
-        .map_err(|_| "Unsupported video frame format.")?;
-    let width = info.width();
-    let height = info.height();
-    if width == 0 || height == 0 || width > 4096 || height > 4096 {
-        return Err("Video exceeds the supported resolution.".into());
-    }
-    let frame = gst_video::VideoFrameRef::from_buffer_ref_readable(
-        sample.buffer().ok_or("Video frame has no pixels.")?,
-        &info,
-    )
-    .map_err(|_| "Couldn’t read the decoded video frame.")?;
-    use gst_video::VideoFrameExt;
-    let stride =
-        usize::try_from(frame.plane_stride()[0]).map_err(|_| "Unsupported video frame layout.")?;
-    let row = width as usize * 4;
-    let plane = frame
-        .plane_data(0)
-        .map_err(|_| "Couldn’t read decoded video pixels.")?;
-    if stride < row || plane.len() < stride * (height as usize - 1) + row {
-        return Err("Decoded video frame is incomplete.".into());
-    }
-    let mut pixels = Vec::with_capacity(row * height as usize);
-    for y in 0..height as usize {
-        pixels.extend_from_slice(&plane[y * stride..y * stride + row]);
-    }
-    Ok(crate::thumbs::Decoded {
-        handle: iced::widget::image::Handle::from_rgba(width, height, pixels),
-        width,
-        height,
-        bytes: row * height as usize,
-    })
 }
 
 impl Drop for Player {
@@ -306,18 +326,99 @@ mod tests {
             ..Playback::default()
         };
         let deadline = Instant::now() + Duration::from_secs(10);
-        let frame = loop {
-            if let Some(frame) = player.poll(&mut state).unwrap() {
-                break frame;
-            }
+        let frames = player.frames();
+        while !frames.has_frame() {
+            player.poll(&mut state).unwrap();
             assert!(Instant::now() < deadline, "No decoded frames");
             tokio::time::sleep(Duration::from_millis(20)).await;
-        };
-        assert_eq!((frame.width, frame.height), (128, 72));
-        assert_eq!(frame.bytes, 128 * 72 * 4);
+        }
+        assert_eq!(frames.size(), Some((128, 72)));
+        player.poll(&mut state).unwrap();
         player.set_playing(false).unwrap();
         player.volume(0.5);
         player.seek(1.0).unwrap();
         assert!(state.duration >= 1.5, "duration: {}", state.duration);
+    }
+
+    /// Encode a test clip with `encoder` into `path`.
+    fn encode(path: &std::path::Path, size: (u32, u32), frames: u32, encoder: &str) {
+        let producer = gst::parse::launch(&format!(
+            "videotestsrc num-buffers={frames} ! video/x-raw,width={},height={},framerate=30/1 ! {encoder} ! filesink name=output",
+            size.0, size.1
+        ))
+        .unwrap()
+        .downcast::<gst::Pipeline>()
+        .unwrap();
+        producer
+            .by_name("output")
+            .unwrap()
+            .set_property("location", path.to_str().unwrap());
+        producer.set_state(gst::State::Playing).unwrap();
+        let status = producer.bus().unwrap().timed_pop_filtered(
+            gst::ClockTime::from_seconds(60),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        );
+        producer.set_state(gst::State::Null).unwrap();
+        assert_eq!(status.unwrap().type_(), gst::MessageType::Eos);
+    }
+
+    /// HD frames are what flickered: iced uploaded images over 2 MiB late.
+    /// They now reach the frame slot whole, each under a new number.
+    #[tokio::test]
+    async fn full_hd_frames_reach_the_video_surface() {
+        gst::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hd.webm");
+        encode(&path, (1920, 1080), 20, "vp8enc deadline=1 ! webmmux");
+        let player = Player::open(None, Some(&path), tokio::runtime::Handle::current()).unwrap();
+        let mut state = Playback {
+            playing: true,
+            ..Playback::default()
+        };
+        let frames = player.frames();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut seen = std::collections::BTreeSet::new();
+        while seen.len() < 3 {
+            player.poll(&mut state).unwrap();
+            if frames.has_frame() {
+                assert_eq!(frames.size(), Some((1920, 1080)));
+                seen.insert(frames.generation());
+            }
+            assert!(Instant::now() < deadline, "frames seen: {seen:?}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_video_decoder_is_named() {
+        gst::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.webm");
+        encode(&path, (64, 36), 5, "vp8enc deadline=1 ! webmmux");
+        let player = Player::open(None, Some(&path), tokio::runtime::Handle::current()).unwrap();
+        player.set_playing(false).unwrap();
+        let caps = gst::Caps::builder("video/x-h265").build();
+        let message = gst_pbutils::MissingPluginMessage::builder_for_decoder(&caps)
+            .src(&player.pipeline)
+            .build();
+        player.pipeline.post_message(message).unwrap();
+        let error = player.poll(&mut Playback::default()).unwrap_err();
+        assert!(error.contains("H.265"), "{error}");
+        assert!(error.contains("gst-plugins-bad"), "{error}");
+    }
+
+    #[test]
+    fn read_failures_are_not_blamed_on_codecs() {
+        gst::init().unwrap();
+        let player = Player {
+            pipeline: gst::ElementFactory::make("playbin").build().unwrap(),
+            frame: Arc::default(),
+            stream: None,
+            missing: Mutex::default(),
+        };
+        let read = gst::glib::Error::new(gst::ResourceError::Read, "offline");
+        assert!(player.explain(read).contains("connection"));
+        let codec = gst::glib::Error::new(gst::StreamError::CodecNotFound, "no decoder");
+        assert!(player.explain(codec).contains("gst-libav"));
     }
 }

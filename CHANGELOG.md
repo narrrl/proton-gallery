@@ -23,6 +23,15 @@
   `proton_sdk::login` (proton-sdk 0.12.2, `proton-gallery-drive-rs` 0.1.2).
   Saved sign-ins and messages are unchanged.
 
+- Desktop videos in HD no longer flicker. Frames were handed to the
+  interface as new images, which it showed one redraw late from about
+  960×540 up; they now go straight into one GPU texture, without the extra
+  copy per frame.
+
+- A video that needs a codec which isn't installed now says which one,
+  instead of blaming the connection or codecs in general. The Linux packages
+  pull in GStreamer's bad plugins (H.264/H.265 parsers, hardware decoding).
+
 - Unlock Hidden albums on desktop with your system sign-in through polkit on
   Linux or Windows Hello on Windows. Existing hidden settings are preserved.
 
