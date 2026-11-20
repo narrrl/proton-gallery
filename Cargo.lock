@@ -5307,8 +5307,6 @@ dependencies = [
  "dbus-secret-service",
  "dbus-secret-service-keyring-store",
  "keyring-core",
- "proton-sdk",
- "serde_json",
  "thiserror 2.0.21",
  "tracing",
  "windows-native-keyring-store",
@@ -5327,9 +5325,9 @@ dependencies = [
 
 [[package]]
 name = "proton-drive-rs"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d05ad4be849ce2104759631063dd06867fbe6b6f0e5c37a172a84b5a90203fa7"
+checksum = "bdeb7ee7495bc34198c78d7ec569f6371ad01a88f188b5eee418b013b082626a"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5377,13 +5375,12 @@ dependencies = [
 
 [[package]]
 name = "proton-gallery-drive-rs"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6f0f15e57e742c9eba2e272d9ecb25bf09f0881d05b25361f55137e135d6b5b"
+checksum = "b7d0e5bf979866165d854f4d349917f663bac60c9b81358492b7ea81c0c78d52"
 dependencies = [
  "async-trait",
  "hex",
- "proton-auth-rs",
  "proton-drive-rs",
  "proton-gallery-rs",
  "proton-sdk",
@@ -5437,9 +5434,9 @@ dependencies = [
 
 [[package]]
 name = "proton-sdk"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80c381e9066c0bca3c32597df2e902eecaa4c6e05e202e70ec9d0ac2eec78bfe"
+checksum = "3189873dcdf0bc0a3d0fa5619cea80594085252d1d66a57459ec6adfd1f35ac1"
 dependencies = [
  "aes-gcm 0.11.1",
  "async-trait",
