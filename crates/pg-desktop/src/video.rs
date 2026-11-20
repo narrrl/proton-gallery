@@ -67,6 +67,12 @@ impl Player {
             .property("video-sink", &sink)
             .build()
             .map_err(|_| "GStreamer playback plugins are missing.".to_owned())?;
+        // Phones record upright video as landscape frames plus a rotation tag;
+        // playbin hands frames over as stored, so turn them as the tag says.
+        match upright_filter() {
+            Some(filter) => pipeline.set_property("video-filter", &filter),
+            None => tracing::warn!("videoflip is missing; rotated phone videos play sideways"),
+        }
         if let Some(path) = local {
             let uri = gst::glib::filename_to_uri(path, None)
                 .map_err(|_| "Couldn’t open this video file.".to_owned())?;
@@ -156,6 +162,13 @@ impl Player {
             .take()
             .transpose()
     }
+}
+
+/// A `videoflip` that follows the stream's `image-orientation` tag.
+fn upright_filter() -> Option<gst::Element> {
+    let flip = gst::ElementFactory::make("videoflip").build().ok()?;
+    flip.set_property_from_str("video-direction", "auto");
+    Some(flip)
 }
 
 fn decode(sample: gst::Sample) -> Result<crate::thumbs::Decoded, String> {
