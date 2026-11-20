@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -81,6 +82,13 @@ class ThumbnailLoader(private val directory: File,
                 catch (_: Exception) {}
             }
         }
+    }
+
+    /** No longer shown (another account, or visibility changed): stop reading
+     * ahead and free the memory tier now instead of when it is collected. */
+    fun close() {
+        scope.cancel()
+        memory.evictAll()
     }
 
     /** Hidden albums locked: drop their thumbnails and discard in-flight results. */

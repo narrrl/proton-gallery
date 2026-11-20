@@ -19,6 +19,7 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -89,6 +90,8 @@ class MainActivity : ComponentActivity() {
                     PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(ThumbnailLoader.EDGE, ThumbnailLoader.EDGE), null) }
                 }
             }
+            // A replaced loader must not keep reading ahead for the old account.
+            DisposableEffect(thumbnails) { onDispose { thumbnails.close() } }
             val backup by model.backup.collectAsStateWithLifecycle()
             val access = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.phoneAccessChanged() }
             // Backup progress is shown as a notification; asked for when backup is first used.
