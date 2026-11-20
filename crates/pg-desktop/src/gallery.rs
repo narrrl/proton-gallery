@@ -711,11 +711,17 @@ impl Gallery {
         {
             // Every tick redraws the video surface, which shows the newest
             // frame; 16 ms keeps 60 fps video at its rate while playing.
-            let playing = self
-                .viewer
-                .as_ref()
-                .is_some_and(|viewer| viewer.playback.playing);
-            let tick = Duration::from_millis(if playing { 16 } else { 33 });
+            // Paused, a tick only has to notice a frame a seek brings and the
+            // player's messages, so it slows down instead of redrawing an
+            // unchanged frame 30 times a second.
+            let (playing, buffering) = self.viewer.as_ref().map_or((false, false), |viewer| {
+                (viewer.playback.playing, viewer.playback.buffering)
+            });
+            let tick = Duration::from_millis(match (playing, buffering) {
+                (true, _) => 16,
+                (false, true) => 33,
+                (false, false) => 100,
+            });
             subscriptions.push(iced::time::every(tick).map(|_| Message::VideoTick));
         }
         Subscription::batch(subscriptions)
