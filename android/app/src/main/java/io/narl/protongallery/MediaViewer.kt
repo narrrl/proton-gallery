@@ -1,6 +1,7 @@
 package io.narl.protongallery
 
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.text.format.Formatter
 import android.view.View
@@ -200,9 +201,13 @@ private fun ZoomablePhoto(item: GalleryItem, loader: ThumbnailLoader, media: Med
         if (active && !item.isVideo) {
             onLoading(true)
             try {
+                // Sized to the screen and only shown, so kept in graphics memory.
+                val edge = ThumbnailLoader.screenEdge(context)
                 val large = when {
-                    phone != null -> withContext(Dispatchers.IO) { ThumbnailLoader.decodeUri(context, phone, 2560) }
-                    item.localPath.isNotEmpty() -> withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(File(item.localPath), 2560) }
+                    phone != null -> withContext(Dispatchers.IO) { ThumbnailLoader.decodeUri(context, phone, edge, ImageDecoder.ALLOCATOR_DEFAULT) }
+                    item.localPath.isNotEmpty() -> withContext(Dispatchers.IO) {
+                        ThumbnailLoader.decodeImage(File(item.localPath), edge, ImageDecoder.ALLOCATOR_DEFAULT)
+                    }
                     else -> media.largePhoto(item)
                 }
                 if (large != null) value = large

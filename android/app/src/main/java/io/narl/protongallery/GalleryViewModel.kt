@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.Intent
 import android.content.IntentSender
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.provider.MediaStore
 import android.text.format.Formatter
@@ -1102,10 +1103,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     suspend fun largePhoto(item: GalleryItem): Bitmap? {
         val repo = repository.value ?: return null
         if (item.remoteKey == null) return null
-        repo.preview(item)?.let { bytes -> withContext(Dispatchers.Default) { ThumbnailLoader.decodeBytes(bytes, 2560) } }?.let { return it }
+        // Shown only, at most as large as the screen.
+        val edge = ThumbnailLoader.screenEdge(getApplication())
+        repo.preview(item)?.let { bytes -> withContext(Dispatchers.Default) { ThumbnailLoader.decodeBytes(bytes, edge, ImageDecoder.ALLOCATOR_DEFAULT) } }?.let { return it }
         val file = repo.downloadOriginal(item, Originals.directory(getApplication()))
         if (location.value.private) privateFiles += file
-        return withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(file, 2560) }
+        return withContext(Dispatchers.IO) { ThumbnailLoader.decodeImage(file, edge, ImageDecoder.ALLOCATOR_DEFAULT) }
     }
 
     /** A Proton video to stream; nothing of it is written to disk. */

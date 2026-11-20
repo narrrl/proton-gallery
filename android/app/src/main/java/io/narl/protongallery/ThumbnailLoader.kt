@@ -223,25 +223,35 @@ class ThumbnailLoader(private val directory: File,
         /** A sixth of the app's memory, between 24 and 160 MB: several screens of tiles. */
         private fun memoryBudget(): Int = (Runtime.getRuntime().maxMemory() / 6).coerceIn(24L shl 20, 160L shl 20).toInt()
 
-        fun decodeUri(context: android.content.Context, uri: android.net.Uri, longestEdge: Int): Bitmap =
+        /** The longest edge of the screen: a photo shown whole never needs
+         * more pixels than that. */
+        fun screenEdge(context: android.content.Context): Int {
+            val metrics = context.resources.displayMetrics
+            return maxOf(metrics.widthPixels, metrics.heightPixels).coerceIn(1024, 4096)
+        }
+
+        // Pass ImageDecoder.ALLOCATOR_DEFAULT for bitmaps that are only shown,
+        // never read back or encoded: they then live in graphics memory.
+        fun decodeUri(context: android.content.Context, uri: android.net.Uri, longestEdge: Int,
+            allocator: Int = ImageDecoder.ALLOCATOR_SOFTWARE): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.allocator = allocator
             }
 
-        fun decodeBytes(bytes: ByteArray, longestEdge: Int): Bitmap =
+        fun decodeBytes(bytes: ByteArray, longestEdge: Int, allocator: Int = ImageDecoder.ALLOCATOR_SOFTWARE): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.allocator = allocator
             }
 
-        fun decodeImage(file: File, longestEdge: Int): Bitmap =
+        fun decodeImage(file: File, longestEdge: Int, allocator: Int = ImageDecoder.ALLOCATOR_SOFTWARE): Bitmap =
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
                 val scale = minOf(1.0, longestEdge.toDouble() / maxOf(info.size.width, info.size.height))
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.allocator = allocator
             }
     }
 }
