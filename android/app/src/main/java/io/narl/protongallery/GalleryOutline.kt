@@ -14,8 +14,8 @@ import kotlinx.coroutines.launch
  * all rows from this once, so the layout never moves while records load; only
  * a new outline, after media was added or removed, changes it.
  *
- * Records load in pages as rows ask for them and stay in a bounded set of
- * pages. Use it from the main thread.
+ * Records load in pages as the screen asks for them with [show] and stay in a
+ * bounded set of pages. Use it from the main thread.
  */
 class GalleryOutline(
     val ids: List<String>,
@@ -67,18 +67,22 @@ class GalleryOutline(
 
     fun indexOf(id: String): Int = positions[id] ?: -1
 
-    /** The record at `index`, or null while it loads. Reading it in a
-     * composable recomposes when it arrives. */
-    fun item(index: Int): GalleryItem? {
-        if (index !in ids.indices) return null
-        val page = index / PAGE
-        val loaded = pages[page]
-        if (loaded == null) request(page) else touch(page)
-        return loaded?.getOrNull(index % PAGE)
-    }
+    /** The record at `index`, or null while it loads. Only reads, so it is
+     * safe in composition, and recomposes when the record arrives; [show]
+     * starts the loading. */
+    fun item(index: Int): GalleryItem? = if (index !in ids.indices) null else pages[index / PAGE]?.getOrNull(index % PAGE)
 
     /** The records already loaded, without loading more. */
-    fun loaded(index: Int): GalleryItem? = pages[index / PAGE]?.getOrNull(index % PAGE)
+    fun loaded(index: Int): GalleryItem? = item(index)
+
+    /** The items of `range` are on screen: load their pages, and keep them
+     * longest. Call it from effects, never while composing. */
+    fun show(range: IntRange) {
+        if (count == 0 || range.isEmpty()) return
+        val first = range.first.coerceAtLeast(0) / PAGE
+        val last = range.last.coerceAtMost(count - 1) / PAGE
+        for (page in first..last) if (pages[page] == null) request(page) else touch(page)
+    }
 
     /** Start loading the pages of `range` ahead of the rows that show them. */
     fun prefetch(range: IntRange) {

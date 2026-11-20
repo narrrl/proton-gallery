@@ -249,8 +249,9 @@ fun SmartMediaGrid(
             catch (_: Exception) { failed = true }
         }
         val currentLayout by rememberUpdatedState(layout)
-        // Read ahead: the records and thumbnails of the next rows in the
-        // direction of travel, once scrolling slows down.
+        // Load the records of the rows on screen, then read ahead: the records
+        // and thumbnails of the next rows in the direction of travel, once
+        // scrolling slows down.
         LaunchedEffect(layout, private) {
             val shown = layout ?: return@LaunchedEffect
             var previous = 0
@@ -262,6 +263,10 @@ fun SmartMediaGrid(
                     val firstRow = (first - currentLeading).coerceIn(0, maxOf(0, rows.size - 1))
                     val lastRow = (last - currentLeading).coerceIn(0, maxOf(0, rows.size - 1))
                     if (rows.isEmpty()) return@collectLatest
+                    if (last - currentLeading >= 0) {
+                        val visible = (firstRow..lastRow).mapNotNull { rows[it] as? GalleryRow.Media }
+                        if (visible.isNotEmpty()) shown.outline.show(visible.first().start until visible.last().end)
+                    }
                     val ahead = if (down) (lastRow + 1)..minOf(rows.size - 1, lastRow + AHEAD_ROWS)
                         else maxOf(0, firstRow - AHEAD_ROWS) until firstRow
                     val items = ahead.flatMap { (rows[it] as? GalleryRow.Media)?.let { row -> row.start until row.end } ?: emptyList() }

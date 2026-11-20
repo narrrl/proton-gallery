@@ -94,6 +94,10 @@ fun MediaViewer(initialOutline: GalleryOutline, initial: Int, thumbnails: Thumbn
             pager.requestScrollToPage(index)
         }
     }
+    // Records load here, not while composing: the page on screen and its neighbours.
+    LaunchedEffect(outline, pager) {
+        snapshotFlow { pager.currentPage }.collect { page -> outline.show(page - 1..page + 1) }
+    }
     var zoomed by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var more by remember { mutableStateOf(false) }
