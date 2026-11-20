@@ -5456,9 +5456,9 @@ dependencies = [
 
 [[package]]
 name = "proton-gallery-rs"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1714aa60ec00a7a3a3c39a290f57c19fd3e2975b123f92f411851f9162dd44f2"
+checksum = "5a978cc4dc990ae1941209fece17c952a11dbaee392b358ca64c0c836cb2ec21"
 dependencies = [
  "aes-gcm 0.11.1",
  "async-trait",
