@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The desktop grid keeps thumbnails on disk (256 MiB, least recently used
+  dropped first), so a new launch shows the library without downloading them
+  again. Hidden-album thumbnails are never written to disk, and signing out
+  deletes the kept ones. Uses `ImageCache` from `proton-media-rs`.
+
 - The catalog, Proton adapter and app services moved to the
   [proton-rs](https://github.com/narrrl/proton-rs) workspace as
   `proton-gallery-rs`, `proton-gallery-drive-rs` and `proton-gallery-app-rs`,

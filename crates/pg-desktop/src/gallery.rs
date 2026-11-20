@@ -369,6 +369,8 @@ pub struct Gallery {
     pages_loading: BTreeMap<usize, iced::task::Handle>,
     pages_failed: HashSet<usize>,
     thumbs: thumbs::Cache,
+    /// Grid thumbnails kept across runs; never hidden-album ones.
+    disk_thumbs: Arc<thumbs::DiskThumbs>,
     thumbs_loading: HashMap<String, iced::task::Handle>,
     thumbs_failed: HashSet<String>,
     thumbs_retryable: HashSet<String>,
@@ -546,6 +548,9 @@ impl Gallery {
     pub fn boot(options: Options) -> (Self, Task<Message>) {
         let data_dir = options.data_dir.clone().unwrap_or_else(default_data_dir);
         let originals = data_dir.join("cache").join("originals");
+        let disk_thumbs = Arc::new(thumbs::DiskThumbs::new(
+            data_dir.join("cache").join("thumbnails"),
+        ));
         let demo = options.demo.is_some();
         let gallery = Self {
             options,
@@ -593,6 +598,7 @@ impl Gallery {
             pages_loading: BTreeMap::new(),
             pages_failed: HashSet::new(),
             thumbs: thumbs::Cache::default(),
+            disk_thumbs,
             thumbs_loading: HashMap::new(),
             thumbs_failed: HashSet::new(),
             thumbs_retryable: HashSet::new(),
@@ -1005,9 +1011,14 @@ impl Gallery {
                     expired,
                     ..SyncState::default()
                 };
+                // The next account must not find this one's pictures on disk.
+                let disk_thumbs = self.disk_thumbs.clone();
                 spawn(
                     &app,
-                    move |app| async move { app.sign_out().await.map_err(shown) },
+                    move |app| async move {
+                        disk_thumbs.clear().await;
+                        app.sign_out().await.map_err(shown)
+                    },
                     Message::SignedOut,
                 )
             }
@@ -2696,7 +2707,10 @@ impl Gallery {
                 continue;
             }
             let provider = self.provider(&app);
-            let (task, handle) = Task::perform(load_thumbnail(provider, item), done).abortable();
+            // Hidden-album pictures stay in memory only.
+            let disk = (!self.hidden.private_album).then(|| self.disk_thumbs.clone());
+            let (task, handle) =
+                Task::perform(load_thumbnail(provider, item, disk), done).abortable();
             self.thumbs_loading.insert(id, handle.abort_on_drop());
             tasks.push(task);
         }
@@ -4273,20 +4287,43 @@ fn cover_id(asset: &proton_gallery_rs::model::Asset) -> String {
     format!("cover:{:?}:{:?}", asset.key, asset.revision)
 }
 
-/// A Proton thumbnail, decoded at grid size.
+/// A Proton thumbnail, decoded at grid size. With `disk`, a copy kept by an
+/// earlier run is used first and a fetched one is kept for the next.
 async fn load_thumbnail(
     provider: Arc<dyn MediaProvider>,
     item: MediaItem,
+    disk: Option<Arc<thumbs::DiskThumbs>>,
 ) -> Result<Option<Decoded>, String> {
-    load_grid_image(provider.as_ref(), &item.key, item.is_video, item.size_bytes).await
+    let stored = disk.and_then(|disk| {
+        let source = item.key.stable_id().ok()?;
+        Some((disk, source, item.revision.clone().unwrap_or_default()))
+    });
+    if let Some((disk, source, revision)) = &stored
+        && let Some(bytes) = disk.get(source, revision).await
+        && let Ok(decoded) = thumbs::decode_async(bytes, thumbs::THUMB_SIDE).await
+    {
+        return Ok(Some(decoded));
+    }
+    let loaded =
+        fetch_grid_image(provider.as_ref(), &item.key, item.is_video, item.size_bytes).await?;
+    Ok(loaded.map(|(decoded, bytes)| {
+        if let Some((disk, source, revision)) = stored {
+            disk.store(source, revision, bytes);
+        }
+        decoded
+    }))
 }
 
+/// Decode a fetched rendition, keeping its bytes when they decode.
 async fn decode_rendition(
     response: proton_gallery_app_rs::Result<Option<Vec<u8>>>,
     side: u32,
-) -> Result<Option<Decoded>, String> {
+) -> Result<Option<(Decoded, Vec<u8>)>, String> {
     match response.map_err(shown)? {
-        Some(bytes) => Ok(thumbs::decode_async(bytes, side).await.ok()),
+        Some(bytes) => Ok(thumbs::decode_async(bytes.clone(), side)
+            .await
+            .ok()
+            .map(|decoded| (decoded, bytes))),
         None => Ok(None),
     }
 }
@@ -4297,6 +4334,18 @@ async fn load_grid_image(
     video: bool,
     size: u64,
 ) -> Result<Option<Decoded>, String> {
+    Ok(fetch_grid_image(provider, key, video, size)
+        .await?
+        .map(|(decoded, _)| decoded))
+}
+
+/// The grid picture of an item, decoded, with the bytes it came from.
+async fn fetch_grid_image(
+    provider: &dyn MediaProvider,
+    key: &proton_gallery_rs::model::AssetKey,
+    video: bool,
+    size: u64,
+) -> Result<Option<(Decoded, Vec<u8>)>, String> {
     let load = async {
         let thumb = decode_rendition(provider.thumbnail(key).await, thumbs::THUMB_SIDE).await;
         if matches!(thumb, Ok(Some(_))) {
@@ -4310,7 +4359,7 @@ async fn load_grid_image(
             static FALLBACKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
             let _permit = FALLBACKS.acquire().await.map_err(|e| e.to_string())?;
             match provider.original_bytes(key, ORIGINAL_LIMIT).await {
-                Ok(bytes) => return Ok(thumbs::decode_async(bytes, thumbs::THUMB_SIDE).await.ok()),
+                Ok(bytes) => return decode_rendition(Ok(Some(bytes)), thumbs::THUMB_SIDE).await,
                 Err(error) => return Err(shown(error)),
             }
         }
@@ -4351,7 +4400,10 @@ async fn load_full_with_privacy(
         .next()
         .ok_or("This item is no longer in the library.")?;
     if item.is_video {
-        let thumb = load_thumbnail(provider, item.clone()).await.ok().flatten();
+        let thumb = load_thumbnail(provider, item.clone(), None)
+            .await
+            .ok()
+            .flatten();
         return Ok((
             item,
             thumb,
@@ -4438,6 +4490,94 @@ mod tests {
         gallery.phase = Phase::Ready(app);
         let _ = gallery.show_outline(outline);
         (dir, gallery)
+    }
+
+    #[tokio::test]
+    async fn grid_thumbnails_are_kept_on_disk_for_the_next_run() {
+        struct Counted(Vec<u8>, std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl MediaProvider for Counted {
+            async fn thumbnail(
+                &self,
+                _: &proton_gallery_rs::model::AssetKey,
+            ) -> proton_gallery_app_rs::Result<Option<Vec<u8>>> {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Some(self.0.clone()))
+            }
+
+            async fn preview(
+                &self,
+                _: &proton_gallery_rs::model::AssetKey,
+            ) -> proton_gallery_app_rs::Result<Option<Vec<u8>>> {
+                Ok(None)
+            }
+
+            async fn original_bytes(
+                &self,
+                _: &proton_gallery_rs::model::AssetKey,
+                _: u64,
+            ) -> proton_gallery_app_rs::Result<Vec<u8>> {
+                panic!("a thumbnail was available")
+            }
+
+            async fn original(
+                &self,
+                _: &proton_gallery_rs::model::AssetKey,
+                _: &str,
+                _: &std::path::Path,
+                _: u64,
+            ) -> proton_gallery_app_rs::Result<PathBuf> {
+                panic!("the grid never writes an original")
+            }
+        }
+
+        let (dir, gallery) = gallery(10).await;
+        let app = gallery.app().cloned().unwrap();
+        let outline = gallery.outline.clone().unwrap();
+        let item = app
+            .outline_items(&outline, 0, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+            .unwrap();
+        let mut png = Vec::new();
+        ::image::RgbaImage::new(64, 32)
+            .write_to(
+                &mut std::io::Cursor::new(&mut png),
+                ::image::ImageFormat::Png,
+            )
+            .unwrap();
+        let media = Arc::new(Counted(png, std::sync::atomic::AtomicUsize::new(0)));
+        let root = dir.path().join("thumbnails");
+
+        let disk = Arc::new(thumbs::DiskThumbs::new(root.clone()));
+        let first = load_thumbnail(media.clone(), item.clone(), Some(disk.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((first.width, first.height), (64, 32));
+        // The copy is written in the background.
+        let source = item.key.stable_id().unwrap();
+        let revision = item.revision.clone().unwrap_or_default();
+        for _ in 0..200 {
+            if disk.get(&source, &revision).await.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // A new run finds it without asking Proton.
+        let reopened = Arc::new(thumbs::DiskThumbs::new(root.clone()));
+        let second = load_thumbnail(media.clone(), item.clone(), Some(reopened.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((second.width, second.height), (64, 32));
+        assert_eq!(media.1.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        reopened.clear().await;
+        assert!(!root.exists());
     }
 
     #[tokio::test]
@@ -4709,7 +4849,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            load_thumbnail(provider.clone(), item)
+            load_thumbnail(provider.clone(), item, None)
                 .await
                 .unwrap()
                 .is_some()

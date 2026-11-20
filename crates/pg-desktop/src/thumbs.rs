@@ -105,6 +105,82 @@ fn hsv(hue: f32, saturation: f32, value: f32) -> [u8; 3] {
     [r, g, b].map(|v| ((v + m) * 255.0) as u8)
 }
 
+/// Grid thumbnails on disk, so a new launch does not download them again.
+///
+/// Opened on first use. If the directory cannot be opened the grid works as
+/// before, from Proton only.
+pub struct DiskThumbs {
+    root: std::path::PathBuf,
+    cache: tokio::sync::OnceCell<Option<proton_media_rs::ImageCache>>,
+}
+
+impl DiskThumbs {
+    /// Fetched pictures larger than this are shrunk before they are kept.
+    const KEEP_AS_IS: usize = 256 * 1024;
+    const VARIANT: &str = "grid";
+
+    pub fn new(root: std::path::PathBuf) -> Self {
+        Self {
+            root,
+            cache: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    async fn cache(&self) -> Option<&proton_media_rs::ImageCache> {
+        self.cache
+            .get_or_init(|| async {
+                proton_media_rs::ImageCache::open(&self.root)
+                    .await
+                    .inspect_err(|error| tracing::warn!("thumbnail cache unavailable: {error}"))
+                    .ok()
+            })
+            .await
+            .as_ref()
+    }
+
+    pub async fn get(&self, source: &str, revision: &str) -> Option<Vec<u8>> {
+        let key = proton_media_rs::ImageKey::new(source, revision, Self::VARIANT);
+        self.cache().await?.get(&key).await
+    }
+
+    /// Keep `bytes` in the background. Large pictures (a preview or an
+    /// original standing in for a missing thumbnail) are shrunk to grid size
+    /// first.
+    pub fn store(self: std::sync::Arc<Self>, source: String, revision: String, bytes: Vec<u8>) {
+        tokio::spawn(async move {
+            let bytes = if bytes.len() <= Self::KEEP_AS_IS {
+                bytes
+            } else {
+                let shrunk = tokio::task::spawn_blocking(move || {
+                    proton_media_rs::render::thumbnail(
+                        &bytes,
+                        THUMB_SIDE,
+                        85,
+                        proton_media_rs::render::DecodeLimits::default(),
+                    )
+                })
+                .await;
+                match shrunk {
+                    Ok(Ok(rendered)) => rendered.bytes,
+                    _ => return,
+                }
+            };
+            if let Some(cache) = self.cache().await {
+                let key = proton_media_rs::ImageKey::new(&source, &revision, Self::VARIANT);
+                cache.put(&key, &bytes).await;
+            }
+        });
+    }
+
+    /// Delete every kept thumbnail, whether or not the cache was opened.
+    pub async fn clear(&self) {
+        if let Some(cache) = self.cache.get().and_then(Option::as_ref) {
+            cache.clear().await;
+        }
+        let _ = tokio::fs::remove_dir_all(&self.root).await;
+    }
+}
+
 /// Thumbnails by item id, least recently shown dropped first.
 #[derive(Default)]
 pub struct Cache {
