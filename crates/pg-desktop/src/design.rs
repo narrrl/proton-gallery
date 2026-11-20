@@ -5,9 +5,9 @@ use std::sync::LazyLock;
 
 pub const MEDIUM: Font = Font {
     weight: iced::font::Weight::Semibold,
-    ..Font::DEFAULT
+    ..Font::with_name("Inter")
 };
-pub const INK: Color = color!(0x202027);
+pub const INK: Color = color!(0x1B1340);
 pub const VIOLET: Color = color!(0x6D4AFF);
 pub const VIEWER: Color = color!(0x151519);
 
@@ -24,23 +24,23 @@ pub struct Colors {
 pub fn colors(theme: &Theme) -> Colors {
     if theme.extended_palette().is_dark {
         Colors {
-            surface: color!(0x1D1D23),
-            sidebar: color!(0x24242C),
-            muted: color!(0xADADB9),
-            line: color!(0x373740),
-            selected: color!(0x39304F),
-            accent: color!(0xBDA8FF),
-            placeholder: color!(0x292930),
+            surface: color!(0x171324),
+            sidebar: color!(0x211B31),
+            muted: color!(0xBFB5D1),
+            line: color!(0x433850),
+            selected: color!(0x372580),
+            accent: color!(0xEFE9FF),
+            placeholder: color!(0x30283F),
         }
     } else {
         Colors {
             surface: Color::WHITE,
-            sidebar: color!(0xF6F6F9),
-            muted: color!(0x6B6B7B),
-            line: color!(0xE8E8EF),
-            selected: color!(0xEBE5FF),
+            sidebar: color!(0xF7F5FC),
+            muted: color!(0x615970),
+            line: color!(0xE5E0EE),
+            selected: color!(0xECE7FF),
             accent: color!(0x6440D9),
-            placeholder: color!(0xF0F0F5),
+            placeholder: color!(0xF0EDF7),
         }
     }
 }
@@ -63,9 +63,9 @@ pub fn theme(mode: iced::theme::Mode) -> Theme {
         Theme::custom(
             "Gallery dark",
             iced::theme::Palette {
-                background: color!(0x1D1D23),
-                text: color!(0xF1F1F5),
-                primary: color!(0xBDA8FF),
+                background: color!(0x171324),
+                text: color!(0xF4F0FF),
+                primary: color!(0xBDA9FF),
                 success: color!(0x6EC9A8),
                 warning: color!(0xEAC078),
                 danger: color!(0xFF93A8),
@@ -95,7 +95,14 @@ pub fn sidebar(theme: &Theme) -> container::Style {
 pub fn panel(theme: &Theme) -> container::Style {
     let c = colors(theme);
     container::Style {
-        background: Some(c.surface.into()),
+        background: Some(
+            if theme.extended_palette().is_dark {
+                color!(0x1C182B)
+            } else {
+                Color::WHITE
+            }
+            .into(),
+        ),
         border: Border {
             color: c.line,
             width: 1.0,
@@ -114,6 +121,29 @@ pub fn soft(theme: &Theme) -> container::Style {
         },
         ..Default::default()
     }
+}
+
+pub fn toolbar(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(
+            if theme.extended_palette().is_dark {
+                color!(0x1C182B)
+            } else {
+                color!(0xFAF9FC)
+            }
+            .into(),
+        ),
+        ..Default::default()
+    }
+}
+
+pub fn quiet(theme: &Theme, status: button::Status) -> button::Style {
+    let mut style = secondary(theme, status);
+    style.border.width = 0.0;
+    if status == button::Status::Active || status == button::Status::Disabled {
+        style.background = None;
+    }
+    style
 }
 
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
@@ -174,6 +204,9 @@ pub enum Icon {
     Heart,
     Albums,
     Folder,
+    Lock,
+    Add,
+    Map,
 }
 
 // Small native SVGs share a 24px grid and 1.7px stroke; no icon font required.
@@ -195,6 +228,13 @@ pub fn icon<'a>(kind: Icon, size: f32) -> svg::Svg<'a> {
             "<rect x='6' y='7' width='15' height='14' rx='3'/><path d='M17 3H6a3 3 0 0 0-3 3v11'/>"
         }
         Icon::Play => "<path d='m9 5 10 7-10 7Z'/>",
+        Icon::Lock => {
+            "<rect x='5' y='10' width='14' height='11' rx='2'/><path d='M8 10V7a4 4 0 0 1 8 0v3m-4 4v3'/>"
+        }
+        Icon::Add => "<path d='M12 5v14M5 12h14'/>",
+        Icon::Map => {
+            "<path d='M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 0 1 16 0Z'/><circle cx='12' cy='10' r='2.5'/>"
+        }
         Icon::Folder => {
             "<path d='M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'/>"
         }
@@ -205,8 +245,16 @@ pub fn icon<'a>(kind: Icon, size: f32) -> svg::Svg<'a> {
     svg(svg::Handle::from_memory(source.into_bytes()))
         .width(size)
         .height(size)
-        .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.palette().text),
+        .style(move |theme: &Theme, _| svg::Style {
+            color: Some(if matches!(kind, Icon::Add) {
+                if theme.extended_palette().is_dark {
+                    color!(0x28135F)
+                } else {
+                    Color::WHITE
+                }
+            } else {
+                theme.palette().text
+            }),
         })
 }
 

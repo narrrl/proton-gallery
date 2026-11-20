@@ -80,7 +80,7 @@ impl App {
     }
 
     /// The volume of the account's Photos, from the open source or the catalog.
-    async fn photos_volume(
+    pub(crate) async fn photos_volume(
         &self,
         account: &pg_core::model::AccountId,
     ) -> Result<Option<pg_core::model::VolumeId>> {
@@ -127,6 +127,16 @@ impl App {
         tokio::time::timeout(std::time::Duration::from_secs(12), fetch)
             .await
             .map_err(|_| Error::message("Proton took too long to load this thumbnail."))?
+    }
+
+    /// Only the small rendition, for callers that can try alternatives after decoding.
+    pub async fn small_thumbnail(&self, key: &AssetKey) -> Result<Option<Vec<u8>>> {
+        self.rendition(
+            key,
+            proton_drive_rs::ThumbnailType::Thumbnail,
+            THUMBNAIL_LIMIT,
+        )
+        .await
     }
 
     /// The large preview (about screen size) Proton keeps beside a photo.

@@ -501,7 +501,7 @@ mod tests {
         // The fixture contains exactly the tables and records an upgrade from v12 sees.
         catalog.run(|conn| {
             conn.execute_batch(
-                "DROP TABLE photos_album_pending; DROP TABLE photos_sync_active; DROP TABLE photos_pending;
+                "DROP TABLE photo_locations; DROP TABLE photos_album_pending; DROP TABLE photos_sync_active; DROP TABLE photos_pending;
                  DROP TABLE photos_sync; DROP TABLE photos_removed;
                  PRAGMA user_version=12;",
             )?;

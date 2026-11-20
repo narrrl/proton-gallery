@@ -17,6 +17,7 @@ mod outline;
 mod phone;
 mod photo_albums;
 mod picker;
+mod places;
 mod trash;
 mod video;
 

@@ -40,6 +40,9 @@ This is an independent, unofficial client and is not affiliated with or endorsed
   Proton's Favorite tag; phone media uses Android's own favorites.
 - **View and share.** Browse photos in the viewer. Android and Linux can stream and
   seek within supported Proton videos. Android also shares selected originals with other apps.
+- **Places on Android and desktop.** Browse Proton Photos by location on an
+  offline map. Gallery looks up photo locations when you open Places and keeps
+  the results in its local catalog.
 - **Hidden albums.** Hide photos into a hidden album in one step. Hidden albums and their
   photos leave the timeline, visible album lists, and Gallery’s Android cloud picker. Open a
   hidden album with your device sign-in on Android, Linux, or Windows.

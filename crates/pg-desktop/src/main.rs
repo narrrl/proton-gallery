@@ -9,6 +9,7 @@ mod device_auth;
 mod gallery;
 mod grid;
 mod metrics;
+mod places;
 mod thumbs;
 mod vault;
 #[cfg(target_os = "linux")]
@@ -95,6 +96,9 @@ fn main() -> iced::Result {
     .theme(Gallery::theme)
     .subscription(Gallery::subscription)
     .scale_factor(Gallery::scale_factor)
+    .font(include_bytes!("../fonts/Inter-Regular.ttf").as_slice())
+    .font(include_bytes!("../fonts/Inter-SemiBold.ttf").as_slice())
+    .default_font(iced::Font::with_name("Inter"))
     .window(window)
     .run()
 }

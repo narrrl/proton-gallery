@@ -89,6 +89,10 @@ class GalleryRepository private constructor(private val context: Context) {
         engine.revokePublicDriveLink(album.gallery, album.id)
     }
     suspend fun galleryVisibilityReady() = withContext(Native) { engine.galleryVisibilityReady() }
+    suspend fun placesScan() = withContext(Native) { engine.startPlaces() }
+    suspend fun placesBatch(scan: io.narl.protongallery.bridge.PhotoPlaces, start: UInt) =
+        withContext(Native) { engine.placesBatch(scan, start) }
+
     suspend fun driveProgress() = withContext(Native) { engine.driveProgress() }
     suspend fun syncProgress() = withContext(Native) { engine.syncProgress() }
     suspend fun thumbnail(item: GalleryItem): ByteArray? = withContext(NativeThumbnails) { item.remoteKey?.let(engine::photoThumbnail) }

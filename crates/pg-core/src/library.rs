@@ -47,6 +47,8 @@ pub struct Album {
     pub gallery: SourceId,
     pub source: SourceSpec,
     pub parent: Option<SourceId>,
+    #[serde(skip)]
+    pub photos_album: bool,
     pub direct_items: u64,
     pub child_albums: u64,
     pub settings: AlbumSettings,
@@ -639,7 +641,8 @@ impl Catalog {
             let mut query = conn.prepare(&format!(
                 "SELECT n.gallery,s.payload,n.parent,
                 (SELECT count(*) FROM memberships m WHERE m.source=n.source),
-                (SELECT count(*) FROM album_nodes c WHERE c.gallery=n.gallery AND c.parent=n.source)
+                (SELECT count(*) FROM album_nodes c WHERE c.gallery=n.gallery AND c.parent=n.source),
+                EXISTS(SELECT 1 FROM source_kinds k WHERE k.source=n.source AND k.kind='album')
                 FROM album_nodes n JOIN sources s ON s.id=n.source LEFT JOIN album_settings x ON x.source=n.source
                 WHERE {filter} AND (?3 IS NULL OR json_extract(s.payload,'$.account')=?3)
                 ORDER BY coalesce(x.pinned,0) DESC,lower(coalesce(x.title,json_extract(s.payload,'$.label'))),s.id,n.gallery LIMIT 250",
@@ -654,12 +657,13 @@ impl Catalog {
                             r.get::<_, Option<String>>(2)?,
                             r.get::<_, i64>(3)?,
                             r.get::<_, i64>(4)?,
+                            r.get::<_, bool>(5)?,
                         ))
                     },
                 )?
                 .collect::<rusqlite::Result<_>>()?;
             rows.into_iter()
-                .map(|(gallery, payload, parent, items, children)| {
+                .map(|(gallery, payload, parent, items, children, photos_album)| {
                     let source: SourceSpec = serde_json::from_str(&payload)?;
                     let settings = load_settings(conn, source.id.as_str())?;
                     let private = settings.hidden || has_hidden_ancestor(conn, &gallery, source.id.as_str())?;
@@ -668,6 +672,7 @@ impl Catalog {
                         gallery: SourceId::new(gallery)?,
                         source,
                         parent: parent.map(SourceId::new).transpose()?,
+                        photos_album,
                         direct_items: items as u64,
                         child_albums: children as u64,
                         settings,

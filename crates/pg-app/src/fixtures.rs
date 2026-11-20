@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 pub trait MediaProvider: Send + Sync {
     async fn thumbnail(&self, key: &AssetKey) -> Result<Option<Vec<u8>>>;
     async fn preview(&self, key: &AssetKey) -> Result<Option<Vec<u8>>>;
+    async fn original_bytes(&self, _: &AssetKey, _: u64) -> Result<Vec<u8>> {
+        Err(crate::Error::message("This fixture’s original is missing."))
+    }
     async fn original(
         &self,
         key: &AssetKey,
@@ -19,10 +22,13 @@ pub trait MediaProvider: Send + Sync {
 #[async_trait::async_trait]
 impl MediaProvider for App {
     async fn thumbnail(&self, key: &AssetKey) -> Result<Option<Vec<u8>>> {
-        self.thumbnail(key).await
+        self.small_thumbnail(key).await
     }
     async fn preview(&self, key: &AssetKey) -> Result<Option<Vec<u8>>> {
         self.preview(key).await
+    }
+    async fn original_bytes(&self, key: &AssetKey, limit: u64) -> Result<Vec<u8>> {
+        self.original_in_memory(key, limit).await
     }
     async fn original(
         &self,

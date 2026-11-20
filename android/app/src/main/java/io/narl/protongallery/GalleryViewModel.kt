@@ -652,6 +652,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    suspend fun scanPlaces(update: (PlacesProgress) -> Unit) {
+        val repo = repository.value ?: return
+        repo.placesScan().use { scan ->
+            val total = scan.count().toInt()
+            var next = 0u
+            var failed = 0
+            update(PlacesProgress(total = total, scanning = total > 0))
+            while (next.toInt() < total) {
+                val batch = repo.placesBatch(scan, next)
+                next = batch.next
+                failed += batch.failed.toInt()
+                update(PlacesProgress(batch.photos, next.toInt(), total, failed, next.toInt() < total))
+            }
+        }
+    }
+
+    suspend fun placePhoto(id: String): Pair<GalleryOutline, Int>? {
+        val repo = repository.value ?: return null
+        val fresh = repo.outline(io.narl.protongallery.bridge.LibraryView.Photos, viewModelScope, false)
+        val index = fresh.indexOf(id)
+        return if (index >= 0) fresh to index else null
+    }
+
     private var navigationJob: Job? = null
 
     fun navigate(place: GalleryLocation) {

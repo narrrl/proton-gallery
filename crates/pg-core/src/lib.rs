@@ -15,6 +15,7 @@ pub mod phone;
 pub mod photo_albums;
 pub mod photos_sync;
 pub mod picker;
+pub mod places;
 pub mod removal;
 pub mod source;
 pub mod synthetic;

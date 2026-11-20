@@ -22,6 +22,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.graphics.luminance
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.PlacePhoto
 import io.narl.protongallery.bridge.BackupAlbumTarget
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
@@ -119,6 +120,45 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Drive").performClick()
         compose.onNodeWithText("Trips").assertExists()
         compose.onRoot().captureRoboImage("build/screenshots/collections-light.png")
+    }
+
+    @Test fun places_opens_a_located_photo_in_the_gallery_viewer() {
+        val fixtures = fixtureItems().take(3)
+        val item = fixtures.first()
+        val outline = GalleryOutline.of(fixtures)
+        val photos = listOf(
+            PlacePhoto(item.id, item.name, 0.537, 0.328, "Berlin"),
+            PlacePhoto(fixtures[1].id, fixtures[1].name, 0.506, 0.344, "Paris"),
+            PlacePhoto(fixtures[2].id, fixtures[2].name, 0.439, 0.265, "Reykjavík"),
+        )
+        var opened: String? = null
+        render(fixtures, ThemeMode.Dark, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "demo", null, false)),
+            places = PlacesActions(
+                scan = { update -> update(PlacesProgress(photos, checked = 3, total = 3, scanning = false)) },
+                open = { id -> opened = id; outline to fixtures.indexOfFirst { it.id == id } },
+            ))
+        compose.onNodeWithContentDescription("Places").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("3 photos on the map").assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/places-dark.png")
+        compose.onNodeWithText("List photos").performClick()
+        compose.onNodeWithText(item.name).performClick()
+        compose.onNodeWithContentDescription("Back to gallery").assertExists()
+        assertEquals(item.id, opened)
+    }
+
+    @Test fun tapping_colocated_markers_lists_both_photos_immediately() {
+        val items = fixtureItems().take(2)
+        val photos = items.map { PlacePhoto(it.id, it.name, 0.537, 0.328, "Berlin") }
+        render(items, ThemeMode.Dark, initialLocation = GalleryLocation(GallerySection.Places),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "demo", null, false)),
+            places = PlacesActions(scan = { update ->
+                update(PlacesProgress(photos, checked = 2, total = 2, scanning = false))
+            }))
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo map").performTouchInput { click(center) }
+        items.forEach { compose.onNodeWithText(it.name).assertExists() }
     }
 
     @Test fun an_album_only_gallery_has_no_media_loading_indicator() {
@@ -619,7 +659,8 @@ class GalleryUiTest {
         media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
         photoAlbums: List<FolderAlbum> = emptyList(), albumActions: AlbumActions = AlbumActions(),
         driveRoots: List<FolderAlbum> = emptyList(), privacy: PrivacyLock = PrivacyLock(), load: GalleryLoad = GalleryLoad.Ready,
-        optionsAlbum: String = "coast", onCoverChosen: (GalleryLocation, GalleryItem) -> Unit = { _, _ -> }) {
+        optionsAlbum: String = "coast", onCoverChosen: (GalleryLocation, GalleryItem) -> Unit = { _, _ -> },
+        places: PlacesActions = PlacesActions()) {
         val thumbnailDirectory = if (System.getProperty("pg.screenshot.photos") == null) "build/test-thumbnails-smart" else "build/screenshot-photo-thumbnails"
         val directory = File(thumbnailDirectory).apply { mkdirs() }
         val thumbnailLoader = ThumbnailLoader(directory, phone = { ThumbnailLoader.decodeImage(File(it.localPath), 384) })
@@ -650,7 +691,7 @@ class GalleryUiTest {
                         { zoom = it; onZoom(it) }, {}, {}, location, albums, { location = it },
                         options = if (location.album?.id == optionsAlbum) options else null, onCover = onCoverChosen,
                         account = account, backup = backup, backupActions = actions, media = media, pick = pick, onPick = onPick,
-                        albumActions = albumActions, privacy = privacy, load = load)
+                        albumActions = albumActions, privacy = privacy, load = load, placesActions = places)
                 }
             }
         }

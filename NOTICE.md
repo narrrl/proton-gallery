@@ -23,4 +23,11 @@ The Android UI includes twelve Apache 2.0 Material icon vectors from the Android
 Open Source Project. Original headers, a bundled license, source version/hash,
 and the package relocation are recorded in [icon provenance](android/ICON_PROVENANCE.md).
 
+Places uses land and border data from [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/)
+(public domain) and a trimmed [GeoNames](https://www.geonames.org/) cities dataset
+under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The bundled
+datasets and their conversion scripts originated in Proton Drive Linux.
+Desktop uses [Inter](https://rsms.me/inter/) under the bundled
+[SIL Open Font License](crates/pg-desktop/fonts/Inter-OFL.txt).
+
 This is an unofficial project and is not affiliated with Proton AG.
