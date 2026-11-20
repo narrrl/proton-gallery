@@ -1283,6 +1283,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4184,6 +4193,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "no_std_io2"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5278,18 +5299,30 @@ dependencies = [
 
 [[package]]
 name = "proton-auth-rs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e140db8b4444e50c818c9793c2078b57c16c5b6c285a8d4bbd74886f41b05c6f"
+checksum = "383119b502a1741f1ec4a248cb1e8d2f4835d5ea415803b041f76b6f89cf1ffc"
 dependencies = [
  "apple-native-keyring-store",
  "dbus-secret-service",
  "dbus-secret-service-keyring-store",
  "keyring-core",
+ "proton-sdk",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
  "windows-native-keyring-store",
  "zeroize",
+]
+
+[[package]]
+name = "proton-base-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "451151bb1025ea5cb362f69e2bfb2d45afed603e5c6daa3dc752333a7c29c878"
+dependencies = [
+ "rusqlite",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5344,12 +5377,13 @@ dependencies = [
 
 [[package]]
 name = "proton-gallery-drive-rs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "535a14f63fd542701d2606acb971d4a7e8f235ca7b9439fea8c80a3f26110186"
+checksum = "c6f0f15e57e742c9eba2e272d9ecb25bf09f0881d05b25361f55137e135d6b5b"
 dependencies = [
  "async-trait",
  "hex",
+ "proton-auth-rs",
  "proton-drive-rs",
  "proton-gallery-rs",
  "proton-sdk",
@@ -5364,15 +5398,16 @@ dependencies = [
 
 [[package]]
 name = "proton-gallery-rs"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a1159db137629675b0c91a75fa4b2b416a4ef306127e70bad8039c372855cd3"
+checksum = "1714aa60ec00a7a3a3c39a290f57c19fd3e2975b123f92f411851f9162dd44f2"
 dependencies = [
  "aes-gcm 0.11.1",
  "async-trait",
  "getrandom 0.4.3",
  "hex",
  "kamadak-exif",
+ "proton-base-rs",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5381,7 +5416,9 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "tracing",
  "zeroize",
+ "zip",
 ]
 
 [[package]]
@@ -7216,6 +7253,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8742,6 +8785,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "zip"
+version = "9.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9534624d547e3f516ecde0ed9a70d37788f01d340efcfdd03bf3ea8e163c1d0"
+dependencies = [
+ "constant_time_eq",
+ "crc32fast",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap",
+ "libc",
+ "memchr",
+ "nix",
+ "typed-path",
+ "windows-sys 0.61.2",
+ "zeroize",
+ "zopfli",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8752,6 +8815,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zune-core"
