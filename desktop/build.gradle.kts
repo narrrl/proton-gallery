@@ -28,7 +28,7 @@ val buildRust by tasks.registering(Exec::class) {
     description = "Builds the Rust core for this computer and generates its Kotlin bindings."
     workingDir(workspace)
     commandLine("bash", "scripts/build-desktop-native.sh", generated.get().asFile.absolutePath, jnaPrefix, libraryFile)
-    inputs.files(fileTree(workspace.resolve("crates/pg-core/src")), fileTree(workspace.resolve("crates/pg-drive/src")), fileTree(workspace.resolve("crates/pg-mobile")))
+    inputs.files(fileTree(workspace.resolve("crates/pg-mobile")))
     inputs.files(workspace.resolve("Cargo.toml"), workspace.resolve("Cargo.lock"), workspace.resolve("scripts/build-desktop-native.sh"))
     outputs.dir(generated.map { it.dir("uniffi") })
     outputs.dir(generated.map { it.dir("native") })

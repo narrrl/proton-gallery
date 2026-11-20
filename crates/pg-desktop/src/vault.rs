@@ -1,25 +1,29 @@
 //! Where the session is kept: the Linux Secret Service or the Windows
 //! Credential Manager. When neither works, the app says so and signs in only
 //! for this session if the user agrees; it never falls back to a file.
-use pg_drive::auth::{AuthError, CredentialVault, Result};
-use std::sync::Mutex;
+use proton_auth_rs::{KeyringStore, SecretStore};
+use proton_gallery_drive_rs::auth::{AuthError, CredentialVault, Result};
+use std::sync::{Mutex, OnceLock};
 
 const SERVICE: &str = "io.narl.protongallery";
 const USER: &str = "proton-session";
 
-fn entry() -> Result<keyring::Entry> {
-    keyring::Entry::new(SERVICE, USER).map_err(|_| AuthError("The system keyring is unavailable."))
+/// The system keyring, connected once per process. It reconnects when the
+/// Secret Service restarts, and on Linux a changed session replaces its item
+/// instead of editing it, which oo7 before 0.7.0 kept only in memory.
+fn keyring() -> &'static KeyringStore {
+    static STORE: OnceLock<KeyringStore> = OnceLock::new();
+    STORE.get_or_init(|| KeyringStore::new(SERVICE))
 }
 
 /// Whether the system keyring can be used here.
 pub fn keyring_available() -> bool {
-    match entry().map(|e| e.get_secret()) {
-        Ok(Ok(_)) | Ok(Err(keyring::Error::NoEntry)) => true,
-        Ok(Err(error)) => {
+    match keyring().get_bytes(USER) {
+        Ok(_) => true,
+        Err(error) => {
             tracing::warn!("system keyring unavailable: {error}");
             false
         }
-        Err(_) => false,
     }
 }
 
@@ -28,9 +32,8 @@ pub struct KeyringVault;
 
 impl CredentialVault for KeyringVault {
     fn load(&self) -> Result<Option<Vec<u8>>> {
-        match entry()?.get_secret() {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+        match keyring().get_bytes(USER) {
+            Ok(bytes) => Ok(bytes.map(|bytes| bytes.to_vec())),
             Err(error) => {
                 tracing::warn!("keyring read failed: {error}");
                 Err(AuthError(
@@ -41,22 +44,17 @@ impl CredentialVault for KeyringVault {
     }
 
     fn save(&self, bytes: &[u8]) -> Result<()> {
-        entry()?.set_secret(bytes).map_err(|error| {
+        keyring().set_bytes(USER, bytes).map_err(|error| {
             tracing::warn!("keyring write failed: {error}");
             AuthError("The sign-in couldn’t be saved in the system keyring.")
         })
     }
 
     fn clear(&self) -> Result<()> {
-        match entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => {
-                tracing::warn!("keyring delete failed: {error}");
-                Err(AuthError(
-                    "The saved sign-in couldn’t be removed from the system keyring.",
-                ))
-            }
-        }
+        keyring().delete(USER).map_err(|error| {
+            tracing::warn!("keyring delete failed: {error}");
+            AuthError("The saved sign-in couldn’t be removed from the system keyring.")
+        })
     }
 }
 

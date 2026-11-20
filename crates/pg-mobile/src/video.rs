@@ -3,7 +3,7 @@ use super::*;
 
 #[derive(uniffi::Object)]
 pub struct VideoStream {
-    stream: Arc<pg_app::video::VideoStream>,
+    stream: Arc<proton_gallery_app_rs::video::VideoStream>,
     runtime: tokio::runtime::Handle,
 }
 
@@ -22,7 +22,7 @@ impl VideoStream {
         Ok(self
             .runtime
             .block_on(task)
-            .map_err(|_| pg_core::Error::Cancelled)??)
+            .map_err(|_| proton_gallery_rs::Error::Cancelled)??)
     }
 
     pub fn stop(&self) {

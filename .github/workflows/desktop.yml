@@ -23,6 +23,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
       - uses: Swatinem/rust-cache@v2
       - name: Shared services and desktop tests
-        run: cargo test -p pg-core -p pg-drive -p pg-app -p pg-desktop --all-targets --locked
+        run: cargo test -p pg-desktop --all-targets --locked
       - name: Compile the Iced executable
         run: cargo build -p pg-desktop --locked
