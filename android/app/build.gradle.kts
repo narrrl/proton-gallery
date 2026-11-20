@@ -93,6 +93,7 @@ android {
     }
 }
 kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
+composeCompiler { stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf")) }
 
 val buildRust by tasks.registering(Exec::class) {
     group = "native"

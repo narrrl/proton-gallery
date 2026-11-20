@@ -196,8 +196,21 @@ fun SmartMediaGrid(
     private: Boolean = false,
 ) {
     val density = LocalDensity.current
-    val hiddenCount = albums.count { it.hidden }
-    val shownAlbums = if (hiddenUnlocked) albums else albums.filterNot { it.hidden }
+    val hiddenCount = remember(albums) { albums.count { it.hidden } }
+    val shownAlbums = remember(albums, hiddenUnlocked) { if (hiddenUnlocked) albums else albums.filterNot { it.hidden } }
+    // Tiles get callbacks that stay the same across selection changes, so
+    // only the tiles whose selection changed recompose.
+    val currentSelection by rememberUpdatedState(selection)
+    val currentOnOpen by rememberUpdatedState(onOpen)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val tileClick = remember {
+        { position: Int, item: GalleryItem ->
+            val longPress = currentOnLongPress
+            if (currentSelection.isNotEmpty() && longPress != null) longPress(item) else currentOnOpen(position, item)
+        }
+    }
+    val tileLongClick = remember { { item: GalleryItem -> currentOnLongPress?.invoke(item); Unit } }
+    val selects = onLongPress != null
     val grouping = groupingFor(zoom)
     // The photo kept in view while pinching.
     var anchor by remember { mutableStateOf<String?>(null) }
@@ -210,8 +223,11 @@ fun SmartMediaGrid(
         val targetPx = with(density) { zoom.dp.roundToPx() }.coerceIn(1, 8192)
         val albumColumns = (maxWidth / 172.dp).toInt().coerceIn(2, 6)
         // The new-album card leads the album cards.
-        val cards: List<FolderAlbum?> = (if (onNewAlbum != null) listOf(null) else emptyList<FolderAlbum?>()) + shownAlbums
-        val albumRows = cards.chunked(albumColumns)
+        val newAlbum = onNewAlbum != null
+        val albumRows = remember(shownAlbums, newAlbum, albumColumns) {
+            val cards: List<FolderAlbum?> = (if (newAlbum) listOf(null) else emptyList<FolderAlbum?>()) + shownAlbums
+            cards.chunked(albumColumns)
+        }
         // Items listed before the photo rows; keep in step with the LazyColumn below.
         val leading = (if (tags.isNotEmpty()) 1 else 0) + (if (header != null) 1 else 0) +
             (if (shownAlbums.isNotEmpty()) 1 else 0) + albumRows.size + (if (hiddenCount > 0) 1 else 0)
@@ -350,10 +366,10 @@ fun SmartMediaGrid(
                                 val item = shown.outline.item(position)
                                 if (item == null) Box(tile.background(MaterialTheme.colorScheme.surfaceContainerHigh))
                                 else MediaTile(item, thumbnails,
-                                    onClick = { if (selection.isNotEmpty() && onLongPress != null) onLongPress(item) else onOpen(position, item) },
+                                    onClick = { tileClick(position, item) },
                                     modifier = tile,
                                     selected = if (selection.isEmpty()) null else item.id in selection,
-                                    onLongClick = onLongPress?.let { { it(item) } }, private = private)
+                                    onLongClick = if (selects) { { tileLongClick(item) } } else null, private = private)
                             }
                         }
                     }
