@@ -43,6 +43,9 @@ with a `desktop` subdirectory. On Linux this is normally
 on Windows it is under `%LOCALAPPDATA%\narl\Proton Gallery\data\desktop`.
 Logs default to warnings; `PG_LOG` accepts tracing filters.
 
+`proton-gallery --bench` times the grid, Places and thumbnail hot paths offline on a
+synthetic library; see the [benchmark guide](BENCH.md) for options and a baseline.
+
 ## Account and media behavior
 
 - Sessions live in Linux Secret Service or Windows Credential Manager. If a keyring
