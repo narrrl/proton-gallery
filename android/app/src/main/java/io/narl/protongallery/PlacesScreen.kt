@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -41,17 +42,20 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.narl.protongallery.bridge.PlaceCluster
 import io.narl.protongallery.bridge.PlacePhoto
 import io.narl.protongallery.bridge.clusterPlaces
 import io.narl.protongallery.bridge.placesGeometry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.withContext
 import kotlin.math.min
 
@@ -91,6 +95,34 @@ private fun fit(photos: List<PlacePhoto>, size: IntSize, maxZoom: Float): PlaceC
         (.72 / span).toFloat().coerceIn(1f, maxZoom))
 }
 
+/** Clusters as computed for `camera`, with the place every member shares.
+ * They are drawn against a newer camera until the next ones are ready. */
+private class ClusterView(val camera: PlaceCamera, val size: IntSize, val clusters: List<PlaceCluster>, val places: List<String?>) {
+    /** Where a cluster's centre is now, in pixels, under `current`. */
+    fun center(cluster: PlaceCluster, current: PlaceCamera, density: Float): Offset {
+        val then = camera.scale(size)
+        val now = current.scale(size)
+        val x = (cluster.x * density - size.width * .5f) / then + camera.x
+        val y = (cluster.y * density - size.height * .5f) / then + camera.y
+        return Offset(size.width * .5f + (x - current.x) * now, size.height * .5f + (y - current.y) * now)
+    }
+}
+
+private fun clusterView(photos: List<PlacePhoto>, camera: PlaceCamera, size: IntSize, density: Float): ClusterView {
+    val points = ArrayList<Float>(photos.size * 2)
+    for (photo in photos) {
+        val point = camera.point(photo, size)
+        points += point.x / density
+        points += point.y / density
+    }
+    val clusters = clusterPlaces(points, size.width / density, size.height / density)
+    val places = clusters.map { cluster ->
+        val place = cluster.members.firstOrNull()?.let { photos.getOrNull(it.toInt())?.place }
+        place?.takeIf { cluster.members.all { photos.getOrNull(it.toInt())?.place == place } }
+    }
+    return ClusterView(camera, size, clusters, places)
+}
+
 private data class MapOutline(val land: List<Path>, val borders: List<Path>)
 
 private fun outlinePaths(rings: List<List<Float>>, close: Boolean): List<Path> = rings.map { ring ->
@@ -113,6 +145,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
     var camera by remember { mutableStateOf<PlaceCamera?>(null) }
     var selected by remember { mutableStateOf<List<PlacePhoto>?>(null) }
     var outline by remember { mutableStateOf<MapOutline?>(null) }
+    var clusters by remember { mutableStateOf<ClusterView?>(null) }
 
     LaunchedEffect(Unit) {
         outline = withContext(Dispatchers.Default) {
@@ -122,6 +155,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
     }
     LaunchedEffect(revision, retry) {
         photos.clear()
+        clusters = null
         selected = null
         progress = PlacesProgress()
         failed = false
@@ -140,20 +174,29 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
 
     val palette = MaterialTheme.colorScheme
     val density = LocalDensity.current.density
-    val current = camera ?: fit(photos, canvasSize, 64f)
-    val clusters = remember(current, canvasSize, density, photos.size, revision, retry) {
-        val points = photos.flatMap { photo ->
-            val point = current.point(photo, canvasSize)
-            listOf(point.x / density, point.y / density)
-        }
-        clusterPlaces(points, canvasSize.width / density, canvasSize.height / density)
-    }
+    // A copy per batch of photos, not per frame: clustering reads it off the main thread.
+    val located = remember(photos.size, revision, retry) { photos.toList() }
+    val current = camera ?: remember(located, canvasSize) { fit(located, canvasSize, 64f) }
     val latestCamera by rememberUpdatedState(current)
+    // Clustering runs in the background, on the newest photos and camera once
+    // the previous run is done; the last clusters stay on the map meanwhile.
+    val latestLocated by rememberUpdatedState(located)
+    LaunchedEffect(density) {
+        snapshotFlow { Triple(latestLocated, latestCamera, canvasSize) }.conflate().collect { (list, view, size) ->
+            clusters = withContext(Dispatchers.Default) { clusterView(list, view, size, density) }
+        }
+    }
     val latestClusters by rememberUpdatedState(clusters)
     val latestOpen by rememberUpdatedState(onOpen)
     val measurer = rememberTextMeasurer()
     val markerText = TextStyle(color = palette.onPrimary, fontSize = 12.sp)
     val placeText = TextStyle(color = palette.onSurface, fontSize = 11.sp)
+    // Counts and place names repeat from frame to frame: measure each once.
+    val labels = remember(measurer, markerText, placeText, density) { HashMap<Pair<String, Boolean>, TextLayoutResult>() }
+    fun label(text: String, place: Boolean): TextLayoutResult {
+        if (labels.size > 512) labels.clear()
+        return labels.getOrPut(text to place) { measurer.measure(text, if (place) placeText else markerText) }
+    }
     val status = when {
         failed -> "Couldn’t load photo locations"
         progress.scanning && progress.total > 0 -> "Checking locations… ${progress.checked} of ${progress.total}"
@@ -189,8 +232,9 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
                     }
                 }.pointerInput(Unit) {
                     detectTapGestures { tap ->
-                        val cluster = latestClusters.asReversed().firstOrNull {
-                            (Offset(it.x * density, it.y * density) - tap).getDistance() <= it.radius * density
+                        val shown = latestClusters ?: return@detectTapGestures
+                        val cluster = shown.clusters.asReversed().firstOrNull {
+                            (shown.center(it, latestCamera, density) - tap).getDistance() <= it.radius * density
                         } ?: return@detectTapGestures
                         val members = cluster.members.mapNotNull { photos.getOrNull(it.toInt()) }
                         if (members.size == 1) latestOpen(members.first())
@@ -203,16 +247,16 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
                     }
                 }) {
                 outline?.let { drawOutline(it, current, canvasSize, palette.surfaceContainerHighest, palette.outlineVariant) }
-                for (cluster in clusters) {
-                    val center = Offset(cluster.x * density, cluster.y * density)
+                val shown = clusters
+                if (shown != null) shown.clusters.forEachIndexed { index, cluster ->
+                    val center = shown.center(cluster, current, density)
                     val radius = cluster.radius * density
                     drawCircle(palette.primary, radius, center)
                     drawCircle(palette.onPrimaryContainer, radius, center, style = Stroke(1.dp.toPx()))
-                    val label = measurer.measure(cluster.count, markerText)
-                    drawText(label, topLeft = center - Offset(label.size.width / 2f, label.size.height / 2f))
-                    val place = cluster.members.firstOrNull()?.let { photos.getOrNull(it.toInt())?.place }
-                    if (place != null && cluster.members.all { photos.getOrNull(it.toInt())?.place == place }) {
-                        val name = measurer.measure(place, placeText)
+                    val count = label(cluster.count, place = false)
+                    drawText(count, topLeft = center - Offset(count.size.width / 2f, count.size.height / 2f))
+                    shown.places[index]?.let { place ->
+                        val name = label(place, place = true)
                         drawText(name, topLeft = Offset(center.x - name.size.width / 2f, center.y + radius + 3.dp.toPx()))
                     }
                 }
