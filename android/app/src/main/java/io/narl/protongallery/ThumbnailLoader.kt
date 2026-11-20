@@ -117,8 +117,10 @@ class ThumbnailLoader(private val directory: File,
                 }
                 currentCoroutineContext().ensureActive()
                 val file = File(directory, fileName(cacheKey))
+                // Only shown, never read back: the default allocator puts it in
+                // graphics memory instead of the Java heap where it can.
                 val cached = if (!private && file.isFile) {
-                    try { ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE } }
+                    try { ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, _, _ -> decoder.allocator = ImageDecoder.ALLOCATOR_DEFAULT } }
                     catch (_: Exception) { file.delete(); null }
                 } else null
                 if (cached != null) {
@@ -126,14 +128,17 @@ class ThumbnailLoader(private val directory: File,
                     memory.put(cacheKey, cached)
                     return@withLock cached
                 }
+                // Decoded in software so it can be written to disk as WebP;
+                // memory keeps a hardware copy for display.
                 val decoded = decode(item) ?: return@withLock null
                 currentCoroutineContext().ensureActive()
+                val shown = forDisplay(decoded)
                 synchronized(memory) {
                     if (private && generation != privateGeneration) return@withLock null
-                    memory.put(cacheKey, decoded)
+                    memory.put(cacheKey, shown)
                 }
                 if (!private) store(file, decoded)
-                decoded
+                shown
             }
         } finally {
             synchronized(locks) {
@@ -167,6 +172,12 @@ class ThumbnailLoader(private val directory: File,
             ThumbnailUtils.createVideoThumbnail(File(item.localPath), size, CancellationSignal())
         } else decodeImage(File(item.localPath), EDGE)
     }
+
+    // A hardware copy keeps grid thumbnails off the Java heap. The software
+    // original is still needed once, to write the disk tier.
+    private fun forDisplay(bitmap: Bitmap): Bitmap =
+        if (bitmap.config == Bitmap.Config.HARDWARE) bitmap
+        else runCatching { bitmap.copy(Bitmap.Config.HARDWARE, false) }.getOrNull() ?: bitmap
 
     // A failed write must not hide the decoded image.
     private fun store(file: File, bitmap: Bitmap) = runCatching {
