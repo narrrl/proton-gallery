@@ -59,3 +59,24 @@ decode 512x384 JPEG to tile                        200     17.8 ms     35.7 ms  
 decode 4032x3024 JPEG to tile                       10    866.9 ms   1141.7 ms   1141.7 ms
 shrink 4032x3024 JPEG for disk cache                10    916.9 ms   1030.4 ms   1030.4 ms
 ```
+
+After memoising Places markers, skipping unchanged scroll work and lighter
+grid tiles, same machine, load average about 11. The changed paths
+(per-draw clustering, per-scroll bookkeeping, tile building) are not rows
+here: the rows they call run as before, and the lower numbers come from
+the lighter machine load.
+
+```text
+operation                                      samples         p50         p95         max
+open catalog + first page (cold-ish)                10    198.5 ms    365.3 ms    365.3 ms
+outline + first page (warm)                         20    164.1 ms    245.1 ms    245.6 ms
+plan justified grid (1010 px)                       20      9.4 ms     10.3 ms     11.6 ms
+visible rows + items (per scroll)                20000      170 ns      221 ns     26.7 µs
+cluster 100000 points, zoom 1 (96 markers)          10     55.0 ms     63.0 ms     63.0 ms
+cluster 100000 points, zoom 16 (7 markers)          10      9.3 ms     10.7 ms     10.7 ms
+cluster 100000 points, zoom 256 (44 markers)        10      9.0 ms     11.0 ms     11.0 ms
+cluster 100000 points, zoom 4096 (21 markers)       10      9.0 ms     10.5 ms     10.5 ms
+decode 512x384 JPEG to tile                        200     10.5 ms     17.4 ms     26.3 ms
+decode 4032x3024 JPEG to tile                       10    414.7 ms    459.9 ms    459.9 ms
+shrink 4032x3024 JPEG for disk cache                10    480.3 ms    551.3 ms    551.3 ms
+```
