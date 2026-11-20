@@ -4016,9 +4016,8 @@ impl Gallery {
         let mut tiles = row![].spacing(grid::GAP as f32).height(height);
         for index in items {
             let width = self.layout.widths.get(index).copied().unwrap_or(1) as f32;
-            let thumb = ids
-                .and_then(|ids| ids.get(index))
-                .and_then(|id| self.thumbs.get(id));
+            let id = ids.and_then(|ids| ids.get(index));
+            let thumb = id.and_then(|id| self.thumbs.get(id));
             let focused = self.focus == Some(index);
             let video = self.item(index).is_some_and(|item| item.is_video);
             let body: Element<'_, Message> = match thumb {
@@ -4028,33 +4027,21 @@ impl Gallery {
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .into(),
-                None if ids
-                    .and_then(|ids| ids.get(index))
-                    .is_some_and(|id| self.thumbs_failed.contains(id)) =>
-                {
-                    center(
-                        column![
-                            design::icon(Icon::Image, 24.0),
-                            text(
-                                if self
-                                    .outline
-                                    .as_ref()
-                                    .and_then(|out| out.ids.get(index))
-                                    .is_some_and(|id| self.thumbs_retryable.contains(id))
-                                {
-                                    "Preview failed"
-                                } else {
-                                    "No preview"
-                                }
-                            )
-                            .size(12)
-                            .style(design::muted)
-                        ]
-                        .spacing(8)
-                        .align_x(Alignment::Center),
-                    )
-                    .into()
-                }
+                None if id.is_some_and(|id| self.thumbs_failed.contains(id)) => center(
+                    column![
+                        design::icon(Icon::Image, 24.0),
+                        text(if id.is_some_and(|id| self.thumbs_retryable.contains(id)) {
+                            "Preview failed"
+                        } else {
+                            "No preview"
+                        })
+                        .size(12)
+                        .style(design::muted)
+                    ]
+                    .spacing(8)
+                    .align_x(Alignment::Center),
+                )
+                .into(),
                 None => Space::new().width(Length::Fill).height(Length::Fill).into(),
             };
             let mut layers = iced::widget::stack![body]
@@ -4074,23 +4061,12 @@ impl Gallery {
             let tile = container(layers)
                 .padding(if focused { 3 } else { 0 })
                 .width(width)
-                .height(height)
-                .style(move |theme: &Theme| {
-                    let palette = theme.extended_palette();
-                    container::Style {
-                        background: Some(design::colors(theme).placeholder.into()),
-                        border: iced::Border {
-                            color: if focused {
-                                palette.primary.strong.color
-                            } else {
-                                Color::TRANSPARENT
-                            },
-                            width: if focused { 3.0 } else { 0.0 },
-                            radius: 5.0.into(),
-                        },
-                        ..container::Style::default()
-                    }
-                });
+                .height(height);
+            let tile = if focused {
+                tile.style(focused_tile_style)
+            } else {
+                tile.style(tile_style)
+            };
             tiles = tiles.push(
                 button(tile)
                     .padding(0)
@@ -4534,6 +4510,32 @@ pub fn default_data_dir() -> PathBuf {
     directories::ProjectDirs::from("io", "narl", "Proton Gallery")
         .map(|dirs| dirs.data_local_dir().join("desktop"))
         .unwrap_or_else(|| std::env::temp_dir().join("proton-gallery"))
+}
+
+/// A grid tile's background. A function item, unlike a capturing closure,
+/// is boxed as a style without allocating.
+fn tile_style(theme: &Theme) -> container::Style {
+    tile_with_focus(theme, false)
+}
+
+fn focused_tile_style(theme: &Theme) -> container::Style {
+    tile_with_focus(theme, true)
+}
+
+fn tile_with_focus(theme: &Theme, focused: bool) -> container::Style {
+    container::Style {
+        background: Some(design::colors(theme).placeholder.into()),
+        border: iced::Border {
+            color: if focused {
+                theme.extended_palette().primary.strong.color
+            } else {
+                Color::TRANSPARENT
+            },
+            width: if focused { 3.0 } else { 0.0 },
+            radius: 5.0.into(),
+        },
+        ..container::Style::default()
+    }
 }
 
 #[cfg(test)]
