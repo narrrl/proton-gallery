@@ -3,6 +3,8 @@
 //! `proton-gallery` opens the signed-in account's Photos timeline.
 //! `proton-gallery --demo [COUNT]` browses a synthetic library of COUNT items
 //! (100,000 by default) in a throwaway directory, without an account.
+//! `proton-gallery --bench` times the hot paths offline (docs/BENCH.md).
+mod bench;
 mod captcha;
 mod design;
 mod device_auth;
@@ -19,7 +21,7 @@ mod video_surface;
 
 use gallery::{Gallery, Options};
 
-const USAGE: &str = "Usage: proton-gallery [--demo [COUNT]] [--data-dir DIR]";
+const USAGE: &str = "Usage: proton-gallery [--demo [COUNT]] [--data-dir DIR]\n       proton-gallery --bench [--count N] [--points N] [--quick] [--json]";
 
 fn options() -> Result<Options, String> {
     let mut options = Options {
@@ -60,6 +62,9 @@ fn prepare_demo(options: &mut Options) -> std::io::Result<Option<tempfile::TempD
 }
 
 fn main() -> iced::Result {
+    if std::env::args().nth(1).as_deref() == Some("--bench") {
+        std::process::exit(bench::main(std::env::args().skip(2)));
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("PG_LOG").unwrap_or_else(|_| "warn".into()),

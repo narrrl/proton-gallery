@@ -178,6 +178,11 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// A camera looking at `center` (in projected world units) at `zoom`.
+    pub(crate) fn new(center: World, zoom: f64) -> Self {
+        Self { center, zoom }
+    }
+
     fn project(self, point: World, bounds: Rectangle) -> Point {
         let scale = self.scale(bounds);
         Point::new(
@@ -246,21 +251,25 @@ impl Map<'_> {
     }
 
     fn bubbles(&self, camera: Camera, bounds: Rectangle) -> Vec<Bubble> {
-        let screen: Vec<_> = self
-            .photos
-            .iter()
-            .map(|photo| {
-                let p = camera.project(photo.coordinates.projected(), bounds);
-                (f64::from(p.x), f64::from(p.y))
-            })
-            .collect();
-        places::cluster(
-            &screen,
-            &vec![1; screen.len()],
-            bounds.width.into(),
-            bounds.height.into(),
-        )
+        bubbles(self.photos, camera, bounds)
     }
+}
+
+/// The markers for `photos` seen through `camera` in `bounds`.
+pub(crate) fn bubbles(photos: &[LocatedPhoto], camera: Camera, bounds: Rectangle) -> Vec<Bubble> {
+    let screen: Vec<_> = photos
+        .iter()
+        .map(|photo| {
+            let p = camera.project(photo.coordinates.projected(), bounds);
+            (f64::from(p.x), f64::from(p.y))
+        })
+        .collect();
+    places::cluster(
+        &screen,
+        &vec![1; screen.len()],
+        bounds.width.into(),
+        bounds.height.into(),
+    )
 }
 
 // A canvas message carries camera changes so zoom buttons, pointer gestures,
