@@ -383,6 +383,28 @@ pub struct Gallery {
     account_request: u64,
     captcha_page: Option<Arc<tempfile::TempPath>>,
     last_frame: Option<std::time::Instant>,
+    /// What the last `request_visible` saw, so scrolling within the same
+    /// rows skips the work.
+    visible_key: Option<VisibleKey>,
+}
+
+/// Everything `request_visible` acts on, apart from the scroll position
+/// within the visible rows. While it is unchanged, calling it again starts
+/// nothing new.
+#[derive(Clone, Debug, PartialEq)]
+struct VisibleKey {
+    rows: std::ops::Range<usize>,
+    section: Section,
+    album_open: bool,
+    private_album: bool,
+    library_request: u64,
+    albums_request: u64,
+    /// Sizes of the page and thumbnail sets it consults.
+    pages: usize,
+    pages_loading: usize,
+    pages_failed: usize,
+    thumbs_loading: usize,
+    thumbs_failed: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -611,6 +633,7 @@ impl Gallery {
             account_request: 0,
             captcha_page: None,
             last_frame: None,
+            visible_key: None,
         };
         let start = Task::perform(
             async move {
@@ -1233,7 +1256,7 @@ impl Gallery {
                         return self.replan_to(width);
                     }
                 }
-                self.request_visible()
+                self.request_visible_scrolled()
             }
             Message::PageLoaded(request, generation, page, result) => {
                 if request != self.library_request || !self.current(generation) {
@@ -2589,9 +2612,46 @@ impl Gallery {
         self.pages.get(&(index / PAGE))?.get(index % PAGE)?.as_ref()
     }
 
+    /// The state `request_visible` would act on now, or `None` when album
+    /// covers are shown, which depend on the exact scroll position.
+    fn visible_key(&self) -> Option<VisibleKey> {
+        if self.cover_height() > 0.0 {
+            return None;
+        }
+        Some(VisibleKey {
+            rows: self.layout.visible(self.media_top(), self.media_height()),
+            section: self.section,
+            album_open: self.album_open,
+            private_album: self.hidden.private_album,
+            library_request: self.library_request,
+            albums_request: self.albums_request,
+            pages: self.pages.len(),
+            pages_loading: self.pages_loading.len(),
+            pages_failed: self.pages_failed.len(),
+            thumbs_loading: self.thumbs_loading.len(),
+            thumbs_failed: self.thumbs_failed.len(),
+        })
+    }
+
+    /// `request_visible` for a scroll event: nothing to do while the same
+    /// rows stay visible and nothing it depends on changed.
+    fn request_visible_scrolled(&mut self) -> Task<Message> {
+        let key = self.visible_key();
+        if key.is_some() && key == self.visible_key {
+            return Task::none();
+        }
+        self.request_visible()
+    }
+
     /// Ask for the records and thumbnails of what is near the viewport, and
     /// forget records far from it.
     fn request_visible(&mut self) -> Task<Message> {
+        let task = self.request_visible_now();
+        self.visible_key = self.visible_key();
+        task
+    }
+
+    fn request_visible_now(&mut self) -> Task<Message> {
         if !self.browsing() || self.section == Section::Places {
             return Task::none();
         }
@@ -4739,6 +4799,39 @@ mod tests {
         let _ = gallery.update(Message::Sync);
         assert!(gallery.pages_failed.is_empty());
         assert!(gallery.thumbs_failed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scrolling_within_the_same_rows_skips_work_that_would_change_nothing() {
+        let (_dir, mut gallery) = gallery(5_000).await;
+        gallery.viewport_height = 800.0;
+        gallery.scroll_top = 3_000.0;
+        let _ = gallery.request_visible();
+        let work = |gallery: &Gallery| {
+            let mut thumbs: Vec<String> = gallery.thumbs_loading.keys().cloned().collect();
+            thumbs.sort();
+            let pages: Vec<usize> = gallery.pages_loading.keys().copied().collect();
+            (pages, thumbs, gallery.pages.len())
+        };
+        let before = work(&gallery);
+        let key = gallery.visible_key.clone();
+        assert!(key.is_some());
+        gallery.scroll_top += 1.0;
+        assert_eq!(gallery.visible_key(), key);
+        let _ = gallery.request_visible_scrolled();
+        assert_eq!(work(&gallery), before);
+        // The full path agrees there was nothing to do.
+        let _ = gallery.request_visible();
+        assert_eq!(work(&gallery), before);
+        // New rows, or a change the scroll doesn't see, do the work again.
+        gallery.scroll_top = gallery.layout.height / 2.0;
+        let _ = gallery.request_visible_scrolled();
+        assert_ne!(gallery.visible_key, key);
+        let key = gallery.visible_key.clone();
+        gallery.thumbs_failed.insert("gone".into());
+        assert_ne!(gallery.visible_key(), key);
+        let _ = gallery.request_visible_scrolled();
+        assert_ne!(gallery.visible_key, key);
     }
 
     #[tokio::test]
