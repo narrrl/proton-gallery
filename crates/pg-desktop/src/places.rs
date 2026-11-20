@@ -2,7 +2,7 @@ use crate::design;
 use crate::gallery::Message;
 use iced::widget::canvas::{self, Action, Canvas, Path, Program};
 use iced::widget::{button, column, container, row, scrollable, text};
-use iced::{Color, Element, Length, Point, Rectangle, Renderer, Theme, Vector, color, mouse};
+use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, Vector, color, mouse};
 use proton_gallery_app_rs::places::{LocatedPhoto, PlacesScan};
 use proton_gallery_rs::places::{self, Bubble, World};
 use std::cell::RefCell;
@@ -101,7 +101,8 @@ impl Places {
             Canvas::new(Map {
                 photos: &self.photos,
                 camera: self.camera,
-                fit_steps: self.fit_steps
+                fit_steps: self.fit_steps,
+                request: self.request,
             })
             .width(Length::Fill)
             .height(Length::Fill),
@@ -178,6 +179,11 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// A camera looking at `center` (in projected world units) at `zoom`.
+    pub(crate) fn new(center: World, zoom: f64) -> Self {
+        Self { center, zoom }
+    }
+
     fn project(self, point: World, bounds: Rectangle) -> Point {
         let scale = self.scale(bounds);
         Point::new(
@@ -220,6 +226,18 @@ pub struct Map<'a> {
     photos: &'a [LocatedPhoto],
     camera: Option<Camera>,
     fit_steps: i32,
+    /// The Places scan the photos belong to.
+    request: u64,
+}
+
+/// What the markers depend on. Within one scan photos are only appended,
+/// so the scan and the photo count identify them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BubblesKey {
+    camera: Camera,
+    size: Size,
+    request: u64,
+    photos: usize,
 }
 
 #[derive(Default)]
@@ -227,6 +245,28 @@ pub struct MapState {
     base: canvas::Cache,
     paint: RefCell<Option<(Camera, bool)>>,
     drag: Option<(Point, Point)>,
+    /// The markers last clustered, shared by drawing and hit-testing.
+    bubbles: RefCell<Option<(BubblesKey, Vec<Bubble>)>>,
+}
+
+impl MapState {
+    /// The markers for `key`, clustered by `cluster` only when the key
+    /// changed since the last call.
+    fn bubbles(
+        &self,
+        key: BubblesKey,
+        cluster: impl FnOnce() -> Vec<Bubble>,
+    ) -> std::cell::Ref<'_, [Bubble]> {
+        let fresh = matches!(&*self.bubbles.borrow(), Some((known, _)) if *known == key);
+        if !fresh {
+            *self.bubbles.borrow_mut() = Some((key, cluster()));
+        }
+        std::cell::Ref::map(self.bubbles.borrow(), |cached| {
+            cached
+                .as_ref()
+                .map_or(&[][..], |(_, bubbles)| bubbles.as_slice())
+        })
+    }
 }
 
 impl Map<'_> {
@@ -245,22 +285,37 @@ impl Map<'_> {
         })
     }
 
-    fn bubbles(&self, camera: Camera, bounds: Rectangle) -> Vec<Bubble> {
-        let screen: Vec<_> = self
-            .photos
-            .iter()
-            .map(|photo| {
-                let p = camera.project(photo.coordinates.projected(), bounds);
-                (f64::from(p.x), f64::from(p.y))
-            })
-            .collect();
-        places::cluster(
-            &screen,
-            &vec![1; screen.len()],
-            bounds.width.into(),
-            bounds.height.into(),
-        )
+    fn bubbles<'s>(
+        &self,
+        state: &'s MapState,
+        camera: Camera,
+        bounds: Rectangle,
+    ) -> std::cell::Ref<'s, [Bubble]> {
+        let key = BubblesKey {
+            camera,
+            size: bounds.size(),
+            request: self.request,
+            photos: self.photos.len(),
+        };
+        state.bubbles(key, || bubbles(self.photos, camera, bounds))
     }
+}
+
+/// The markers for `photos` seen through `camera` in `bounds`.
+pub(crate) fn bubbles(photos: &[LocatedPhoto], camera: Camera, bounds: Rectangle) -> Vec<Bubble> {
+    let screen: Vec<_> = photos
+        .iter()
+        .map(|photo| {
+            let p = camera.project(photo.coordinates.projected(), bounds);
+            (f64::from(p.x), f64::from(p.y))
+        })
+        .collect();
+    places::cluster(
+        &screen,
+        &vec![1; screen.len()],
+        bounds.width.into(),
+        bounds.height.into(),
+    )
 }
 
 // A canvas message carries camera changes so zoom buttons, pointer gestures,
@@ -303,10 +358,15 @@ impl Program<Message> for Map<'_> {
                 let (start, last) = state.drag.take()?;
                 let pos = cursor.position_in(bounds)?;
                 if pos.distance(start) < 4.0 && last == start {
-                    let bubble = self.bubbles(map, bounds).into_iter().rev().find(|bubble| {
-                        let point = Point::new(bubble.x as f32, bubble.y as f32);
-                        point.distance(pos) <= bubble.radius as f32
-                    })?;
+                    let bubble = self
+                        .bubbles(state, map, bounds)
+                        .iter()
+                        .rev()
+                        .find(|bubble| {
+                            let point = Point::new(bubble.x as f32, bubble.y as f32);
+                            point.distance(pos) <= bubble.radius as f32
+                        })?
+                        .clone();
                     if bubble.members.len() == 1 {
                         return Some(
                             Action::publish(Message::OpenPlacePhoto(
@@ -410,7 +470,7 @@ impl Program<Message> for Map<'_> {
             }
         });
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        for bubble in self.bubbles(camera, bounds) {
+        for bubble in self.bubbles(state, camera, bounds).iter() {
             let point = Point::new(bubble.x as f32, bubble.y as f32);
             let circle = Path::circle(point, bubble.radius as f32);
             frame.fill(&circle, color!(0x6D4AFF));
@@ -452,5 +512,73 @@ impl Program<Message> for Map<'_> {
             }
         }
         vec![background, frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markers_are_clustered_once_per_camera_size_and_scan() {
+        let state = MapState::default();
+        let runs = std::cell::Cell::new(0);
+        let key = BubblesKey {
+            camera: Camera::default(),
+            size: Size::new(800.0, 600.0),
+            request: 1,
+            photos: 10,
+        };
+        let get = |key| {
+            state
+                .bubbles(key, || {
+                    runs.set(runs.get() + 1);
+                    vec![Bubble {
+                        x: 1.0,
+                        y: 2.0,
+                        radius: 18.0,
+                        photos: 1,
+                        members: vec![0],
+                    }]
+                })
+                .len()
+        };
+        // Drawing and hit-testing the same frame reuse the markers.
+        assert_eq!(get(key), 1);
+        assert_eq!(get(key), 1);
+        // Any change of camera, size, scan or photos clusters again.
+        get(BubblesKey {
+            camera: camera_zoom(key.camera, 2.0),
+            ..key
+        });
+        get(BubblesKey {
+            size: Size::new(900.0, 600.0),
+            ..key
+        });
+        get(BubblesKey { request: 2, ..key });
+        get(BubblesKey { photos: 11, ..key });
+        assert_eq!(runs.get(), 5);
+    }
+
+    #[test]
+    fn cached_markers_match_a_fresh_clustering() {
+        let photos = crate::bench::located_photos(2_000);
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(1000.0, 700.0));
+        let map = Map {
+            photos: &photos,
+            camera: None,
+            fit_steps: 0,
+            request: 0,
+        };
+        let state = MapState::default();
+        for zoom in [1.0, 4.0, 64.0, 1.0] {
+            let camera = camera_zoom(Camera::default(), zoom);
+            let fresh = bubbles(&photos, camera, bounds);
+            let cached = map.bubbles(&state, camera, bounds);
+            assert_eq!(cached.len(), fresh.len());
+            for (a, b) in cached.iter().zip(&fresh) {
+                assert_eq!((a.x, a.y, &a.members), (b.x, b.y, &b.members));
+            }
+        }
     }
 }
