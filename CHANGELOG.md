@@ -14,6 +14,13 @@
   desktop timeline every few seconds or drops thumbnails in flight, and on
   Android a tile that scrolls away frees its download slot at once. Each
   thumbnail needs fewer requests to Proton (proton-sdk 0.12.3).
+- Android shows thumbnails for Proton photos that were uploaded without one,
+  such as Google Photos imports from older Proton Drive Linux releases. The
+  app downloads the original once (images up to 40 MB, or the first second of
+  a video), makes the thumbnail on the phone and keeps it in the thumbnail
+  cache. At most two such downloads run at a time, only for tiles on screen,
+  and never on a failed fetch. Photos Android cannot decode are remembered and
+  not downloaded again.
 
 - The desktop Places map is new. It draws an offline basemap with seas by
   depth, lakes, rivers, built-up areas, borders and town names, in light and
