@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The desktop Places map is new. It draws an offline basemap with seas by
+  depth, lakes, rivers, built-up areas, borders and town names, in light and
+  dark, rendered in the background tile by tile through `proton-map-rs`.
+  Markers show a photo from each place with its count, never overlap, and
+  only name a place where the name fits. Zoom and fit sit in a floating pill,
+  with a scale bar and the map credits on the map. Choosing a place opens a
+  side panel of its photos. Progress shows as a chip with a bar while photos
+  are checked. Without the basemap file the map falls back to the old
+  outlines. Packages fetch the file with `scripts/fetch-basemap.sh`, which
+  checks it against a pinned SHA-256.
 - The desktop grid keeps thumbnails on disk (256 MiB, least recently used
   dropped first), so a new launch shows the library without downloading them
   again. Hidden-album thumbnails are never written to disk, and signing out

@@ -6,7 +6,7 @@
 //! the request it answers, and is dropped when either is out of date.
 use crate::design::{self, Icon};
 use crate::grid::{self, Layout, RowKind};
-use crate::places::{Camera, Places};
+use crate::places::{Places, TileKey};
 use crate::thumbs::{self, Decoded};
 use crate::vault;
 use iced::advanced::{
@@ -28,6 +28,7 @@ use proton_gallery_app_rs::sharing::{PublicLink, PublicLinkAction};
 use proton_gallery_app_rs::{
     AccountState, App, Generation, MediaItem, Outline, PhotosSyncStatus, SignInStage, View,
 };
+use proton_gallery_rs::camera::{Camera, Viewport};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -504,6 +505,11 @@ pub enum Message {
     PlacesListMore,
     PlacesFit,
     PlacesZoom(f64),
+    PlacesViewport(Viewport),
+    PlacesBasemap(Option<Arc<proton_map::Basemap>>),
+    PlacesTile(TileKey, Option<(iced::widget::image::Handle, usize)>),
+    PlacesThumb(u64, usize, Option<(iced::widget::image::Handle, usize)>),
+    WindowScale(f32),
     OpenPlacePhoto(usize),
     PlacePhotoReady(u64, Generation, Option<(Arc<Outline>, usize)>),
 
@@ -769,7 +775,11 @@ impl Gallery {
         match message {
             Message::SystemTheme(mode) => {
                 self.mode = mode;
-                Task::none()
+                self.places_changed()
+            }
+            Message::WindowScale(scale) => {
+                self.places.map.density = scale * self.scale_factor();
+                self.places_changed()
             }
             Message::Frame(now) => {
                 if let Some(last) = self.last_frame.replace(now) {
@@ -1660,7 +1670,7 @@ impl Gallery {
                         self.places.next = batch.next;
                         self.places.failed += batch.failed;
                         self.places.photos.extend(batch.photos);
-                        self.scan_places_batch()
+                        Task::batch([self.scan_places_batch(), self.places_changed()])
                     }
                     Err(error) => {
                         self.places.error = Some(error);
@@ -1670,37 +1680,60 @@ impl Gallery {
             }
             Message::PlacesCamera(camera) => {
                 self.places.camera = Some(camera);
-                self.places.selected.clear();
-                Task::none()
+                self.places_changed()
             }
             Message::PlacesSelect(selection) => {
                 self.places.select(selection, false);
-                Task::none()
+                self.places.reveal_selection();
+                self.places_changed()
             }
             Message::PlacesListAll => {
                 self.places
                     .select((0..self.places.photos.len()).collect(), true);
-                Task::none()
+                self.places_changed()
             }
             Message::PlacesListMore => {
-                self.places.list_limit += 60;
-                Task::none()
+                self.places.list_limit += crate::places::PANEL_PAGE;
+                self.request_place_thumbs()
             }
             Message::PlacesFit => {
                 self.places.camera = None;
-                self.places.fit_steps = 0;
-                self.places.selected.clear();
-                Task::none()
+                self.places_changed()
             }
             Message::PlacesZoom(factor) => {
-                if let Some(camera) = self.places.camera {
-                    self.places.camera = Some(crate::places::camera_zoom(camera, factor));
-                } else {
-                    self.places.fit_steps =
-                        (self.places.fit_steps + if factor > 1.0 { 1 } else { -1 }).clamp(-6, 13);
+                self.places.camera = self
+                    .places
+                    .current_camera()
+                    .map(|camera| camera.zoomed(factor));
+                self.places_changed()
+            }
+            Message::PlacesViewport(view) => {
+                self.places.viewport = Some(view);
+                self.places_changed()
+            }
+            Message::PlacesBasemap(basemap) => {
+                self.places.map.basemap = basemap;
+                self.places_changed()
+            }
+            Message::PlacesTile(key, tile) => {
+                self.places.map.tiles_loading.remove(&key);
+                if let Some((handle, bytes)) = tile {
+                    self.places.map.tiles.insert(key, handle, bytes);
                 }
-                self.places.selected.clear();
-                Task::none()
+                self.sync_place_tiles()
+            }
+            Message::PlacesThumb(request, index, picture) => {
+                if request != self.places.request {
+                    return Task::none();
+                }
+                self.places.thumbs_loading.remove(&index);
+                match picture {
+                    Some((handle, bytes)) => self.places.thumbs.insert(index, handle, bytes),
+                    None => {
+                        self.places.thumbs_failed.insert(index);
+                    }
+                }
+                self.request_place_thumbs()
             }
             Message::OpenPlacePhoto(index) => self.open_place_photo(index),
             Message::PlacePhotoReady(request, generation, result) => {
@@ -2067,7 +2100,111 @@ impl Gallery {
         )
         .abortable();
         self.places.work = Some(handle.abort_on_drop());
-        task
+        let mut tasks = vec![task];
+        if !self.places.map.opened {
+            self.places.map.opened = true;
+            tasks.push(Task::perform(
+                async {
+                    tokio::task::spawn_blocking(crate::places::open_basemap)
+                        .await
+                        .ok()
+                        .flatten()
+                },
+                Message::PlacesBasemap,
+            ));
+            tasks.push(
+                window::latest()
+                    .and_then(window::scale_factor)
+                    .map(Message::WindowScale),
+            );
+        }
+        Task::batch(tasks)
+    }
+
+    /// The camera, view, photos or theme of Places changed: cluster again
+    /// and ask for the tiles and pictures now on screen.
+    fn places_changed(&mut self) -> Task<Message> {
+        if self.section != Section::Places {
+            return Task::none();
+        }
+        self.places.map.dark = self.mode == iced::theme::Mode::Dark;
+        self.places.refresh();
+        Task::batch([self.sync_place_tiles(), self.request_place_thumbs()])
+    }
+
+    /// Render the basemap tiles on screen that aren't yet, a few at a time,
+    /// nearest the centre first.
+    fn sync_place_tiles(&mut self) -> Task<Message> {
+        let Some(basemap) = self.places.map.basemap.clone() else {
+            return Task::none();
+        };
+        let wanted = self.places.wanted_tiles();
+        let map = &mut self.places.map;
+        map.tiles.touch(&wanted);
+        let slots = std::thread::available_parallelism()
+            .map_or(2, |n| n.get().saturating_sub(1))
+            .clamp(1, 4);
+        let mut tasks = Vec::new();
+        for key in wanted {
+            if map.tiles_loading.len() >= slots {
+                break;
+            }
+            if map.tiles.contains(&key) || map.tiles_loading.contains(&key) {
+                continue;
+            }
+            map.tiles_loading.insert(key);
+            let basemap = basemap.clone();
+            tasks.push(Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || crate::places::render_tile(&basemap, key))
+                        .await
+                        .ok()
+                },
+                move |tile| Message::PlacesTile(key, tile),
+            ));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Load the pictures of the markers and panel photos on screen, and
+    /// drop loads no longer on screen.
+    fn request_place_thumbs(&mut self) -> Task<Message> {
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        let wanted = self.places.wanted_thumbs();
+        let places = &mut self.places;
+        places.thumbs.touch(&wanted);
+        let keep: HashSet<usize> = wanted.iter().copied().collect();
+        places
+            .thumbs_loading
+            .retain(|index, _| keep.contains(index));
+        let provider = self.provider(&app);
+        let places = &mut self.places;
+        let mut tasks = Vec::new();
+        for index in wanted {
+            if places.thumbs_loading.len() >= crate::places::THUMBS_IN_FLIGHT {
+                break;
+            }
+            if places.thumbs.contains(&index)
+                || places.thumbs_loading.contains_key(&index)
+                || places.thumbs_failed.contains(&index)
+            {
+                continue;
+            }
+            let Some(key) = places.key_of(index) else {
+                continue;
+            };
+            let request = places.request;
+            let (task, handle) = Task::perform(
+                crate::places::load_thumb(provider.clone(), key),
+                move |picture| Message::PlacesThumb(request, index, picture),
+            )
+            .abortable();
+            places.thumbs_loading.insert(index, handle.abort_on_drop());
+            tasks.push(task);
+        }
+        Task::batch(tasks)
     }
 
     fn scan_places_batch(&mut self) -> Task<Message> {

@@ -103,6 +103,7 @@ pub fn run(config: &Config) -> Result<Vec<Measure>, String> {
     let (ratios, times) = runtime.block_on(catalog(config, dir.path(), &mut out))?;
     timeline(config, &ratios, &times, &mut out);
     clustering(config, &mut out);
+    basemap_tiles(config, &mut out);
     decoding(config, &mut out)?;
     Ok(out)
 }
@@ -229,6 +230,32 @@ pub fn located_photos(count: usize) -> Vec<LocatedPhoto> {
         .collect()
 }
 
+/// Rendering one basemap tile, as Places does off the UI thread for each
+/// tile it hasn't drawn yet. Skipped when no basemap is installed.
+fn basemap_tiles(config: &Config, out: &mut Vec<Measure>) {
+    let Some(basemap) = places::open_basemap() else {
+        return;
+    };
+    // Around Cologne, from the whole world down to a city.
+    for level in [2u8, 6, 10] {
+        let tile = proton_map::TileId::containing(50.94, 6.96, level);
+        let key = places::TileKey {
+            level,
+            x: tile.x,
+            y: tile.y,
+            dark: false,
+            density: 4,
+        };
+        let samples = sample(config.repeats(20), || {
+            std::hint::black_box(places::render_tile(&basemap, key));
+        });
+        out.push(Measure::new(
+            format!("render basemap tile, level {level}"),
+            samples,
+        ));
+    }
+}
+
 fn clustering(config: &Config, out: &mut Vec<Measure>) {
     let photos = located_photos(config.points);
     let home = photos
@@ -240,10 +267,15 @@ fn clustering(config: &Config, out: &mut Vec<Measure>) {
         } else {
             home
         };
-        let camera = places::Camera::new(center, zoom);
+        let camera = proton_gallery_rs::camera::Camera::new(center, zoom);
         let mut bubbles = 0;
         let samples = sample(config.repeats(10), || {
-            bubbles = places::bubbles(&photos, camera, MAP).len();
+            bubbles = places::bubbles(
+                &photos,
+                camera,
+                proton_gallery_rs::camera::Viewport::new(MAP.width.into(), MAP.height.into()),
+            )
+            .len();
         });
         out.push(Measure::new(
             format!(

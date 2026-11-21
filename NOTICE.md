@@ -27,6 +27,11 @@ Places uses land and border data from [Natural Earth](https://www.naturalearthda
 (public domain) and a trimmed [GeoNames](https://www.geonames.org/) cities dataset
 under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The bundled
 datasets and their conversion scripts originated in Proton Drive Linux.
+The desktop Places map draws an offline basemap (`basemap-v1.pmtiles`, built
+by the `basemap` tool in [proton-rs](https://github.com/narrrl/proton-rs) and
+downloaded by `scripts/fetch-basemap.sh`) from Natural Earth 10m data (public
+domain) and GeoNames towns (CC BY 4.0). Its labels use Inter, bundled with
+`proton-map-rs` under the SIL Open Font License.
 Desktop uses [Inter](https://rsms.me/inter/) under the bundled
 [SIL Open Font License](crates/pg-desktop/fonts/Inter-OFL.txt).
 

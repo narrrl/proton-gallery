@@ -207,6 +207,7 @@ pub enum Icon {
     Lock,
     Add,
     Map,
+    Fit,
 }
 
 // Small native SVGs share a 24px grid and 1.7px stroke; no icon font required.
@@ -235,6 +236,7 @@ pub fn icon<'a>(kind: Icon, size: f32) -> svg::Svg<'a> {
         Icon::Map => {
             "<path d='M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 0 1 16 0Z'/><circle cx='12' cy='10' r='2.5'/>"
         }
+        Icon::Fit => "<path d='M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5'/>",
         Icon::Folder => {
             "<path d='M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z'/>"
         }

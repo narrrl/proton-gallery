@@ -29,6 +29,7 @@ Each row reports p50, p95 and the maximum over its samples.
 | plan justified grid | `grid::Layout::plan` for the whole timeline at 1010 px, the grid width of the default 1280 px window. |
 | visible rows + items (per scroll) | `Layout::visible` and `Layout::items_in` at random scroll positions: what each scroll event computes. |
 | cluster N points, zoom Z | `places::bubbles`, the projection and `proton_gallery_rs::places::cluster` the map runs per draw, on a 1000×700 map at four zoom levels. |
+| render basemap tile, level L | `places::render_tile`: one 256 px basemap tile near Cologne, light style, at 1× density. Places renders each tile it hasn't drawn yet like this, off the UI thread. Only runs when the basemap is installed. |
 | decode W×H JPEG to tile | `thumbs::decode` to the 320 px tile size: a Proton grid thumbnail, and an original standing in for a missing one. |
 | shrink W×H JPEG for disk cache | `proton_media_rs::render::thumbnail`, what `DiskThumbs::store` does to a picture larger than 256 KiB. |
 

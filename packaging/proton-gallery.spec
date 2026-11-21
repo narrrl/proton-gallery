@@ -58,6 +58,7 @@ test -x "%{binary}"
 cd "%{git_dir}"
 cargo build --release --locked -p pg-desktop --bin proton-gallery
 %endif
+bash "%{git_dir}/scripts/fetch-basemap.sh"
 
 %install
 bash "%{git_dir}/packaging/install.sh" "%{buildroot}" "%{binary}"
@@ -69,5 +70,6 @@ bash "%{git_dir}/packaging/install.sh" "%{buildroot}" "%{binary}"
 /usr/share/icons/hicolor/scalable/apps/io.narl.proton-gallery.svg
 /usr/share/icons/hicolor/512x512/apps/io.narl.proton-gallery.png
 /usr/share/pixmaps/proton-gallery.png
+/usr/share/proton-gallery/basemap-v1.pmtiles
 %license /usr/share/licenses/proton-gallery/*
 %doc /usr/share/doc/proton-gallery/
