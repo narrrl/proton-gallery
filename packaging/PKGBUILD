@@ -14,7 +14,7 @@ depends=('dbus' 'polkit' 'fontconfig' 'libxkbcommon' 'libxkbcommon-x11'
          'libx11' 'libxcursor' 'libxi' 'libxrandr' 'wayland' 'libglvnd'
          'vulkan-icd-loader' 'hicolor-icon-theme' 'xdg-utils' 'ca-certificates'
          'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-libav')
-makedepends=('cargo' 'pkgconf')
+makedepends=('cargo' 'pkgconf' 'curl')
 optdepends=('gnome-keyring: save sessions using Secret Service'
             'kwallet: save sessions using KDE Secret Service'
             'ttf-dejavu: fallback fonts for the desktop interface'
@@ -39,6 +39,7 @@ build() {
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR="$_workspace/target"
   cargo build --release --locked -p pg-desktop --bin proton-gallery
+  bash "$_workspace/scripts/fetch-basemap.sh"
 }
 
 package() {

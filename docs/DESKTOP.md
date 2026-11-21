@@ -46,6 +46,15 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
 `proton-gallery --bench` times the grid, Places and thumbnail hot paths offline on a
 synthetic library; see the [benchmark guide](BENCH.md) for options and a baseline.
 
+### Places basemap
+
+The Places map draws its basemap from `basemap-v1.pmtiles` (about 25 MB).
+`scripts/fetch-basemap.sh` downloads it into `data/`, checked against a
+pinned SHA-256; development builds read it from there, and the Linux packages
+install it to `/usr/share/proton-gallery/`. The app also looks next to its
+executable, in its data directory, and at `PROTON_GALLERY_BASEMAP`. Without
+the file Places shows coarse land outlines instead.
+
 ## Account and media behavior
 
 - Sessions live in Linux Secret Service or Windows Credential Manager. If a keyring

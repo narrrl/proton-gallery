@@ -28,6 +28,7 @@ if [[ -z $binary ]]; then
   (cd "$root" && cargo build --release --locked -p pg-desktop --bin proton-gallery)
   binary="$root/target/release/proton-gallery"
 fi
+bash "$root/scripts/fetch-basemap.sh"
 [[ -x $binary ]] || { echo "Not an executable: $binary" >&2; exit 1; }
 if ! LC_ALL=C readelf -h "$binary" | grep -q 'Machine:.*X86-64'; then
   echo "Not an x86_64 Linux executable: $binary" >&2
