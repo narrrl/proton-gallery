@@ -11,14 +11,14 @@ license = "MIT"
 [workspace.dependencies]
 # Gallery core, Drive adapter and app services, shared with proton-drive-linux
 # through crates.io (https://github.com/narrrl/proton-rs).
-proton-gallery-rs = "0.1.4"
+proton-gallery-rs = "0.1.5"
 proton-map-rs = "0.1.0"
 proton-gallery-drive-rs = "0.1.2"
 proton-gallery-app-rs = "0.1.0"
 proton-auth-rs = "0.1"
 proton-media-rs = { version = "0.1.1", features = ["image"] }
-proton-sdk = "=0.12.2"
-proton-drive-rs = "=0.12.2"
+proton-sdk = "=0.12.3"
+proton-drive-rs = "=0.12.3"
 aes-gcm = { version = "0.11", features = ["zeroize"] }
 anyhow = "1"
 async-trait = "0.1"
