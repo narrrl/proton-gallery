@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -284,7 +285,9 @@ fun GalleryApp(
                     "Sign in to see where your Proton Photos were taken.", "Sign in to Proton", top)
                 places -> key(account.generation, account.visibilityRevision) {
                     val placeScope = rememberCoroutineScope()
-                    PlacesScreen(placesActions, state.revision, PaddingValues(top = top, bottom = bottom)) { photo ->
+                    val mapDark = MaterialTheme.colorScheme.background.luminance() < .5f
+                    PlacesScreen(placesActions, state.revision, PaddingValues(top = top, bottom = bottom), mapDark,
+                        thumbnail = { photo -> placesActions.item(photo.id)?.let { thumbnails.load(it) }?.asImageBitmap() }) { photo ->
                         placeScope.launch {
                             val current = try { placesActions.open(photo.id) }
                             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }

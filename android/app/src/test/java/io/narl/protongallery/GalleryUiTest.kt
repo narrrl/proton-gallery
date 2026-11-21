@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.graphics.luminance
@@ -36,6 +37,7 @@ import io.narl.protongallery.bridge.SignInStage
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -134,9 +136,9 @@ class GalleryUiTest {
         val item = fixtures.first()
         val outline = GalleryOutline.of(fixtures)
         val photos = listOf(
-            PlacePhoto(item.id, item.name, 0.537, 0.328, "Berlin"),
-            PlacePhoto(fixtures[1].id, fixtures[1].name, 0.506, 0.344, "Paris"),
-            PlacePhoto(fixtures[2].id, fixtures[2].name, 0.439, 0.265, "Reykjavík"),
+            PlacePhoto(item.id, item.name, 0.537, 0.328, "Berlin", 0u),
+            PlacePhoto(fixtures[1].id, fixtures[1].name, 0.506, 0.344, "Paris", 1u),
+            PlacePhoto(fixtures[2].id, fixtures[2].name, 0.439, 0.265, "Reykjavík", 2u),
         )
         var opened: String? = null
         render(fixtures, ThemeMode.Dark, initialLocation = GalleryLocation(), photosTab = true,
@@ -150,22 +152,46 @@ class GalleryUiTest {
         compose.onNodeWithText("3 photos on the map").assertExists()
         compose.onRoot().captureRoboImage("build/screenshots/places-dark.png")
         compose.onNodeWithText("List photos").performClick()
-        compose.onNodeWithText(item.name).performClick()
+        compose.onNodeWithContentDescription("Photo: ${item.name}").performClick()
         compose.onNodeWithContentDescription("Back to gallery").assertExists()
         assertEquals(item.id, opened)
     }
 
     @Test fun tapping_colocated_markers_lists_both_photos_immediately() {
         val items = fixtureItems().take(2)
-        val photos = items.map { PlacePhoto(it.id, it.name, 0.537, 0.328, "Berlin") }
+        val photos = items.mapIndexed { index, it -> PlacePhoto(it.id, it.name, 0.537, 0.328, "Berlin", index.toUInt()) }
         render(items, ThemeMode.Dark, initialLocation = GalleryLocation(GallerySection.Places),
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "demo", null, false)),
             places = PlacesActions(scan = { update ->
                 update(PlacesProgress(photos, checked = 2, total = 2, scanning = false))
             }))
         compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) {
+            compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "1 place")).fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithContentDescription("Photo map").performTouchInput { click(center) }
-        items.forEach { compose.onNodeWithText(it.name).assertExists() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithText("2 photos").fetchSemanticsNodes().isNotEmpty() }
+        items.forEach { compose.onNodeWithContentDescription("Photo: ${it.name}").assertExists() }
+    }
+
+    @Test fun the_zoom_pill_changes_the_scale() {
+        val items = fixtureItems().take(2)
+        val photos = items.mapIndexed { index, it -> PlacePhoto(it.id, it.name, 0.537 + index * .01, 0.328, "Berlin", index.toUInt()) }
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(GallerySection.Places),
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "demo", null, false)),
+            places = PlacesActions(scan = { update ->
+                update(PlacesProgress(photos, checked = 2, total = 2, scanning = false))
+            }))
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
+        fun scale() = compose.onAllNodes(SemanticsMatcher("scale bar") { node ->
+            node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it.startsWith("Scale ") } == true
+        }).fetchSemanticsNodes().single().config[SemanticsProperties.ContentDescription].single()
+        val before = scale()
+        compose.onNodeWithContentDescription("Zoom out").performClick()
+        compose.onNodeWithContentDescription("Zoom out").performClick()
+        compose.waitForIdle()
+        assertNotEquals(before, scale())
+        compose.onRoot().captureRoboImage("build/screenshots/places-light.png")
     }
 
     @Test fun an_album_only_gallery_has_no_media_loading_indicator() {

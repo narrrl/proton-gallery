@@ -19,6 +19,7 @@ required-features = ["bindgen"]
 
 [dependencies]
 proton-gallery-rs.workspace = true
+proton-map-rs.workspace = true
 proton-gallery-app-rs.workspace = true
 proton-gallery-drive-rs.workspace = true
 proton-drive-rs.workspace = true
@@ -37,6 +38,7 @@ log = { version = "0.4", features = ["std"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+proton-map-rs = { workspace = true, features = ["writer"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "=0.21.1"

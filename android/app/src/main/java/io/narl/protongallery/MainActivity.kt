@@ -168,7 +168,10 @@ class MainActivity : ComponentActivity() {
             val chooserActions = remember {
                 ChooserActions(model::openChooser, model::chooserOpen, model::chooserBack, model::chooserRetry, model::addGallery, model::closeChooser)
             }
-            val placesActions = remember { PlacesActions(model::scanPlaces, model::placePhoto) }
+            val placesActions = remember {
+                PlacesActions(model::scanPlaces, model::placePhoto, model::placeItem,
+                    basemap = { withContext(Dispatchers.IO) { openBundledBasemap(applicationContext) } })
+            }
             val albumActions = remember(albumChoices) {
                 AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,
                     model::removeFromAlbum, model::deleteAlbum, model::hide)
