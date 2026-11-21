@@ -45,6 +45,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 
 /** Robolectric runs slowly on shared CI runners; give first frames time. */
 private const val UI_TIMEOUT_MS = 30_000L
@@ -197,6 +201,33 @@ class GalleryUiTest {
             assertTrue(directory.listFiles().isNullOrEmpty())
             thumbnails.forgetPrivate()
             assertNull(thumbnails.peek(item, private = true))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun tiles_that_scroll_away_free_their_fetch_slots() {
+        val directory = java.nio.file.Files.createTempDirectory("cancelled-thumbnails").toFile()
+        try {
+            val original = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+            val bytes = java.io.ByteArrayOutputStream().also { original.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+            val items = (0..ThumbnailLoader.SHOWN_FETCHES).map { index ->
+                fixtureItems().first().copy(id = "stuck-$index", localPath = "", remoteKey = "photo-$index", phoneId = null)
+            }
+            val stuck = items.dropLast(1).map { it.id }.toSet()
+            val started = java.util.concurrent.atomic.AtomicInteger()
+            val thumbnails = ThumbnailLoader(directory, remote = { item ->
+                if (item.id in stuck) { started.incrementAndGet(); kotlinx.coroutines.awaitCancellation() }
+                bytes.copyOf()
+            })
+            runBlocking {
+                // Every shown slot hangs on a slow fetch, like a fast scroll.
+                val scrolledAway = items.dropLast(1).map { item -> launch(Dispatchers.Default) { thumbnails.load(item) } }
+                withTimeout(5_000) { while (started.get() < ThumbnailLoader.SHOWN_FETCHES) delay(10) }
+                scrolledAway.forEach { it.cancel() }
+                // The tile now on screen loads without waiting for them.
+                assertNotNull(withTimeout(5_000) { thumbnails.load(items.last()) })
+            }
         } finally {
             directory.deleteRecursively()
         }

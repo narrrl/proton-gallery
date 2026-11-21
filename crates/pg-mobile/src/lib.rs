@@ -272,8 +272,13 @@ impl GalleryEngine {
         vault: Arc<dyn CredentialVault>,
     ) -> Result<Arc<Self>, GalleryError> {
         diagnostics::install();
+        // Thumbnails, sync and paging share these workers; more than two
+        // keeps grid fetches moving while sync is busy.
+        let workers = std::thread::available_parallelism()
+            .map_or(2, usize::from)
+            .clamp(2, 4);
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(workers)
             .enable_all()
             .build()
             .map_err(proton_gallery_rs::Error::Io)?;

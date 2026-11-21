@@ -184,9 +184,21 @@ impl GalleryEngine {
             .block_on(self.app.gallery_visibility_cached())?)
     }
     /// Small decrypted previews stay in the caller's bounded memory cache.
-    pub fn photo_thumbnail(&self, key: String) -> Result<Option<Vec<u8>>, GalleryError> {
+    ///
+    /// Async so a grid tile that scrolls away cancels its fetch: dropping
+    /// the UniFFI future drops the network work and frees the caller's slot
+    /// at once, instead of holding a thread until the fetch ends.
+    pub async fn photo_thumbnail(
+        self: Arc<Self>,
+        key: String,
+    ) -> Result<Option<Vec<u8>>, GalleryError> {
         let key = parse_key(&key)?;
-        Ok(self.runtime.block_on(self.app.thumbnail(&key))?)
+        let mut fetch = std::pin::pin!(self.app.thumbnail(&key));
+        Ok(std::future::poll_fn(|cx| {
+            let _guard = self.runtime.enter();
+            std::future::Future::poll(fetch.as_mut(), cx)
+        })
+        .await?)
     }
     pub fn remember_photo_shape(
         &self,
