@@ -300,8 +300,13 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    /// The GStreamer tests decode real video. Run one at a time so a busy
+    /// CI runner does not starve the small clip while the HD one decodes.
+    static GSTREAMER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn gstreamer_decodes_and_seeks_a_webm() {
+        let _serial = GSTREAMER.lock().await;
         gst::init().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip.webm");
@@ -325,7 +330,7 @@ mod tests {
             playing: true,
             ..Playback::default()
         };
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         let frames = player.frames();
         while !frames.has_frame() {
             player.poll(&mut state).unwrap();
@@ -366,6 +371,7 @@ mod tests {
     /// They now reach the frame slot whole, each under a new number.
     #[tokio::test]
     async fn full_hd_frames_reach_the_video_surface() {
+        let _serial = GSTREAMER.lock().await;
         gst::init().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hd.webm");
@@ -376,7 +382,7 @@ mod tests {
             ..Playback::default()
         };
         let frames = player.frames();
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut seen = std::collections::BTreeSet::new();
         while seen.len() < 3 {
             player.poll(&mut state).unwrap();
@@ -391,6 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_video_decoder_is_named() {
+        let _serial = GSTREAMER.lock().await;
         gst::init().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip.webm");

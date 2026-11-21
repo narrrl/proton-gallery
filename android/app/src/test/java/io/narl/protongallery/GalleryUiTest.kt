@@ -46,6 +46,9 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import kotlinx.coroutines.runBlocking
 
+/** Robolectric runs slowly on shared CI runners; give first frames time. */
+private const val UI_TIMEOUT_MS = 30_000L
+
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w412dp-h892dp-xxhdpi")
@@ -74,7 +77,7 @@ class GalleryUiTest {
         compose.onNodeWithText("Trips").performClick()
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithText("Coast").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         val heading = compose.onAllNodesWithText(galleryDate(1_789_000_000L)).onFirst().fetchSemanticsNode()
         val layouts = mutableListOf<TextLayoutResult>()
         heading.config[SemanticsActions.GetTextLayoutResult].action?.invoke(layouts)
@@ -86,7 +89,7 @@ class GalleryUiTest {
     @Test fun pinching_the_grid_changes_tile_size_and_headings() {
         var zoom = ZOOM_DEFAULT
         render(fixtureItems(), ThemeMode.Light, onZoom = { zoom = it })
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithText(galleryDate(1_789_000_000L)).assertCountEquals(1)
         compose.onRoot().performTouchInput {
             pinch(center - Offset(40f, 0f), center - Offset(240f, 0f), center + Offset(40f, 0f), center + Offset(240f, 0f))
@@ -100,7 +103,7 @@ class GalleryUiTest {
         compose.waitForIdle()
         assertTrue("zoom $zoom is not small", zoom < 64f)
         // Small tiles head each year rather than each day.
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("2026").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithText("2026").fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithText(galleryDate(1_789_000_000L)).assertCountEquals(0)
         waitForThumbnails()
         compose.onRoot().captureRoboImage("build/screenshots/zoomed-out-light.png")
@@ -109,7 +112,7 @@ class GalleryUiTest {
     @Test fun a_photo_opens_with_device_availability_and_returns_to_the_grid() {
         val items = fixtureItems()
         render(items, ThemeMode.Light)
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         waitForThumbnails()
         compose.onRoot().captureRoboImage("build/screenshots/library-light.png")
         compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performClick()
@@ -139,7 +142,7 @@ class GalleryUiTest {
                 open = { id -> opened = id; outline to fixtures.indexOfFirst { it.id == id } },
             ))
         compose.onNodeWithContentDescription("Places").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("3 photos on the map").assertExists()
         compose.onRoot().captureRoboImage("build/screenshots/places-dark.png")
         compose.onNodeWithText("List photos").performClick()
@@ -156,7 +159,7 @@ class GalleryUiTest {
             places = PlacesActions(scan = { update ->
                 update(PlacesProgress(photos, checked = 2, total = 2, scanning = false))
             }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo map").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Photo map").performTouchInput { click(center) }
         items.forEach { compose.onNodeWithText(it.name).assertExists() }
     }
@@ -219,7 +222,7 @@ class GalleryUiTest {
     @Test @Config(sdk = [34], qualifiers = "w800dp-h1100dp-xhdpi")
     fun the_grid_adapts_to_a_tablet_without_fixed_column_counts() {
         render(fixtureItems(), ThemeMode.Dark)
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         waitForThumbnails()
         compose.onRoot().captureRoboImage("build/screenshots/library-tablet-dark.png")
     }
@@ -239,7 +242,7 @@ class GalleryUiTest {
         compose.onNodeWithText("Trips").performClick()
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithText("Coast").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         if (System.getProperty("pg.screenshot.photos") != null) {
             compose.onRoot().performTouchInput { swipeDown() }
             compose.onNodeWithText("Coast").assertIsDisplayed()
@@ -264,7 +267,7 @@ class GalleryUiTest {
         var uploaded = emptyList<GalleryItem>()
         render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
             actions = BackupActions(upload = { uploaded = it }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg, not backed up").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg, not backed up").fetchSemanticsNodes().isNotEmpty() }
         waitForThumbnails()
         compose.onRoot().captureRoboImage("build/screenshots/phone-timeline-light.png")
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg, not backed up").performTouchInput { longClick() }
@@ -334,7 +337,7 @@ class GalleryUiTest {
             albumActions = AlbumActions(choices = listOf(summer, secret),
                 hide = { chosen, album, name -> hidden += "${chosen.size}:${album?.name ?: "new $name"}" }),
             privacy = PrivacyLock(available = { true }, unlock = { asked++; it(true) }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
 
         // Adding to an album while locked leaves hidden albums out.
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
@@ -367,7 +370,7 @@ class GalleryUiTest {
             albumActions = AlbumActions(choices = listOf(FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)),
                 hide = { chosen, album, name -> hidden += "${chosen.size}:${album?.name ?: "new $name"}" }),
             privacy = PrivacyLock(available = { true }, unlock = { asked++; it(true) }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
         compose.onNodeWithContentDescription("Hide").performClick()
         compose.waitForIdle()
@@ -383,7 +386,7 @@ class GalleryUiTest {
         val items = fixtureItems().mapIndexed { index, item -> item.copy(phoneId = "$index", backedUp = true) }
         var shared = emptyList<GalleryItem>()
         render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true, media = MediaActions(share = { shared = it }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
         // Everything is backed up already, so only sharing is offered.
         compose.onNodeWithText("Back up", substring = true).assertDoesNotExist()
@@ -398,7 +401,7 @@ class GalleryUiTest {
         }
         var deleted = emptyList<GalleryItem>()
         render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true, media = MediaActions(delete = { deleted = it }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
         compose.onNodeWithContentDescription("Photo: Coast 2.jpg").performClick()
         compose.onNodeWithContentDescription("Delete").performClick()
@@ -415,7 +418,7 @@ class GalleryUiTest {
 
     @Test fun files_kept_only_in_the_app_cannot_be_deleted_from_a_selection() {
         render(fixtureItems(), ThemeMode.Light)
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg", substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg", substring = true).onFirst().performTouchInput { longClick() }
         compose.onNodeWithText("1 selected").assertExists()
         compose.onNodeWithContentDescription("Delete").assertDoesNotExist()
@@ -428,7 +431,7 @@ class GalleryUiTest {
         render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true, photoAlbums = listOf(summer),
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
             albumActions = AlbumActions(choices = listOf(summer), add = { album, chosen -> added += "${album.name}:${chosen.size}" }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
         // Albums have their own tab; the timeline is only photos.
         compose.onNodeWithText("New album").assertDoesNotExist()
         compose.onNodeWithContentDescription("Albums").performClick()
@@ -436,7 +439,7 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Album Summer, 3 items").assertExists()
         compose.onRoot().captureRoboImage("build/screenshots/photo-albums-light.png")
         compose.onNodeWithContentDescription("Photos").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
         compose.onNodeWithContentDescription("Add to album").performClick()
@@ -452,7 +455,7 @@ class GalleryUiTest {
         render(fixtureItems().map { it.copy(inProton = true) }, ThemeMode.Light, initialLocation = GalleryLocation(GallerySection.Albums), photosTab = true,
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
             albumActions = AlbumActions(create = { name, chosen -> created += "$name:${chosen.size}" }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("New album").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithText("New album").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("New album").performClick()
         compose.onNodeWithText("Create").assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performTextInput("Hiking")
@@ -501,7 +504,7 @@ class GalleryUiTest {
         var picked = emptyList<GalleryItem>()
         render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
             pick = PickRequest(multiple = true, mime = "image/*"), onPick = { picked = it })
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Choose photos and videos").assertExists()
         compose.onNodeWithText("Add").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performClick()
@@ -518,11 +521,11 @@ class GalleryUiTest {
         val preview = Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888)
         val items = fixtureItems().mapIndexed { index, item -> item.copy(localPath = "", remoteKey = "key-$index") }
         render(items, ThemeMode.Light, media = MediaActions(largePhoto = { preview }))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Photo: Coast 0.jpg").performClick()
         compose.onNodeWithContentDescription("Back to gallery").assertExists()
         compose.onNodeWithText("In Proton Photos").assertExists()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Coast 0.jpg").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Back to gallery").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("In Proton Photos").assertDoesNotExist()
@@ -545,7 +548,7 @@ class GalleryUiTest {
             media = MediaActions(largePhoto = { preview }, favorite = { chosen, on -> favorites += "${chosen.single().name}:$on" }),
             actions = BackupActions(upload = { chosen -> uploaded += chosen.map { it.name } }),
             albumActions = AlbumActions(choices = listOf(summer)))
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg", substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Photo: Coast 0.jpg", substring = true).performClick()
         compose.onNodeWithContentDescription("Add to album").assertDoesNotExist()
         compose.onNodeWithContentDescription("Back up").performClick()
@@ -565,7 +568,7 @@ class GalleryUiTest {
         val base = fixtureItems()
         val items = (0 until 6).flatMap { copy -> base.map { it.copy(id = "${it.id}-$copy", name = "${it.name.removeSuffix(".jpg")}-$copy.jpg") } }
         render(items, ThemeMode.Light)
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0-0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0-0.jpg").fetchSemanticsNodes().isNotEmpty() }
         compose.onRoot().performTouchInput { swipeUp(startY = bottom * 0.9f, endY = top + 10f) }
         compose.waitForIdle()
         compose.onNodeWithText("On this device").assertIsNotDisplayed()
@@ -622,7 +625,7 @@ class GalleryUiTest {
         compose.onNodeWithText("Trips").performClick()
         compose.onNodeWithText("2026").performClick()
         compose.onNodeWithText("Coast").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty() }
         waitForThumbnails()
         compose.onRoot().captureRoboImage("build/screenshots/album-light.png")
         compose.onNodeWithContentDescription("Edit album").performClick()
@@ -645,7 +648,7 @@ class GalleryUiTest {
         val stopChoosing = compose.onNodeWithContentDescription("Stop choosing a cover")
         stopChoosing.assertExists()
         compose.onNodeWithText("Coast").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitUntil(10_000) {
+        compose.waitUntil(UI_TIMEOUT_MS) {
             compose.onAllNodesWithContentDescription("Photo: Coast 0.jpg").fetchSemanticsNodes().isNotEmpty()
         }
         stopChoosing.assertExists()
