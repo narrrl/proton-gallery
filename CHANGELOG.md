@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Places on Android now uses the same offline basemap as the desktop app:
+  seas by depth, lakes, rivers, towns and borders in light and dark,
+  rendered on the phone tile by tile. Markers show the newest photo of
+  each place with its count and name, and never overlap. Zoom in, zoom out
+  and fit sit in a floating pill, double-tap zooms in, and a scale bar and
+  the map credits sit on the map. Tapping a place opens a sheet with its
+  photos. The basemap ships inside the APK (about 25 MB), so the map works
+  offline and opening Places sends no request.
+- Grid thumbnails load faster. A running sync no longer reloads the
+  desktop timeline every few seconds or drops thumbnails in flight, and on
+  Android a tile that scrolls away frees its download slot at once. Each
+  thumbnail needs fewer requests to Proton (proton-sdk 0.12.3).
+
 - The desktop Places map is new. It draws an offline basemap with seas by
   depth, lakes, rivers, built-up areas, borders and town names, in light and
   dark, rendered in the background tile by tile through `proton-map-rs`.

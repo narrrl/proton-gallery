@@ -111,6 +111,19 @@ Crash report: `CrashLog` keeps the stack trace of an uncaught Kotlin exception a
 
 Native code: calls into Rust run on a pool of 8 threads with 8 MB stacks, because each call blocks on async Rust and Android's pooled threads have about 1 MB. The Android library is built with `--release`.
 
+### Places
+
+Places shows where Proton Photos were taken on an offline map. The basemap
+(`basemap-v1.pmtiles`, about 25 MB) is fetched at build time by
+`scripts/fetch-basemap.sh`, checked against its pinned SHA-256, and stored
+uncompressed in the APK. Rust reads it straight from the APK while Places is
+open and renders tiles with `proton-map-rs` on two background threads, nearest
+the centre first; a parent tile stands in until a tile is ready. Rendered
+tiles are kept up to 64 MB. Markers come from the same layout as the desktop
+app (`proton-gallery-rs` clustering and label placement) and show the newest
+photo of each place through the grid's thumbnail loader. Without the basemap
+the map draws coarse land outlines.
+
 ## Visual direction and icon
 
 The Proton-style theme uses violet actions, lavender surfaces, plum text/dark chrome, and quiet photo gutters. It is inspired by [Proton's visual identity](https://proton.me/blog/new-visual-universe); the custom gallery mark is related to the user's Proton Stream icon, not an official Proton logo.

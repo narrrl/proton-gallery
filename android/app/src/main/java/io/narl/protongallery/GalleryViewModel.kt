@@ -44,6 +44,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import io.narl.protongallery.bridge.LibraryView
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import io.narl.protongallery.bridge.GalleryException
@@ -659,6 +660,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     suspend fun scanPlaces(update: (PlacesProgress) -> Unit) {
         val repo = repository.value ?: return
+        placesOutlineLock.withLock { placesOutline = null }
         repo.placesScan().use { scan ->
             val total = scan.count().toInt()
             var next = 0u
@@ -671,6 +673,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 update(PlacesProgress(batch.photos, next.toInt(), total, failed, next.toInt() < total))
             }
         }
+    }
+
+    // The timeline Places reads located photos from; made once per scan.
+    private val placesOutlineLock = kotlinx.coroutines.sync.Mutex()
+    private var placesOutline: GalleryOutline? = null
+
+    /** The timeline record of a located photo, for its thumbnail. */
+    suspend fun placeItem(id: String): GalleryItem? {
+        val repo = repository.value ?: return null
+        val outline = placesOutlineLock.withLock {
+            placesOutline ?: repo.outline(io.narl.protongallery.bridge.LibraryView.Photos, viewModelScope, false).also { placesOutline = it }
+        }
+        val index = outline.indexOf(id)
+        return if (index >= 0) outline.fetchItem(index) else null
     }
 
     suspend fun placePhoto(id: String): Pair<GalleryOutline, Int>? {

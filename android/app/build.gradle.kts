@@ -32,7 +32,10 @@ android {
     sourceSets.named("main") {
         java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
         jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
+        assets.srcDir(layout.buildDirectory.dir("generated/basemap"))
     }
+    // Places reads the basemap straight from the APK, so it is stored as is.
+    androidResources { noCompress += "pmtiles" }
     // Keys stay outside the checkout: scripts/build-signed-android.py and CI
     // pass them in the environment. Without them, these builds are unsigned.
     signingConfigs {
@@ -107,7 +110,17 @@ val buildRust by tasks.registering(Exec::class) {
     outputs.dir(layout.buildDirectory.dir("generated/uniffi"))
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
 }
-tasks.named("preBuild") { dependsOn(buildRust) }
+// The offline Places basemap, checked against its pinned SHA-256. Without it
+// Places draws the coarse outlines instead.
+val fetchBasemap by tasks.registering(Exec::class) {
+    group = "native"
+    workingDir(rootProject.projectDir.parentFile)
+    val target = layout.buildDirectory.file("generated/basemap/basemap-v1.pmtiles")
+    commandLine("bash", "scripts/fetch-basemap.sh", target.get().asFile.absolutePath)
+    inputs.file("../../scripts/fetch-basemap.sh")
+    outputs.file(target)
+}
+tasks.named("preBuild") { dependsOn(buildRust, fetchBasemap) }
 
 dependencies {
     implementation("rustls:rustls-platform-verifier:0.1.1@aar")
