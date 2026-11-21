@@ -32,10 +32,16 @@ import java.security.MessageDigest
  *
  * Thumbnails of hidden albums are private: they stay in memory only, are never
  * written to disk, and [forgetPrivate] drops them when hidden albums lock.
+ *
+ * A Proton photo uploaded without a thumbnail gets one made from its original
+ * through [original], once per device: a few at a time, only for tiles on
+ * screen, never for read-ahead. [original] returns null for a photo that can
+ * never have one, which is remembered, and throws when it may work later.
  */
 class ThumbnailLoader(private val directory: File,
     private val remote: suspend (GalleryItem) -> ByteArray? = { null },
     private val rememberShape: suspend (GalleryItem, Int, Int) -> Unit = { _, _, _ -> },
+    private val original: suspend (GalleryItem) -> Bitmap? = { null },
     // The system's own thumbnail of a file on this phone; offline, but slower than ours.
     private val phone: (GalleryItem) -> Bitmap? = { null },
 ) {
@@ -50,6 +56,9 @@ class ThumbnailLoader(private val directory: File,
     // and never delays what is on screen.
     private val shownSlots = Semaphore(SHOWN_FETCHES)
     private val aheadSlots = Semaphore(AHEAD_FETCHES)
+    // Originals are large: few at once, and apart from the thumbnail slots.
+    private val originalSlots = Semaphore(ORIGINAL_FETCHES)
+    private val never by lazy { NeverList(File(directory, NEVER_FILE)) }
     private val memory = object : LruCache<String, Bitmap>(memoryBudget()) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
@@ -139,7 +148,7 @@ class ThumbnailLoader(private val directory: File,
                 }
                 // Decoded in software so it can be written to disk as WebP;
                 // memory keeps a hardware copy for display.
-                val decoded = decode(item, slots) ?: return@withLock null
+                val decoded = decode(item, private, cacheKey, slots) ?: return@withLock null
                 currentCoroutineContext().ensureActive()
                 val shown = forDisplay(decoded)
                 synchronized(memory) {
@@ -157,13 +166,14 @@ class ThumbnailLoader(private val directory: File,
         }
     }
 
-    private suspend fun decode(item: GalleryItem, slots: Semaphore): Bitmap? {
+    private suspend fun decode(item: GalleryItem, private: Boolean, cacheKey: String, slots: Semaphore): Bitmap? {
         if (item.phoneId != null) {
             runCatching { phone(item) }.getOrNull()?.let { return it }
             if (item.remoteKey == null) return null
         }
         if (item.remoteKey != null) {
-            val bytes = slots.withPermit { remote(item) } ?: return null
+            val bytes = slots.withPermit { remote(item) }
+                ?: return if (slots === shownSlots) fromOriginal(item, private, cacheKey) else null
             try {
                 val decoded = decodeBytes(bytes, EDGE)
                 if (item.aspectRatio == null) scope.launch {
@@ -180,6 +190,23 @@ class ThumbnailLoader(private val directory: File,
             val size = if (ratio >= 1) Size(EDGE, (EDGE / ratio).toInt().coerceAtLeast(1)) else Size((EDGE * ratio).toInt().coerceAtLeast(1), EDGE)
             ThumbnailUtils.createVideoThumbnail(File(item.localPath), size, CancellationSignal())
         } else decodeImage(File(item.localPath), EDGE)
+    }
+
+    /** A thumbnail made from the original of a Proton photo that has none. */
+    private suspend fun fromOriginal(item: GalleryItem, private: Boolean, cacheKey: String): Bitmap? {
+        val marker = fileName(cacheKey)
+        if (never.has(marker)) return null
+        val made = originalSlots.withPermit {
+            currentCoroutineContext().ensureActive()
+            original(item)
+        }
+        if (made == null) never.add(marker, persist = !private)
+        else if (item.aspectRatio == null) scope.launch {
+            try { rememberShape(item, made.width, made.height) }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) {}
+        }
+        return made
     }
 
     // A hardware copy keeps grid thumbnails off the Java heap. The software
@@ -219,6 +246,9 @@ class ThumbnailLoader(private val directory: File,
         /** Remote fetches at once for tiles on screen, and for read-ahead. */
         const val SHOWN_FETCHES = 6
         const val AHEAD_FETCHES = 2
+        /** Originals downloaded at once for photos that have no thumbnail. */
+        const val ORIGINAL_FETCHES = 2
+        private const val NEVER_FILE = "no-thumbnail.txt"
         private const val QUALITY = 72
         private const val DISK_BUDGET = 256L * 1024 * 1024
 
@@ -265,5 +295,23 @@ class ThumbnailLoader(private val directory: File,
                 decoder.setTargetSize(maxOf(1, (info.size.width * scale).toInt()), maxOf(1, (info.size.height * scale).toInt()))
                 decoder.allocator = allocator
             }
+    }
+}
+
+/** Photos, by thumbnail file name, that can never have a thumbnail, so their
+ * originals are not downloaded again. Only names that are not private are
+ * written to `file`. */
+private class NeverList(private val file: File) {
+    private val names: MutableSet<String> =
+        runCatching { file.readLines().filterTo(HashSet()) { it.isNotBlank() } }.getOrDefault(HashSet())
+
+    @Synchronized fun has(name: String) = name in names
+
+    @Synchronized fun add(name: String, persist: Boolean) {
+        if (!names.add(name) || !persist) return
+        runCatching {
+            file.parentFile?.mkdirs()
+            file.appendText(name + "\n")
+        }
     }
 }

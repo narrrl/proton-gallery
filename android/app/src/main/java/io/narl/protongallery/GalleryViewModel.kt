@@ -244,6 +244,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     File(getApplication<Application>().cacheDir, "thumbnails").deleteRecursively()
                     File(getApplication<Application>().cacheDir, "picker").deleteRecursively()
                     Originals.directory(getApplication()).deleteRecursively()
+                    File(getApplication<Application>().cacheDir, "thumbnail-sources").deleteRecursively()
                 }
                 mutableSyncProgress.value = SyncProgress()
                 mutableAccount.update { AccountState(generation = it.generation + 1, visible = expired,
@@ -308,6 +309,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 File(app.cacheDir, "thumbnails").deleteRecursively()
                 File(app.cacheDir, "picker").deleteRecursively()
                 Originals.directory(app).deleteRecursively()
+                File(app.cacheDir, "thumbnail-sources").deleteRecursively()
             }
         }
         PhotoPicker.changed(getApplication())
@@ -594,6 +596,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     suspend fun remoteThumbnail(item: GalleryItem) = repository.value?.thumbnail(item)
+    /** A thumbnail made from the original of a Proton photo uploaded without one. */
+    suspend fun thumbnailFromOriginal(item: GalleryItem): Bitmap? {
+        val repo = repository.value ?: throw IllegalStateException("Signed out")
+        return MissingThumbnails.make(repo, item, File(getApplication<Application>().cacheDir, "thumbnail-sources"))
+    }
     suspend fun rememberShape(item: GalleryItem, width: Int, height: Int) { repository.value?.rememberShape(item, width, height) }
     private fun authMessage(error: Exception): String = (error as? GalleryException.Operation)?.detail
         ?: "The account request couldn’t be completed. Try again."

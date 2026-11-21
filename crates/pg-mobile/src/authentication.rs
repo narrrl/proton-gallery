@@ -193,12 +193,23 @@ impl GalleryEngine {
         key: String,
     ) -> Result<Option<Vec<u8>>, GalleryError> {
         let key = parse_key(&key)?;
+        let started = std::time::Instant::now();
         let mut fetch = std::pin::pin!(self.app.thumbnail(&key));
-        Ok(std::future::poll_fn(|cx| {
+        let result = std::future::poll_fn(|cx| {
             let _guard = self.runtime.enter();
             std::future::Future::poll(fetch.as_mut(), cx)
         })
-        .await?)
+        .await;
+        // Failures are otherwise only a blank tile; slow fetches show where
+        // loading time goes. Neither line names the photo.
+        let elapsed = started.elapsed().as_millis();
+        match &result {
+            Err(error) => log::warn!("thumbnail failed after {elapsed} ms: {error}"),
+            Ok(None) => log::debug!("thumbnail missing after {elapsed} ms"),
+            Ok(Some(_)) if elapsed >= 2000 => log::info!("thumbnail took {elapsed} ms"),
+            Ok(Some(_)) => {}
+        }
+        Ok(result?)
     }
     pub fn remember_photo_shape(
         &self,

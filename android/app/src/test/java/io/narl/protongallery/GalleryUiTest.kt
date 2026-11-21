@@ -206,6 +206,61 @@ class GalleryUiTest {
         }
     }
 
+    @Test fun a_photo_without_a_thumbnail_gets_one_from_its_original_once() {
+        val directory = java.nio.file.Files.createTempDirectory("missing-thumbnail").toFile()
+        try {
+            val item = fixtureItems().first().copy(localPath = "", remoteKey = "photo-fixture", phoneId = null)
+            var made = 0
+            val thumbnails = ThumbnailLoader(directory, remote = { null }, original = {
+                made++
+                Bitmap.createBitmap(8, 6, Bitmap.Config.ARGB_8888)
+            })
+            assertNotNull(runBlocking { thumbnails.load(item) })
+            assertEquals(1, made)
+            assertTrue(directory.listFiles().orEmpty().any { it.extension == "webp" })
+            // A new loader, as after a restart, reads it from disk.
+            val again = ThumbnailLoader(directory, remote = { null }, original = { made++; null })
+            assertNotNull(runBlocking { again.load(item) })
+            assertEquals(1, made)
+            // Read-ahead never downloads originals.
+            val other = item.copy(id = "other", remoteKey = "photo-other")
+            runBlocking { thumbnails.prefetch(listOf(other)); delay(200) }
+            assertEquals(1, made)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun a_failed_thumbnail_fetch_never_downloads_the_original() {
+        val directory = java.nio.file.Files.createTempDirectory("failed-thumbnail").toFile()
+        try {
+            val item = fixtureItems().first().copy(localPath = "", remoteKey = "photo-fixture", phoneId = null)
+            var made = 0
+            val thumbnails = ThumbnailLoader(directory, remote = { error("offline") }, original = { made++; null })
+            assertNull(runBlocking { thumbnails.load(item) })
+            assertEquals(0, made)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun a_photo_that_can_never_have_a_thumbnail_is_not_tried_again() {
+        val directory = java.nio.file.Files.createTempDirectory("never-thumbnail").toFile()
+        try {
+            val item = fixtureItems().first().copy(localPath = "", remoteKey = "photo-fixture", phoneId = null)
+            var made = 0
+            val thumbnails = ThumbnailLoader(directory, remote = { null }, original = { made++; null })
+            assertNull(runBlocking { thumbnails.load(item) })
+            assertNull(runBlocking { thumbnails.load(item) })
+            assertEquals(1, made)
+            // Remembered across restarts.
+            assertNull(runBlocking { ThumbnailLoader(directory, remote = { null }, original = { made++; null }).load(item) })
+            assertEquals(1, made)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun tiles_that_scroll_away_free_their_fetch_slots() {
         val directory = java.nio.file.Files.createTempDirectory("cancelled-thumbnails").toFile()
         try {
