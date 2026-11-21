@@ -4,7 +4,7 @@
 # Build and install: cd packaging && makepkg -fi
 
 pkgname=proton-gallery
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Unofficial Proton Photos and Drive gallery with a native photo and video viewer'
 arch=('x86_64')
