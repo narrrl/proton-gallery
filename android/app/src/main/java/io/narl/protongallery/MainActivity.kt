@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val thumbnails = remember(account.generation, account.visibilityRevision) {
-                ThumbnailLoader(File(cacheDir, "thumbnails"), model::remoteThumbnail, model::rememberShape) { item ->
+                ThumbnailLoader(File(cacheDir, "thumbnails"), model::remoteThumbnail, model::rememberShape, model::thumbnailFromOriginal) { item ->
                     PhoneLibrary.uri(item)?.let { contentResolver.loadThumbnail(it, Size(ThumbnailLoader.EDGE, ThumbnailLoader.EDGE), null) }
                 }
             }
