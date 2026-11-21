@@ -45,7 +45,11 @@ class ThumbnailLoader(private val directory: File,
     private val ahead = Dispatchers.IO.limitedParallelism(2)
     private class LoadLock(val mutex: Mutex = Mutex(), var users: Int = 0)
     private val locks = mutableMapOf<String, LoadLock>()
-    private val remoteSlots = Semaphore(4)
+    // Remote fetches suspend and cancel with their tile, so a tile that
+    // scrolls away frees its slot at once. Read-ahead has slots of its own
+    // and never delays what is on screen.
+    private val shownSlots = Semaphore(SHOWN_FETCHES)
+    private val aheadSlots = Semaphore(AHEAD_FETCHES)
     private val memory = object : LruCache<String, Bitmap>(memoryBudget()) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
@@ -60,7 +64,7 @@ class ThumbnailLoader(private val directory: File,
     suspend fun load(item: GalleryItem, private: Boolean = false): Bitmap? = withContext(shown) {
         val generation = synchronized(memory) { privateGeneration }
         repeat(3) { attempt ->
-            try { return@withContext obtain(item, private, generation) }
+            try { return@withContext obtain(item, private, generation, shownSlots) }
             catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) {
                 if (attempt < 2) delay(350L * (attempt + 1))
@@ -69,17 +73,22 @@ class ThumbnailLoader(private val directory: File,
         null
     }
 
-    /** Read ahead in order with at most one remote fetch in progress. */
+    /** Read ahead in order, [AHEAD_FETCHES] items at a time. */
     fun prefetch(items: List<GalleryItem>, private: Boolean = false) {
         reading?.cancel()
         if (items.isEmpty()) return
         val generation = synchronized(memory) { privateGeneration }
         reading = scope.launch {
+            val started = Semaphore(AHEAD_FETCHES)
             for (item in items) {
                 if (peek(item, private) != null) continue
-                try { obtain(item, private, generation) }
-                catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) {}
+                started.acquire()
+                launch {
+                    try { obtain(item, private, generation, aheadSlots) }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) {}
+                    finally { started.release() }
+                }
             }
         }
     }
@@ -100,7 +109,7 @@ class ThumbnailLoader(private val directory: File,
         }
     }
 
-    private suspend fun obtain(item: GalleryItem, private: Boolean, generation: Long): Bitmap? {
+    private suspend fun obtain(item: GalleryItem, private: Boolean, generation: Long, slots: Semaphore): Bitmap? {
         val cacheKey = key(item, private)
         synchronized(memory) {
             if (private && generation != privateGeneration) return null
@@ -130,7 +139,7 @@ class ThumbnailLoader(private val directory: File,
                 }
                 // Decoded in software so it can be written to disk as WebP;
                 // memory keeps a hardware copy for display.
-                val decoded = decode(item) ?: return@withLock null
+                val decoded = decode(item, slots) ?: return@withLock null
                 currentCoroutineContext().ensureActive()
                 val shown = forDisplay(decoded)
                 synchronized(memory) {
@@ -148,13 +157,13 @@ class ThumbnailLoader(private val directory: File,
         }
     }
 
-    private suspend fun decode(item: GalleryItem): Bitmap? {
+    private suspend fun decode(item: GalleryItem, slots: Semaphore): Bitmap? {
         if (item.phoneId != null) {
             runCatching { phone(item) }.getOrNull()?.let { return it }
             if (item.remoteKey == null) return null
         }
         if (item.remoteKey != null) {
-            val bytes = remoteSlots.withPermit { remote(item) } ?: return null
+            val bytes = slots.withPermit { remote(item) } ?: return null
             try {
                 val decoded = decodeBytes(bytes, EDGE)
                 if (item.aspectRatio == null) scope.launch {
@@ -207,6 +216,9 @@ class ThumbnailLoader(private val directory: File,
         /** Longest edge of a grid thumbnail in pixels: sharp at the default
          * tile height, and about 10 to 20 KB as WebP. */
         const val EDGE = 320
+        /** Remote fetches at once for tiles on screen, and for read-ahead. */
+        const val SHOWN_FETCHES = 6
+        const val AHEAD_FETCHES = 2
         private const val QUALITY = 72
         private const val DISK_BUDGET = 256L * 1024 * 1024
 

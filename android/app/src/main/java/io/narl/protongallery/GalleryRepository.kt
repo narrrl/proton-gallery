@@ -38,7 +38,6 @@ private fun nativeDispatcher(threads: Int, label: String): kotlinx.coroutines.Co
 }
 
 private val Native = nativeDispatcher(8, "pg-native")
-private val NativeThumbnails = nativeDispatcher(4, "pg-thumbnail")
 
 /** Byte streams stay on disk; typed metadata is the only FFI payload. */
 class GalleryRepository private constructor(private val context: Context) {
@@ -95,7 +94,8 @@ class GalleryRepository private constructor(private val context: Context) {
 
     suspend fun driveProgress() = withContext(Native) { engine.driveProgress() }
     suspend fun syncProgress() = withContext(Native) { engine.syncProgress() }
-    suspend fun thumbnail(item: GalleryItem): ByteArray? = withContext(NativeThumbnails) { item.remoteKey?.let(engine::photoThumbnail) }
+    // Suspends without holding a thread; cancelling the caller cancels the fetch.
+    suspend fun thumbnail(item: GalleryItem): ByteArray? = item.remoteKey?.let { engine.photoThumbnail(it) }
     suspend fun preview(item: GalleryItem): ByteArray? = withContext(Native) { item.remoteKey?.let(engine::photoPreview) }
     suspend fun rememberShape(item: GalleryItem, width: Int, height: Int) = withContext(Native) {
         item.remoteKey?.let { engine.rememberPhotoShape(it, width.toUInt(), height.toUInt()) }
