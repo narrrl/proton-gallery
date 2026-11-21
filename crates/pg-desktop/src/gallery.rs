@@ -43,6 +43,12 @@ const PAGES_IN_FLIGHT: usize = 4;
 const ORIGINAL_LIMIT: u64 = 32 * 1024 * 1024;
 /// Thumbnail requests running at once.
 const THUMBS_IN_FLIGHT: usize = 12;
+/// While Photos sync runs, the open view reloads at most this often.
+const SYNC_RELOAD_EVERY: Duration = Duration::from_secs(3);
+/// A thumbnail that failed with an error is retried when shown again after
+/// this, doubling each time, up to `THUMB_RETRIES` times before Refresh.
+const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10);
+const THUMB_RETRIES: u32 = 3;
 /// Target row height of the timeline.
 const ROW_TARGET: u32 = 200;
 const SIDEBAR: f32 = 208.0;
@@ -256,6 +262,10 @@ struct SyncState {
     retry_at: Option<std::time::Instant>,
     expired: bool,
     visibility_stale: bool,
+    /// When sync last reloaded the open view.
+    reloaded_at: Option<std::time::Instant>,
+    /// A newer revision is waiting for the next allowed reload.
+    reload_pending: bool,
 }
 
 /// The photo open in the viewer.
@@ -373,8 +383,15 @@ pub struct Gallery {
     /// Grid thumbnails kept across runs; never hidden-album ones.
     disk_thumbs: Arc<thumbs::DiskThumbs>,
     thumbs_loading: HashMap<String, iced::task::Handle>,
+    /// Advances when the shown media changes entirely, not on a sync reload,
+    /// so thumbnails that are still wanted survive a reload.
+    thumbs_request: u64,
     thumbs_failed: HashSet<String>,
     thumbs_retryable: HashSet<String>,
+    /// When a failed thumbnail may be tried again on its own, and how many
+    /// times it was. Network failures are often brief.
+    /// `None` once its retries are used up.
+    thumbs_retry: HashMap<String, (Option<std::time::Instant>, u32)>,
     focus: Option<usize>,
     viewer: Option<Viewer>,
     viewer_request: u64,
@@ -628,8 +645,10 @@ impl Gallery {
             thumbs: thumbs::Cache::default(),
             disk_thumbs,
             thumbs_loading: HashMap::new(),
+            thumbs_request: 0,
             thumbs_failed: HashSet::new(),
             thumbs_retryable: HashSet::new(),
+            thumbs_retry: HashMap::new(),
             focus: None,
             viewer: None,
             viewer_request: 0,
@@ -1087,6 +1106,7 @@ impl Gallery {
                 self.pages_failed.clear();
                 self.thumbs_failed.clear();
                 self.thumbs_retryable.clear();
+                self.thumbs_retry.clear();
                 let visible = self.request_visible();
                 let refresh = if self.section == Section::Places {
                     self.start_places()
@@ -1287,13 +1307,24 @@ impl Gallery {
                 self.request_visible()
             }
             Message::ThumbLoaded(request, generation, id, index, result) => {
-                if request != self.library_request || !self.current(generation) {
+                if request != self.thumbs_request || !self.current(generation) {
                     return Task::none();
                 }
                 self.thumbs_loading.remove(&id);
                 match result {
                     Ok(Some(decoded)) => {
-                        let task = self.learn_shape(index, &decoded);
+                        // A reload may have moved the item since the request.
+                        let index = self.outline.as_ref().and_then(|outline| {
+                            if outline.ids.get(index) == Some(&id) {
+                                Some(index)
+                            } else {
+                                outline.ids.iter().position(|other| *other == id)
+                            }
+                        });
+                        let task = match index {
+                            Some(index) => self.learn_shape(index, &decoded),
+                            None => Task::none(),
+                        };
                         self.thumbs.insert(id, decoded, thumbs::BUDGET);
                         return Task::batch([task, self.request_visible()]);
                     }
@@ -1302,6 +1333,11 @@ impl Gallery {
                     }
                     Err(error) => {
                         tracing::debug!("thumbnail failed: {error}");
+                        let attempts = self.thumbs_retry.get(&id).map_or(0, |(_, n)| *n);
+                        let at = (attempts < THUMB_RETRIES).then(|| {
+                            std::time::Instant::now() + THUMB_RETRY_AFTER * 2u32.pow(attempts)
+                        });
+                        self.thumbs_retry.insert(id.clone(), (at, attempts + 1));
                         self.thumbs_retryable.insert(id.clone());
                         self.thumbs_failed.insert(id);
                     }
@@ -2056,10 +2092,28 @@ impl Gallery {
 
     fn apply_photos_status(&mut self, status: PhotosSyncStatus) -> Task<Message> {
         self.sync.last_success = self.sync.last_success.max(status.last_success);
-        if self.sync.revision >= status.revision {
+        if self.sync.revision < status.revision {
+            self.sync.revision = status.revision;
+            if self.section != Section::Drive {
+                self.sync.reload_pending = true;
+            }
+        }
+        if !self.sync.reload_pending {
             return Task::none();
         }
-        self.sync.revision = status.revision;
+        // Each reload replans the grid and rereads its pages, so while sync
+        // keeps changing the catalog the view catches up in steps.
+        let busy = self.sync.running || status.more;
+        if busy
+            && self
+                .sync
+                .reloaded_at
+                .is_some_and(|at| at.elapsed() < SYNC_RELOAD_EVERY)
+        {
+            return Task::none();
+        }
+        self.sync.reload_pending = false;
+        self.sync.reloaded_at = Some(std::time::Instant::now());
         if self.section == Section::Drive {
             return Task::none();
         }
@@ -2622,7 +2676,10 @@ impl Gallery {
         self.pages.clear();
         self.pages_loading.clear();
         self.pages_failed.clear();
-        self.thumbs_loading.clear();
+        // Thumbnails still in flight for items that remain keep loading.
+        let wanted: HashSet<&str> = outline.ids.iter().map(String::as_str).collect();
+        self.thumbs_loading
+            .retain(|id, _| wanted.contains(id.as_str()));
         let find = |id: &str| outline.ids.iter().position(|other| other == id);
         let anchor = anchor_id.and_then(|(id, offset)| Some((find(&id)?, offset)));
         self.focus = focus_id.and_then(|id| find(&id));
@@ -2743,6 +2800,18 @@ impl Gallery {
             async move { app.remember_shape(item.key, width, height).await },
             |_| Message::Ignored,
         )
+    }
+
+    /// Forget a retryable thumbnail failure whose wait has passed, so the
+    /// next request tries it again.
+    fn retry_thumbnail_if_due(&mut self, id: &str) {
+        let due = self
+            .thumbs_retry
+            .get(id)
+            .is_some_and(|(at, _)| at.is_some_and(|at| at <= std::time::Instant::now()));
+        if due && self.thumbs_retryable.remove(id) {
+            self.thumbs_failed.remove(id);
+        }
     }
 
     fn item(&self, index: usize) -> Option<&MediaItem> {
@@ -2896,6 +2965,7 @@ impl Gallery {
             let Some(id) = outline.ids.get(index).cloned() else {
                 continue;
             };
+            self.retry_thumbnail_if_due(&id);
             if self.thumbs.contains(&id)
                 || self.thumbs_loading.contains_key(&id)
                 || self.thumbs_failed.contains(&id)
@@ -2904,6 +2974,7 @@ impl Gallery {
             }
             let done = {
                 let id = id.clone();
+                let request = self.thumbs_request;
                 move |result| Message::ThumbLoaded(request, generation, id.clone(), index, result)
             };
             let Some(item) = self.item(index).cloned() else {
@@ -3123,6 +3194,7 @@ impl Gallery {
     fn clear_media(&mut self) {
         self.outline_request += 1;
         self.library_request += 1;
+        self.thumbs_request += 1;
         self.outline_work = None;
         if let Some(work) = self.viewer_work.take() {
             work.abort();
@@ -3130,6 +3202,7 @@ impl Gallery {
         self.pages_failed.clear();
         self.thumbs_failed.clear();
         self.thumbs_retryable.clear();
+        self.thumbs_retry.clear();
         self.viewer_request += 1;
         self.outline = None;
         self.ratios.clear();
@@ -4893,7 +4966,7 @@ mod tests {
         let (_, handle) = Task::done(Message::Ignored).abortable();
         gallery.thumbs_loading.insert(id.clone(), handle);
         let _ = gallery.update(Message::ThumbLoaded(
-            request - 1,
+            gallery.thumbs_request + 1,
             generation,
             id.clone(),
             0,
@@ -4911,13 +4984,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sync_reload_keeps_thumbnails_that_are_still_shown() {
+        let (_dir, mut gallery) = gallery(300).await;
+        let generation = gallery.app().unwrap().generation();
+        let outline = gallery.outline.clone().unwrap();
+        let (kept, gone) = (outline.ids[0].clone(), "gone".to_string());
+        for id in [&kept, &gone] {
+            let (_, handle) = Task::done(Message::Ignored).abortable();
+            gallery.thumbs_loading.insert(id.clone(), handle);
+        }
+        let _ = gallery.show_outline(outline);
+        assert!(gallery.thumbs_loading.contains_key(&kept));
+        assert!(!gallery.thumbs_loading.contains_key(&gone));
+        let _ = gallery.update(Message::ThumbLoaded(
+            gallery.thumbs_request,
+            generation,
+            kept.clone(),
+            0,
+            Ok(None),
+        ));
+        assert!(
+            !gallery.thumbs_loading.contains_key(&kept),
+            "the result is accepted"
+        );
+        assert!(gallery.thumbs_failed.contains(&kept));
+    }
+
+    #[tokio::test]
+    async fn failed_thumbnails_are_retried_a_few_times_when_shown() {
+        let (_dir, mut gallery) = gallery(30).await;
+        let generation = gallery.app().unwrap().generation();
+        let id = gallery.outline.as_ref().unwrap().ids[0].clone();
+        for attempt in 1..=THUMB_RETRIES + 1 {
+            gallery.thumbs_loading.remove(&id);
+            let _ = gallery.update(Message::ThumbLoaded(
+                gallery.thumbs_request,
+                generation,
+                id.clone(),
+                0,
+                Err("network".into()),
+            ));
+            assert!(gallery.thumbs_failed.contains(&id));
+            gallery.retry_thumbnail_if_due(&id);
+            assert!(gallery.thumbs_failed.contains(&id), "not before the wait");
+            if let Some((Some(at), _)) = gallery.thumbs_retry.get_mut(&id) {
+                *at = std::time::Instant::now();
+            }
+            gallery.retry_thumbnail_if_due(&id);
+            let retried = !gallery.thumbs_failed.contains(&id);
+            assert_eq!(retried, attempt <= THUMB_RETRIES, "attempt {attempt}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_reloads_the_view_at_most_every_few_seconds() {
+        let (_dir, mut gallery) = gallery(30).await;
+        let status = |revision| PhotosSyncStatus {
+            revision,
+            last_success: None,
+            more: true,
+            retry: false,
+        };
+        let revision = gallery.sync.revision;
+        let _ = gallery.apply_photos_status(status(revision + 1));
+        assert!(!gallery.sync.reload_pending, "the first change reloads");
+        let request = gallery.outline_request;
+        let _ = gallery.apply_photos_status(status(revision + 2));
+        assert!(gallery.sync.reload_pending, "a second change waits");
+        assert_eq!(gallery.outline_request, request);
+        gallery.sync.reloaded_at =
+            Some(std::time::Instant::now() - SYNC_RELOAD_EVERY - Duration::from_millis(1));
+        let _ = gallery.apply_photos_status(status(revision + 2));
+        assert!(
+            !gallery.sync.reload_pending,
+            "the waiting change reloads later"
+        );
+        assert!(gallery.outline_request > request);
+
+        let _ = gallery.apply_photos_status(status(revision + 3));
+        assert!(gallery.sync.reload_pending);
+        let _ = gallery.apply_photos_status(PhotosSyncStatus {
+            more: false,
+            ..status(revision + 3)
+        });
+        assert!(!gallery.sync.reload_pending, "sync ending reloads at once");
+    }
+
+    #[tokio::test]
     async fn missing_and_failed_media_are_suppressed_until_refresh() {
         let (_dir, mut gallery) = gallery(300).await;
         let generation = gallery.app().unwrap().generation();
         let request = gallery.library_request;
         let id = gallery.outline.as_ref().unwrap().ids[1].clone();
         let _ = gallery.update(Message::ThumbLoaded(
-            request,
+            gallery.thumbs_request,
             generation,
             id.clone(),
             1,
