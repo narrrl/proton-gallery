@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.5.0
+
+### Install
+
+- Android 12 or later. Download the signed `proton-gallery-v0.5.0.apk` for
+  arm64 or x86_64. It updates the regular Proton Gallery app in place.
+- Windows 10 and 11 (x86_64). Download `proton-gallery-0.5.0-x64.msi`, or the
+  portable `proton-gallery-0.5.0-x86_64-windows.zip`.
+- Ubuntu 24.04 and Debian 13. Download the x86_64 `.deb`.
+- Fedora. Download the signed x86_64 `.rpm` and the accompanying public key.
+- Arch Linux. Check out this tag and run `cd packaging && makepkg -fi`.
+
 ### Windows
 
 - Windows 10 and 11 (x86_64) get a release download: an installer
