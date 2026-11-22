@@ -158,3 +158,16 @@ jobs:
           gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk proton-gallery_*.deb proton-gallery-*.rpm proton-gallery-*-x86_64-windows.zip proton-gallery-*-x64.msi packaging/RPM-GPG-KEY-proton-gallery \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag --title "Proton Gallery $version" --generate-notes --notes-file "$notes"
+
+  aur:
+    name: Publish AUR packages
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    # The AUR workflow commits the updated recipes back to main.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/aur.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
