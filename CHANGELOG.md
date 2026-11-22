@@ -25,6 +25,15 @@
 - The Windows app has its own icon, and a release build no longer opens a
   console window next to it.
 
+### Drive galleries
+
+- Scanning a Drive folder lists several subfolders at a time and retries a
+  listing that drops, so large folder trees index faster and more reliably.
+- A Drive gallery now updates on its own when files change in its folders,
+  through the same periodic check that picks up settings from your other
+  devices. A folder reached twice in one tree is indexed once instead of
+  failing the scan.
+
 ## 0.4.0
 
 ### Install
