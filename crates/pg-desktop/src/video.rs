@@ -1,4 +1,9 @@
-//! In-app Linux playback. The decoder reads Proton ranges without a temporary file.
+//! In-app playback on Linux and Windows. The decoder reads Proton ranges
+//! without a temporary file.
+//!
+//! Linux uses the system's GStreamer. The Windows build carries its own, laid
+//! out as GStreamer's installer does (`bin`, `lib/gstreamer-1.0`), so
+//! the core finds its plugins next to itself without any environment.
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -207,6 +212,7 @@ impl Player {
     }
 }
 
+#[cfg(not(windows))]
 fn missing_codec(description: Option<&str>) -> String {
     match description {
         Some(description) => format!(
@@ -216,6 +222,18 @@ fn missing_codec(description: Option<&str>) -> String {
         None => "This video’s format isn’t supported by the installed GStreamer plugins. \
                  Install gst-plugins-bad and gst-libav."
             .into(),
+    }
+}
+
+/// The Windows build brings its decoders along, so there is nothing for the
+/// user to install; say what is missing for a bug report.
+#[cfg(windows)]
+fn missing_codec(description: Option<&str>) -> String {
+    match description {
+        Some(description) => {
+            format!("This video needs the {description}, which Proton Gallery doesn’t include.")
+        }
+        None => "Proton Gallery can’t play this video’s format.".into(),
     }
 }
 
@@ -411,6 +429,7 @@ mod tests {
         player.pipeline.post_message(message).unwrap();
         let error = player.poll(&mut Playback::default()).unwrap_err();
         assert!(error.contains("H.265"), "{error}");
+        #[cfg(not(windows))]
         assert!(error.contains("gst-plugins-bad"), "{error}");
     }
 
@@ -426,6 +445,10 @@ mod tests {
         let read = gst::glib::Error::new(gst::ResourceError::Read, "offline");
         assert!(player.explain(read).contains("connection"));
         let codec = gst::glib::Error::new(gst::StreamError::CodecNotFound, "no decoder");
-        assert!(player.explain(codec).contains("gst-libav"));
+        assert!(player.explain(codec).contains(if cfg!(windows) {
+            "can’t play"
+        } else {
+            "gst-libav"
+        }));
     }
 }

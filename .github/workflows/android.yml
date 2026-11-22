@@ -113,9 +113,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/linux-packages.yml
 
+  windows-package:
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/windows-package.yml
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, linux-packages]
+    needs: [android, linux-packages, windows-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -127,6 +131,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: proton-gallery-linux-packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: proton-gallery-windows
       - name: Install RPM signing tools
         run: sudo apt-get update && sudo apt-get install -y rpm gnupg
       - name: Sign and verify RPMs
@@ -148,6 +155,6 @@ jobs:
             echo "::error::Missing changelog entry for $version"
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk proton-gallery_*.deb proton-gallery-*.rpm packaging/RPM-GPG-KEY-proton-gallery \
+          gh release create "$GITHUB_REF_NAME" proton-gallery-*.apk proton-gallery_*.deb proton-gallery-*.rpm proton-gallery-*-x86_64-windows.zip proton-gallery-*-x64.msi packaging/RPM-GPG-KEY-proton-gallery \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag --title "Proton Gallery $version" --generate-notes --notes-file "$notes"

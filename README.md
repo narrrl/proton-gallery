@@ -101,7 +101,7 @@ Actual Android UI captures using the same public demo photographs as Proton Driv
 | Ubuntu 24.04 and Debian 13 (x86_64) | Download the `.deb` from the release and install with `sudo apt install ./proton-gallery_*_amd64.deb`. [Linux packaging guide](packaging/README.md) |
 | Fedora (x86_64) | Download the signed `.rpm` and public key from the release. [Install and verify the RPM](packaging/README.md#debian-ubuntu-and-fedora) |
 | Arch Linux (x86_64) | In the desired source checkout, run `cd packaging && makepkg -fi`. Use `makepkg -sfi` if dependencies are missing. [Arch prerequisites](packaging/README.md#arch-linux) |
-| Windows | Build the Iced app from source. Windows video currently shows a preview. [Desktop guide](docs/DESKTOP.md) |
+| Windows 10 and 11 (x86_64) | Download the `.msi` installer, or the portable `.zip`, from the release. [Desktop guide](docs/DESKTOP.md#windows) |
 
 Linux packages install the **Proton Gallery** launcher, icon, and `proton-gallery` command.
 

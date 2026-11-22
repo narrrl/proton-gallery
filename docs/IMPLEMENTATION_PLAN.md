@@ -93,7 +93,7 @@ These are two independent workstreams once M3 interfaces settle; complete both f
 - [ ] Add migration fixtures, database backup/recovery for durable user intent, corrupt-store repair, disk-full handling, and source/account removal races.
 - [x] Package Android and Linux from independent checkouts with pinned dependencies
   and consistent app identity. [Release workflow](RELEASING.md)
-- [ ] Package the Iced app on Windows.
+- [x] Package the Iced app on Windows. [Windows build](DESKTOP.md#windows)
 - [ ] Validate local metadata disclosure, backups, export cleanup, credential-store absence/lock behavior, dependency licenses, and signed-release/update strategy.
 - [ ] Provide user guidance for offline guarantees, storage, weak networks, codec limitations, and Android background restrictions.
 

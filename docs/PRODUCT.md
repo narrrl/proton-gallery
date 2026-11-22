@@ -85,7 +85,7 @@ Discovery commits the current album before walking its children. A failed/cancel
 | Photos | Account-scoped timeline, server capture dates, album browsing, favorites, Android album editing | Incremental timeline pages and durable event replay |
 | Drive | Remote folder chooser, recursive metadata crawl, nested galleries, public viewer links | Media reconciliation from events and durable background crawl jobs |
 | Grid | Shared Rust geometry, virtualized rows, adjustable size, preview shape learning | More device and accessibility measurements |
-| Viewing | Still previews with original fallback, Android Media3 and Linux GStreamer range playback | Windows playback and broader real-account codec verification |
+| Viewing | Still previews with original fallback, Android Media3 and desktop GStreamer range playback (Linux and Windows) | Broader real-account codec verification, Windows runtime acceptance |
 | Offline | Local metadata and disposable caches, encrypted block primitives in the CLI | Encrypted persistent previews and user-facing offline retention |
 | Backup | Android manual, selection, and automatic backup to Proton Photos | Desktop uploads and user-selected Drive upload destinations |
 

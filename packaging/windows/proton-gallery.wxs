@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Windows installer, built on Linux by scripts/build-windows.sh with
+  msitools' wixl, which speaks the WiX v3 schema:
+
+    wixl -a x64 -D Version=… -D Payload=dist/windows -D IconFile=… \
+      packaging/windows/proton-gallery.wxs target/windows-deps/payload.wxs
+
+  The payload (GStreamer's DLLs and plugins, the basemap, the notices) comes
+  from wixl-heat as the component group "Payload"; this file holds the parts
+  that are authored once: the product, the upgrade rule and the Start menu
+  shortcut. The executable is part of the payload too.
+
+  Never change the UpgradeCode or the shortcut component's Guid: they are what
+  lets a new version replace an installed one instead of installing beside it.
+
+  There is no dialog UI (WiX's UI extension has no wixl equivalent): the
+  installer shows the plain Windows Installer progress and installs into
+  Program Files.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="Proton Gallery"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Nils Pukropp"
+           UpgradeCode="95d3dbee-4199-4313-9a29-cdaede2923e0">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Manufacturer="Nils Pukropp"
+             Description="Photo and video gallery for Proton Photos and Proton Drive" />
+
+    <!-- Remove the old version before the new files land: the reverse order
+         lets the old version's uninstall delete files the new one just wrote. -->
+    <Upgrade Id="95d3dbee-4199-4313-9a29-cdaede2923e0">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes"
+                      Maximum="$(var.Version)" IncludeMaximum="yes"
+                      Property="OLDERVERSIONBEINGUPGRADED" />
+      <UpgradeVersion Minimum="$(var.Version)" IncludeMinimum="no"
+                      OnlyDetect="yes"
+                      Property="NEWERVERSIONDETECTED" />
+    </Upgrade>
+    <Condition Message="A newer version of Proton Gallery is already installed.">
+      NOT NEWERVERSIONDETECTED
+    </Condition>
+    <InstallExecuteSequence>
+      <RemoveExistingProducts After="InstallInitialize" />
+    </InstallExecuteSequence>
+
+    <!-- Copy every file even when one of the same version is on disk. File
+         costing runs before RemoveExistingProducts, so without this an
+         unchanged GStreamer DLL is skipped as "already there" and then deleted
+         with the old version. Every file is private to INSTALLDIR. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+
+    <Media Id="1" Cabinet="proton_gallery.cab" EmbedCab="yes" />
+
+    <Icon Id="proton-gallery.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="proton-gallery.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/narrrl/proton-gallery" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Proton Gallery" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <!-- A component of its own, keyed by a registry value, because the exe
+             comes from the generated payload. An explicit Target makes wixl
+             write a plain shortcut rather than an advertised one. No Icon: a
+             shortcut icon lives under C:\Windows\Installer\{ProductCode} and
+             vanishes with every upgrade; without one the exe's own icon shows. -->
+        <Component Id="StartMenuShortcut" Guid="e66c15a1-a130-4281-a5cc-a3d7eb579ab3" Win64="yes">
+          <Shortcut Id="StartMenuShortcut"
+                    Name="Proton Gallery"
+                    Description="Your Proton Photos and Drive galleries"
+                    Target="[INSTALLDIR]bin\proton-gallery.exe"
+                    WorkingDirectory="INSTALLDIR" />
+          <RegistryValue Root="HKLM" Key="Software\narl\Proton Gallery"
+                         Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentGroupRef Id="Payload" />
+    </Feature>
+  </Product>
+</Wix>

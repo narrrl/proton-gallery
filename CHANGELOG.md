@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Windows
+
+- Windows 10 and 11 (x86_64) get a release download: an installer
+  (`proton-gallery-<version>-x64.msi`) and a portable zip. Both include
+  everything the app needs, with the Places basemap and GStreamer for video.
+- Videos play on Windows as they do on Linux, with seeking and volume. Hardware
+  decoding goes through Media Foundation and Direct3D 11. Other formats are
+  decoded by FFmpeg.
+- The Windows app has its own icon, and a release build no longer opens a
+  console window next to it.
+
 ## 0.4.0
 
 ### Install

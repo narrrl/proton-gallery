@@ -275,9 +275,9 @@ struct Viewer {
     image: Option<Decoded>,
     loading: bool,
     message: Option<String>,
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     player: Option<Arc<crate::video::Player>>,
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     playback: crate::video::Playback,
 }
 
@@ -487,15 +487,15 @@ pub enum Message {
     RetryViewer,
     Step(i32),
     ViewerLoaded(u64, Generation, Result<Box<Loaded>, String>),
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     VideoOpened(u64, Generation, Result<Arc<crate::video::Player>, String>),
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     VideoTick,
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     VideoToggle,
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     VideoSeek(f64),
-    #[cfg(target_os = "linux")]
+    #[cfg(playback)]
     VideoVolume(f64),
     Key(keyboard::Event),
     Navigate(Section),
@@ -751,7 +751,7 @@ impl Gallery {
             subscriptions
                 .push(iced::time::every(Duration::from_millis(250)).map(|_| Message::Relayout));
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(playback)]
         if self
             .viewer
             .as_ref()
@@ -1399,7 +1399,7 @@ impl Gallery {
                     match result {
                         Ok(loaded) => {
                             let (item, image, message) = *loaded;
-                            #[cfg(target_os = "linux")]
+                            #[cfg(playback)]
                             let video = item.is_video
                                 && (item.remote || item.local_path.is_some())
                                 && self.options.demo.is_none();
@@ -1408,7 +1408,7 @@ impl Gallery {
                                 viewer.image = image;
                             }
                             viewer.message = message;
-                            #[cfg(target_os = "linux")]
+                            #[cfg(playback)]
                             if video {
                                 let item = viewer.item.as_ref().unwrap().clone();
                                 viewer.loading = true;
@@ -1450,7 +1450,7 @@ impl Gallery {
                 }
                 Task::none()
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(playback)]
             Message::VideoOpened(request, generation, result) => {
                 if request == self.viewer_request
                     && self.current(generation)
@@ -1469,7 +1469,7 @@ impl Gallery {
                 }
                 Task::none()
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(playback)]
             Message::VideoTick
             | Message::VideoToggle
             | Message::VideoSeek(_)
@@ -3023,9 +3023,9 @@ impl Gallery {
             image: placeholder,
             loading: true,
             message: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(playback)]
             player: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(playback)]
             playback: crate::video::Playback::default(),
         });
         if let Some(work) = self.viewer_work.take() {
@@ -4354,7 +4354,7 @@ impl Gallery {
                 .into(),
             None => Space::new().width(Length::Fill).height(Length::Fill).into(),
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(playback)]
         let body: Element<'_, Message> = match &viewer.player {
             Some(player) if player.frames().has_frame() => {
                 iced::widget::shader(crate::video_surface::VideoProgram::new(player.frames()))
@@ -4432,7 +4432,7 @@ impl Gallery {
             .padding([14, 24])
             .center_x(Length::Fill)
         ];
-        #[cfg(target_os = "linux")]
+        #[cfg(playback)]
         if viewer.player.is_some() {
             let state = &viewer.playback;
             let mut controls = row![
@@ -4498,7 +4498,7 @@ impl Gallery {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(playback)]
 fn video_time(seconds: f64) -> String {
     let seconds = seconds as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)

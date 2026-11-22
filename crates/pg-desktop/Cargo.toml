@@ -37,14 +37,19 @@ async-trait.workspace = true
 # Validates the video shader the way wgpu will; already in the graph through iced.
 naga = { version = "27", features = ["wgsl-in"] }
 
+[build-dependencies]
+winresource = "0.1"
+
 [lints.rust]
 unsafe_code = "deny"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 gstreamer-pbutils = "0.25"
 gstreamer-video = "0.25"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", features = ["process"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

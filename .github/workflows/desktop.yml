@@ -21,6 +21,19 @@ jobs:
       - name: Linux platform dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libudev-dev libegl1-mesa-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+      - name: Windows GStreamer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = '1.26.10'
+          foreach ($name in "gstreamer-1.0-msvc-x86_64-$version.msi", "gstreamer-1.0-devel-msvc-x86_64-$version.msi") {
+            Invoke-WebRequest "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc/$name" -OutFile $name
+            Start-Process msiexec -Wait -ArgumentList "/i $name /qn ADDLOCAL=ALL"
+          }
+          choco install -y --no-progress pkgconfiglite
+          $root = 'C:\Program Files\gstreamer\1.0\msvc_x86_64'
+          "$root\bin" | Out-File -Append $env:GITHUB_PATH
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -Append $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
       - name: Shared services and desktop tests
         run: cargo test -p pg-desktop --all-targets --locked

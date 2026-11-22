@@ -241,6 +241,13 @@ def main():
         for offset, stop in PLATE:
             ET.SubElement(gradient, "item", {ANDROID + "offset": offset, ANDROID + "color": color(stop)})
         outputs[res + "ic_launcher_background.xml"] = xml(background).encode()
+    with tempfile.TemporaryDirectory(prefix="proton-icons-") as temp:
+        files = []
+        for size in (16, 24, 32, 48, 64, 128, 256):
+            path = Path(temp) / f"{size}.png"
+            path.write_bytes(render(desktop.decode(), size))
+            files.append(str(path))
+        outputs[f"packaging/windows/proton-{app}.ico"] = run("magick", *files, "-strip", "ICO:-")
     if app == "gallery":
         outputs["images/icon-512.png"] = render(desktop.decode(), 512)
         outputs["android/app/src/main/res/drawable/ic_gallery.xml"] = art.vector(256, 1)
@@ -250,13 +257,6 @@ def main():
         ios = art.ios()
         outputs["ios/ProtonStream/Resources/AppIcon.svg"] = ios.encode()
         outputs["ios/ProtonStream/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"] = render(ios, 1024, opaque=True)
-        with tempfile.TemporaryDirectory(prefix="proton-icons-") as temp:
-            files = []
-            for size in (16, 24, 32, 48, 64, 128, 256):
-                path = Path(temp) / f"{size}.png"
-                path.write_bytes(render(desktop.decode(), size))
-                files.append(str(path))
-            outputs["packaging/windows/proton-stream.ico"] = run("magick", *files, "-strip", "ICO:-")
         if not shutil.which("fc-match"):
             parser.error("fontconfig is required to render the Android TV banner")
         if "DejaVu Sans" not in run("fc-match", "-f", "%{family}", "DejaVu Sans").decode():

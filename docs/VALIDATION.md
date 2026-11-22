@@ -1,5 +1,28 @@
 # Validation
 
+## Windows package — 2026-11-22
+
+Built on Linux with `scripts/build-windows.sh` (mingw-w64 GCC 16, GStreamer
+1.26.10 MinGW x86_64, wixl). No Windows machine was used.
+
+- The zip (66 MB) and the `.msi` (70 MB) contain the GUI-subsystem executable
+  with its icon resource, 39 DLLs in `bin`, 24 GStreamer plugins and the Places
+  basemap. Every DLL the executable and the plugins import is either in `bin`
+  or a Windows system DLL (`objdump -p` over the whole payload).
+- `msiinfo` shows 72 files and a plain (not advertised) Start menu shortcut to
+  `[INSTALLDIR]bin\proton-gallery.exe`.
+- Under Wine 10 with `WGPU_BACKEND=vulkan`, `proton-gallery.exe --demo 200`
+  ran for 40 seconds without an error. Wine's Direct3D shader compiler cannot
+  compile iced's shaders (FXC E5017), so the default backend fails there; this
+  is a Wine limitation.
+- The four `video::tests` of a Windows test build pass under Wine against the
+  trimmed plugin set and the DLLs in `bin`. Only `videotestsrc` was added, to
+  generate the clips. They decode VP8/WebM, deliver 1080p frames, seek, and
+  name a missing decoder.
+- Not yet checked on real Windows: installation and upgrade, Credential
+  Manager, Windows Hello, hardware decoding through Media Foundation and
+  Direct3D 11, H.264 and HEVC files from phones, display scaling.
+
 ## v0.2.0 release preparation
 
 - Formatting, workspace Clippy with warnings denied, and all 111 automated Rust

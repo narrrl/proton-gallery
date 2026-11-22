@@ -1,0 +1,20 @@
+Proton Gallery for Windows includes parts of GStreamer 1.26.10 for video
+playback: the GStreamer core and base libraries, a selection of its plugins,
+and the libraries those plugins use (GLib, FFmpeg's libavcodec, libavformat
+and libavutil, dav1d, libvpx, libopus, libogg, libvorbis, among others).
+
+They are the unmodified binaries of GStreamer's official MinGW x86_64 build:
+
+  https://gstreamer.freedesktop.org/data/pkg/windows/1.26.10/mingw/
+
+GStreamer and GLib are licensed under the GNU Lesser General Public License,
+version 2.1 or later. FFmpeg's libraries as built by GStreamer are licensed
+under the LGPL 2.1 or later. dav1d, libvpx, libopus, libogg and libvorbis are
+under BSD-style licenses. The exact license of each library, and its source,
+is published by the GStreamer project:
+
+  https://gstreamer.freedesktop.org/download/
+  https://gitlab.freedesktop.org/gstreamer/cerbero (the recipes for this build)
+
+The libraries are loaded as separate DLLs from the bin and lib\gstreamer-1.0
+folders; you may replace them with versions you build yourself.
