@@ -87,6 +87,10 @@ integration is available with an additional device setup step; see the
     <td align="center"><a href="images/drive.png"><img src="images/drive.png" alt="A nested Drive folder album" width="200"></a><br><sub>Drive galleries</sub></td>
     <td align="center"><a href="images/backup.png"><img src="images/backup.png" alt="Phone backup folders and album destinations" width="200"></a><br><sub>Backup</sub></td>
   </tr>
+  <tr>
+    <td align="center"><a href="images/places.png"><img src="images/places.png" alt="Photos on the offline Places map" width="200"></a><br><sub>Places</sub></td>
+    <td align="center"><a href="images/viewer.png"><img src="images/viewer.png" alt="The photo viewer in the dark theme" width="200"></a><br><sub>Viewer</sub></td>
+  </tr>
 </table>
 
 Actual Android UI captures using the same public demo photographs as Proton Drive, with synthetic library metadata; no private photo library is shown.
