@@ -2,8 +2,8 @@
 
 The desktop app is written in Rust with Iced in `crates/pg-desktop`. It
 browses the Proton Photos timeline, albums, favorites, and nested Drive
-galleries. It also opens still photos on Linux and Windows and plays supported
-videos on Linux. The older Compose desktop prototype lives in `desktop/`.
+galleries. It opens still photos and plays supported videos on Linux and
+Windows. The older Compose desktop prototype lives in `desktop/`.
 
 ## Build and run
 
@@ -46,12 +46,37 @@ Logs default to warnings; `PG_LOG` accepts tracing filters.
 `proton-gallery --bench` times the grid, Places and thumbnail hot paths offline on a
 synthetic library; see the [benchmark guide](BENCH.md) for options and a baseline.
 
+### Windows
+
+Each release has an installer, `proton-gallery-<version>-x64.msi`, and a portable
+`proton-gallery-<version>-x86_64-windows.zip` for Windows 10 and 11 on x86_64. The
+installer puts the app in Program Files and adds a Start menu entry. To use the
+zip, unpack it anywhere and run `bin\proton-gallery.exe`.
+
+Both are cross-built on Linux with mingw-w64:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+scripts/build-windows.sh        # needs mingw-w64-gcc, msitools and zip
+```
+
+The script downloads GStreamer's official MinGW build once (pinned by SHA-256),
+compiles against it, and copies in the plugins video needs, the DLLs they load,
+the Places basemap and the license notices. It also builds the `.msi` with
+`wixl`. `packaging/windows/proton-gallery.wxs` explains the installer.
+
+To build natively with MSVC instead, install GStreamer's MSVC runtime and
+development packages, put `pkg-config` on `PATH`, and point `PKG_CONFIG_PATH`
+at `C:\Program Files\gstreamer\1.0\msvc_x86_64\lib\pkgconfig`. This is what the
+Windows CI job does.
+
 ### Places basemap
 
 The Places map draws its basemap from `basemap-v1.pmtiles` (about 25 MB).
 `scripts/fetch-basemap.sh` downloads it into `data/`, checked against a
 pinned SHA-256; development builds read it from there, and the Linux packages
-install it to `/usr/share/proton-gallery/`. The app also looks next to its
+install it to `/usr/share/proton-gallery/`, and the Windows build to
+`share\proton-gallery`. The app also looks next to its
 executable, in its data directory, and at `PROTON_GALLERY_BASEMAP`. Without
 the file Places shows coarse land outlines instead.
 
@@ -95,9 +120,10 @@ the file Places shows coarse land outlines instead.
   F5 refreshes the grid. Tiles are buttons with a visible focus border.
   Screen-reader validation is pending.
 - The still viewer uses Proton's preview, falling back to a streamed original when absent.
-  Scroll to zoom, drag to pan. Retry reloads an unsuccessful item. Linux videos play in the viewer
+  Scroll to zoom, drag to pan. Retry reloads an unsuccessful item. Videos play in the viewer
   with pause, seeking, and volume. Proton video blocks decrypt on demand in memory. Codec support
-  depends on installed GStreamer plugins. Windows shows a preview for video.
+  depends on installed GStreamer plugins on Linux. The Windows build brings its own,
+  with hardware decoding through Media Foundation and Direct3D 11.
 - The light and dark Gallery palettes follow Iced's system-theme notifications. `PG_SCALE_FACTOR=1.25`
   adds an application scaling override for reproducible layout checks (default 1).
 

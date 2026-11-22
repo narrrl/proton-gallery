@@ -15,7 +15,7 @@
 | Local SQLite catalog with incremental updates | Remote listing must not gate repeat browsing | Measure 100k-record queries and scan/event convergence |
 | Registry Proton SDK 0.12.1 | Reuse authentication, Photos and revision streaming in independent checkouts | Review capability gaps as the registry SDK evolves |
 | Compose on Android, Rust/Iced on desktop | Both call shared account, library, sync, and media services in `pg-app` | Validate Windows runtime, accessibility, and real-account flows |
-| Android Media3 and Linux GStreamer | Both stream decrypted blocks through the same Rust revision reader | Measure startup and seek on real formats and slow networks. Windows playback remains open |
+| Android Media3 and desktop GStreamer | Both stream decrypted blocks through the same Rust revision reader; Windows bundles GStreamer's own MinGW build | Measure startup and seek on real formats and slow networks, including on Windows |
 | Per-account encrypted media object store | Retained media should not become plaintext files by default; block encryption preserves seeking | Measure overhead and prove crash publication and key recovery on all targets |
 | Plaintext app-private metadata catalog initially | Avoid unproven encrypted-database distribution/migration complexity | Disclose filename/date leakage locally; reconsider full catalog encryption before a vault claim |
 | Original-quality offline retention | An offline badge must mean the whole original is locally readable | Network-denied restart tests including seeks and expired sessions |

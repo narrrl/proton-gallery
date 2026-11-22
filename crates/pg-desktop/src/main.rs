@@ -4,6 +4,10 @@
 //! `proton-gallery --demo [COUNT]` browses a synthetic library of COUNT items
 //! (100,000 by default) in a throwaway directory, without an account.
 //! `proton-gallery --bench` times the hot paths offline (docs/BENCH.md).
+
+// A release build started from the Start menu should not bring a console
+// window with it. Debug builds keep theirs, for the log.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod bench;
 mod captcha;
 mod design;
@@ -14,9 +18,9 @@ mod metrics;
 mod places;
 mod thumbs;
 mod vault;
-#[cfg(target_os = "linux")]
+#[cfg(playback)]
 mod video;
-#[cfg(target_os = "linux")]
+#[cfg(playback)]
 mod video_surface;
 
 use gallery::{Gallery, Options};

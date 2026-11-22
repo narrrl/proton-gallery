@@ -3,7 +3,8 @@
 Published versions use annotated tags such as `v0.2.0`. The Android
 workflow coordinates publication of the signed Android APK, x86_64 Linux
 `.deb`, signed x86_64 `.rpm`, and RPM public key on GitHub Releases.
-Arch users build from the tagged checkout. Windows users build from source.
+Arch users build from the tagged checkout. Windows gets an `.msi` installer and a portable `.zip`,
+cross-built on Linux by `scripts/build-windows.sh`.
 
 ## Prepare the version
 
