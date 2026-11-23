@@ -42,6 +42,10 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -670,7 +674,23 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
         value = loader.peek(item, private) ?: loader.load(item, private)
     }
     val phoneOnly = item.phoneId != null && !item.backedUp
+    val cloudOff = rememberVectorPainter(Icons.Outlined.CloudOff)
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        // Like other phone galleries, a crossed-out cloud marks what isn't
+        // backed up: pale copper on a faint shade, sized to the tile, so it
+        // reads on any photo without covering it when the grid is zoomed out.
+        .drawWithContent {
+            drawContent()
+            if (!phoneOnly) return@drawWithContent
+            val side = minOf(14.dp.toPx(), size.minDimension * .18f)
+            val margin = minOf(6.dp.toPx(), size.minDimension * .06f)
+            val halo = side * .75f
+            val center = Offset(size.width - margin - halo, size.height - margin - halo)
+            drawCircle(Color.Black.copy(alpha = .28f), halo, center)
+            translate(center.x - side / 2, center.y - side / 2) {
+                with(cloudOff) { draw(Size(side, side), colorFilter = ColorFilter.tint(NOT_BACKED_UP)) }
+            }
+        }
         .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)
         .semantics {
             contentDescription = "${if (item.isVideo) "Video" else "Photo"}: ${item.name}" + (if (item.favorite) ", favorite" else "") + if (phoneOnly) ", not backed up" else ""
@@ -684,10 +704,6 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp))
         if (item.favorite) Icon(Icons.Filled.Favorite, null, tint = Color.White,
             modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).size(16.dp))
-        // Like other phone galleries: a crossed-out cloud marks what isn't backed up.
-        // In the suite's copper, the one warm mark on a photo.
-        if (phoneOnly) Icon(Icons.Outlined.CloudOff, null, tint = LocalBrand.current.onCopper,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).background(LocalBrand.current.copper, CircleShape).padding(3.dp).size(14.dp))
         if (selected != null) Box(Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp).clip(CircleShape)
             .background(if (selected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.25f))
             .border(2.dp, if (selected) MaterialTheme.colorScheme.primary else Color.White, CircleShape),
@@ -736,3 +752,6 @@ private fun EmptyIllustration() {
 
 fun galleryDate(time: Long): String = Instant.ofEpochSecond(time).atZone(ZoneId.systemDefault()).toLocalDate()
     .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+
+/** The suite's copper 200: the one warm mark on a photo, light enough for any of them. */
+private val NOT_BACKED_UP = Color(0xFFF2C9AA)
