@@ -170,7 +170,8 @@ class MainActivity : ComponentActivity() {
             }
             val placesActions = remember {
                 PlacesActions(model::scanPlaces, model::placePhoto, model::placeItem,
-                    basemap = { withContext(Dispatchers.IO) { openBundledBasemap(applicationContext) } })
+                    basemap = { withContext(Dispatchers.IO) { openBundledBasemap(applicationContext) } },
+                    cached = model::cachedPlaces, remember = model::rememberPlaces)
             }
             val albumActions = remember(albumChoices) {
                 AlbumActions(albumChoices, model::loadAlbumChoices, model::addToAlbum, model::createAlbum,

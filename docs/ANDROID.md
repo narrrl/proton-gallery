@@ -124,6 +124,15 @@ app (`proton-gallery-rs` clustering and label placement) and show the newest
 photo of each place through the grid's thumbnail loader. Without the basemap
 the map draws coarse land outlines.
 
+The map fits the photos into view when the first ones are found and once more
+when the first scan is done; after that only Fit moves it. The library changes
+for many reasons that move no photo (a sync, a backup, the phone's media), so a
+later scan runs out of sight behind the map that is showing and swaps in its
+result only if a photo moved, appeared or went. The view model keeps the last
+result per account, so coming back to Places shows the map at once and scans
+again only if the library changed meanwhile. Locations themselves are cached in
+the core, so a scan of photos already checked costs no network.
+
 ## Visual direction and icon
 
 The theme is the suite's, shared with Proton Stream, Proton Drive for Linux and their websites: violet actions, lavender surfaces, plum text and plum-black dark chrome, with copper as a small highlight. It is inspired by [Proton's visual identity](https://proton.me/blog/new-visual-universe); the custom gallery mark is related to the user's Proton Stream icon, not an official Proton logo. Proton Stream's `docs/DESIGN-TOKENS.md` holds the full token table.
