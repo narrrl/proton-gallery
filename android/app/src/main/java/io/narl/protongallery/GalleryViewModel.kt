@@ -690,6 +690,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     private var placesCache: Triple<Int, Int, List<PlacePhoto>>? = null
 
+    /** Where a Proton photo was taken, for its details; null without one, or for anything else. */
+    suspend fun photoLocation(item: GalleryItem): io.narl.protongallery.bridge.PhotoLocation? {
+        if (!item.inProton || item.isVideo) return null
+        val repo = repository.value ?: return null
+        return try { repo.photoLocation(item) }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { null }
+    }
+
     fun cachedPlaces(revision: Int): Pair<Boolean, List<PlacePhoto>>? =
         placesCache?.takeIf { it.first == account.value.generation }?.let { (_, scanned, photos) -> (scanned == revision) to photos }
 

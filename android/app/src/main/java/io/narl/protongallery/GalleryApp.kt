@@ -177,6 +177,8 @@ fun GalleryApp(
     var addingToAlbum by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for a hidden album to go into.
     var hiding by remember { mutableStateOf<List<GalleryItem>?>(null) }
+    // A photo's place, for Places to open at.
+    var mapFocus by remember { mutableStateOf<io.narl.protongallery.bridge.PhotoLocation?>(null) }
     var naming by rememberSaveable { mutableStateOf(false) }
     // Hidden albums are shown only after the phone's lock confirms the user,
     // and lock again whenever the app leaves the screen. Never saved.
@@ -296,7 +298,8 @@ fun GalleryApp(
                     val placeScope = rememberCoroutineScope()
                     val mapDark = MaterialTheme.colorScheme.background.luminance() < .5f
                     PlacesScreen(placesActions, state.revision, PaddingValues(top = top, bottom = bottom), mapDark,
-                        thumbnail = { photo -> placesActions.item(photo.id)?.let { thumbnails.load(it) }?.asImageBitmap() }) { photo ->
+                        thumbnail = { photo -> placesActions.item(photo.id)?.let { thumbnails.load(it) }?.asImageBitmap() },
+                        focus = mapFocus, onFocused = { mapFocus = null }) { photo ->
                         placeScope.launch {
                             val current = try { placesActions.open(photo.id) }
                             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
@@ -464,6 +467,13 @@ fun GalleryApp(
             addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
             favorite = { item -> media.favorite(listOf(item), !item.favorite) },
             hide = if (canAddToAlbum && !location.private) { { hiding = listOf(it); albumActions.loadChoices() } } else null,
+            location = placesActions.location,
+            // Not from a hidden album: Places shows none of them.
+            showOnMap = if (!location.private && account.connected) { { spot ->
+                mapFocus = spot
+                selected = null
+                if (!places) onNavigate(GalleryLocation(GallerySection.Places))
+            } } else null,
         ), private = location.private, latestOutline = if (places) items else outline) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },

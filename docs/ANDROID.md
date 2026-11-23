@@ -134,6 +134,13 @@ result per account, so coming back to Places shows the map at once and scans
 again only if the library changed meanwhile. Locations themselves are cached in
 the core, so a scan of photos already checked costs no network.
 
+The viewer's **Details** show where a Proton photo was taken: the nearest town
+from the same offline gazetteer, the country, and the coordinates
+(`photo_location` in `pg-mobile`, which reads the cached location or checks
+that one photo). **Show on map** opens Places centred on it at a town's scale.
+A photo in a hidden album shows its place but not the link, since Places
+leaves hidden albums out.
+
 ## Visual direction and icon
 
 The theme is the suite's, shared with Proton Stream, Proton Drive for Linux and their websites: violet actions, lavender surfaces, plum text and plum-black dark chrome, with copper as a small highlight. It is inspired by [Proton's visual identity](https://proton.me/blog/new-visual-universe); the custom gallery mark is related to the user's Proton Stream icon, not an official Proton logo. Proton Stream's `docs/DESIGN-TOKENS.md` holds the full token table.

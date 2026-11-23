@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import io.narl.protongallery.icons.*
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -58,6 +59,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.PhotoLocation
 import io.narl.protongallery.bridge.VideoStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +74,10 @@ class ViewerActions(
     val favorite: ((GalleryItem) -> Unit)? = null,
     /** Put into a hidden album; null where hiding does not apply. */
     val hide: ((GalleryItem) -> Unit)? = null,
+    /** Where a photo was taken, for the details. */
+    val location: (suspend (GalleryItem) -> PhotoLocation?)? = null,
+    /** Open Places at a photo's location; null where Places would not show it. */
+    val showOnMap: ((PhotoLocation) -> Unit)? = null,
 )
 
 /**
@@ -169,6 +175,7 @@ fun MediaViewer(initialOutline: GalleryOutline, initial: Int, thumbnails: Thumbn
                         }, color = VIEWER_INK, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
                     }
                     if (info) Text("${Formatter.formatFileSize(LocalContext.current, shown.sizeBytes.toLong())}\nAdded ${galleryDate(shown.sortTime)}", color = VIEWER_INK, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                    if (info) actions.location?.let { find -> PhotoPlace(shown, find, actions.showOnMap) }
                 }
             }
         }
@@ -324,3 +331,40 @@ private fun VideoPlayer(item: GalleryItem, media: MediaActions, private: Boolean
 private val VIEWER_ACCENT = Color(0xFFA48BFF)
 private val VIEWER_COPPER = Color(0xFFD69B77)
 private val VIEWER_INK = Color.White.copy(alpha = 0.82f)
+
+/** Where the shown photo was taken: the town and the coordinates, and the way to it on the map. */
+@Composable
+private fun PhotoPlace(item: GalleryItem, find: suspend (GalleryItem) -> PhotoLocation?, showOnMap: ((PhotoLocation) -> Unit)?) {
+    val found by produceState<Result<PhotoLocation?>?>(null, item.id, item.revision) {
+        value = runCatching { find(item) }
+    }
+    val result = found
+    val spot = result?.getOrNull()
+    when {
+        result == null -> Text("Finding where it was taken…", color = VIEWER_INK, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 12.dp))
+        spot == null -> return
+        else -> Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Place, null, Modifier.size(16.dp), tint = VIEWER_ACCENT)
+            Column(Modifier.weight(1f).padding(start = 7.dp)) {
+                spot.placeName()?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodyMedium) }
+                Text(spot.coordinates(), color = VIEWER_INK, style = MaterialTheme.typography.bodySmall)
+            }
+            showOnMap?.let { open -> TextButton(onClick = { open(spot) }) { Text("Show on map", color = VIEWER_ACCENT) } }
+        }
+    }
+}
+
+/** "Near Cologne, Germany", in the phone's language for the country. */
+internal fun PhotoLocation.placeName(locale: java.util.Locale = java.util.Locale.getDefault()): String? {
+    val town = place ?: return null
+    val land = country?.let { java.util.Locale("", it).getDisplayCountry(locale) }?.takeIf { it.isNotBlank() }
+    return "Near " + listOfNotNull(town, land).joinToString(", ")
+}
+
+/** "50.9375° N, 6.9603° E": four places, about ten metres. */
+internal fun PhotoLocation.coordinates(): String {
+    fun part(value: Double, positive: Char, negative: Char) =
+        String.format(java.util.Locale.ROOT, "%.4f° %c", kotlin.math.abs(value), if (value >= 0) positive else negative)
+    return "${part(latitude, 'N', 'S')}, ${part(longitude, 'E', 'W')}"
+}

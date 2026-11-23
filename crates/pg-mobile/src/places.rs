@@ -77,6 +77,78 @@ impl GalleryEngine {
     }
 }
 
+/// Where a photo was taken, for its details.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PhotoLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// The nearest town the offline gazetteer knows, if one is near.
+    pub place: Option<String>,
+    /// Its ISO 3166-1 alpha-2 country code, with `place`.
+    pub country: Option<String>,
+    /// Normalized Web Mercator, as [`PlacePhoto`] has it, to open Places there.
+    pub x: f64,
+    pub y: f64,
+}
+
+impl From<places::Coordinates> for PhotoLocation {
+    fn from(coordinates: places::Coordinates) -> Self {
+        let point = coordinates.projected();
+        let city = places::nearest(coordinates.latitude, coordinates.longitude);
+        PhotoLocation {
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude,
+            place: city.map(|city| city.name.to_owned()),
+            country: city.map(|city| city.country.to_owned()),
+            x: point.x,
+            y: point.y,
+        }
+    }
+}
+
+#[uniffi::export]
+impl GalleryEngine {
+    /// Where a Proton photo was taken, or `None` when it carries no location.
+    ///
+    /// What Places read for it when it has, else the same read Places does,
+    /// for the batch around the photo, which Places then finds cached.
+    pub async fn photo_location(
+        self: Arc<Self>,
+        key: String,
+        revision: Option<String>,
+    ) -> Result<Option<PhotoLocation>, GalleryError> {
+        let key = authentication::parse_key(&key)?;
+        let app = &self.app;
+        let mut work = pin!(async move {
+            let cached = app
+                .catalog
+                .photo_locations(vec![(key.clone(), revision)])
+                .await?;
+            if let Some(known) = cached.into_iter().next().flatten() {
+                return Ok::<_, GalleryError>(known);
+            }
+            let scan = app.places_scan().await?;
+            let Some(index) = scan.outline.keys.iter().position(|found| *found == key) else {
+                return Ok(None);
+            };
+            let batch = app.places_batch(&scan, index).await?;
+            Ok(batch
+                .photos
+                .into_iter()
+                .find(|photo| photo.index == index)
+                .map(|photo| photo.coordinates))
+        });
+        // Entered on every poll, as places_batch is, so closing the details
+        // cancels the network work with the future.
+        let location = poll_fn(|cx| {
+            let _guard = self.runtime.enter();
+            work.as_mut().poll(cx)
+        })
+        .await?;
+        Ok(location.map(PhotoLocation::from))
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct PlacesGeometry {
     /// X/Y pairs in normalized Web Mercator coordinates per ring.
@@ -493,5 +565,28 @@ mod tests {
         assert!(!markers[1].labelled);
         layout.clear();
         assert!(layout.layout(camera, 800.0, 800.0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn a_photo_location_names_the_town_and_lands_where_places_draws_it() {
+        let cologne = places::Coordinates::new(50.9375, 6.9603).unwrap();
+        let location = PhotoLocation::from(cologne);
+        assert_eq!(location.country.as_deref(), Some("DE"));
+        assert!(location.place.is_some());
+        let point = cologne.projected();
+        assert_eq!((location.x, location.y), (point.x, point.y));
+        assert!((0.0..1.0).contains(&location.x) && (0.0..1.0).contains(&location.y));
+    }
+
+    #[test]
+    fn open_sea_has_coordinates_but_no_town() {
+        let atlantic = PhotoLocation::from(places::Coordinates::new(0.0, -30.0).unwrap());
+        assert_eq!(atlantic.place, None);
+        assert_eq!(atlantic.country, None);
     }
 }

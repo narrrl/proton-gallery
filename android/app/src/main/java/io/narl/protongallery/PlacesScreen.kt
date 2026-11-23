@@ -86,6 +86,7 @@ import io.narl.protongallery.bridge.PlaceMarker
 import io.narl.protongallery.bridge.PlacePhoto
 import io.narl.protongallery.bridge.PlacesLayout
 import io.narl.protongallery.bridge.PlacesMap
+import io.narl.protongallery.bridge.PhotoLocation
 import io.narl.protongallery.bridge.mapAttribution
 import io.narl.protongallery.bridge.mapScaleBar
 import io.narl.protongallery.bridge.placesGeometry
@@ -120,6 +121,8 @@ data class PlacesActions(
     val cached: (Int) -> Pair<Boolean, List<PlacePhoto>>? = { null },
     /** Keep a finished scan for next time. */
     val remember: (Int, List<PlacePhoto>) -> Unit = { _, _ -> },
+    /** Where a photo was taken, for the viewer's details. */
+    val location: suspend (GalleryItem) -> PhotoLocation? = { null },
 )
 
 /** A minus sign, matching the outlined plus. */
@@ -141,6 +144,8 @@ private val FitIcon = materialIcon("Outlined.FitPhotos") {
 /** Deepest zoom a fit goes to, so one place doesn't zoom to street level. */
 private const val FIT_ZOOM = 64.0
 private const val MAX_ZOOM = 8192.0
+/** Where "Show on map" opens: a town and what is around it. */
+private const val FOCUS_ZOOM = 1024.0
 /** A marker picture's side as a share of its bubble's diameter, and its corner. */
 private const val MARKER_SIDE = .9f
 private const val CORNER = .24f
@@ -200,7 +205,8 @@ private fun outlinePaths(rings: List<List<Float>>, close: Boolean): List<Path> =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, dark: Boolean,
-    thumbnail: suspend (PlacePhoto) -> ImageBitmap?, onOpen: (PlacePhoto) -> Unit) {
+    thumbnail: suspend (PlacePhoto) -> ImageBitmap?, focus: PhotoLocation? = null, onFocused: () -> Unit = {},
+    onOpen: (PlacePhoto) -> Unit) {
     // What the last visit found, shown at once; a scan then only replaces it
     // when the library changed.
     val cache = remember { actions.cached(revision) }
@@ -220,6 +226,12 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
     // move the map under the viewer whenever the library changed.
     var fitted by remember { mutableStateOf<MapCamera?>(null) }
     var fitRequest by remember { mutableIntStateOf(if (cache != null) 1 else 0) }
+    // "Show on map" from a photo's details: that spot, at a town's scale.
+    LaunchedEffect(focus) {
+        val spot = focus ?: return@LaunchedEffect
+        camera = MapCamera(spot.x, spot.y, FOCUS_ZOOM)
+        onFocused()
+    }
     var selected by remember { mutableStateOf<List<PlacePhoto>?>(null) }
     var markers by remember { mutableStateOf<MarkerView?>(null) }
     var layoutVersion by remember { mutableIntStateOf(0) }

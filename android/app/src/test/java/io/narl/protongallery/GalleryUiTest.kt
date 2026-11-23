@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.luminance
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.PlacePhoto
+import io.narl.protongallery.bridge.PhotoLocation
 import io.narl.protongallery.bridge.BackupAlbumTarget
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
@@ -329,6 +330,30 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Back to gallery").assertExists()
         compose.runOnIdle { latest = GalleryOutline.of(items.drop(1)) }
         compose.onNodeWithContentDescription("Back to gallery").assertDoesNotExist()
+    }
+
+    @Test fun a_photo_s_details_name_where_it_was_taken_and_open_the_map_there() {
+        val cologne = PhotoLocation(50.9375, 6.9603, "Cologne", "DE", 0.519, 0.331)
+        var opened: PhotoLocation? = null
+        val thumbnails = ThumbnailLoader(File(System.getProperty("java.io.tmpdir"), "viewer-place"), { null })
+        compose.setContent {
+            GalleryTheme(ThemeMode.Dark) {
+                MediaViewer(GalleryOutline.of(fixtureItems()), 0, thumbnails, MediaActions(), onClose = {},
+                    actions = ViewerActions(location = { cologne }, showOnMap = { opened = it }))
+            }
+        }
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNodeWithText("Details").performClick()
+        compose.onNodeWithText("Near Cologne, Germany").assertExists()
+        compose.onNodeWithText("50.9375° N, 6.9603° E").assertExists()
+        compose.onNodeWithText("Show on map").performClick()
+        compose.runOnIdle { assertEquals(cologne, opened) }
+    }
+
+    @Test fun coordinates_south_and_west_of_zero_read_as_south_and_west() {
+        val rio = PhotoLocation(-22.90685, -43.17290, null, null, 0.38, 0.56)
+        assertEquals("22.9069° S, 43.1729° W", rio.coordinates())
+        assertNull(rio.placeName())
     }
 
     @Test @Config(sdk = [34], qualifiers = "w800dp-h1100dp-xhdpi")
