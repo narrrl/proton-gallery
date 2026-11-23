@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.luminance
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.narl.protongallery.bridge.GalleryItem
 import io.narl.protongallery.bridge.PlacePhoto
+import io.narl.protongallery.bridge.PhotoLocation
 import io.narl.protongallery.bridge.BackupAlbumTarget
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
@@ -331,6 +332,30 @@ class GalleryUiTest {
         compose.onNodeWithContentDescription("Back to gallery").assertDoesNotExist()
     }
 
+    @Test fun a_photo_s_details_name_where_it_was_taken_and_open_the_map_there() {
+        val cologne = PhotoLocation(50.9375, 6.9603, "Cologne", "DE", 0.519, 0.331)
+        var opened: PhotoLocation? = null
+        val thumbnails = ThumbnailLoader(File(System.getProperty("java.io.tmpdir"), "viewer-place"), { null })
+        compose.setContent {
+            GalleryTheme(ThemeMode.Dark) {
+                MediaViewer(GalleryOutline.of(fixtureItems()), 0, thumbnails, MediaActions(), onClose = {},
+                    actions = ViewerActions(location = { cologne }, showOnMap = { opened = it }))
+            }
+        }
+        compose.onNodeWithContentDescription("More options").performClick()
+        compose.onNodeWithText("Details").performClick()
+        compose.onNodeWithText("Near Cologne, Germany").assertExists()
+        compose.onNodeWithText("50.9375° N, 6.9603° E").assertExists()
+        compose.onNodeWithText("Show on map").performClick()
+        compose.runOnIdle { assertEquals(cologne, opened) }
+    }
+
+    @Test fun coordinates_south_and_west_of_zero_read_as_south_and_west() {
+        val rio = PhotoLocation(-22.90685, -43.17290, null, null, 0.38, 0.56)
+        assertEquals("22.9069° S, 43.1729° W", rio.coordinates())
+        assertNull(rio.placeName())
+    }
+
     @Test @Config(sdk = [34], qualifiers = "w800dp-h1100dp-xhdpi")
     fun the_grid_adapts_to_a_tablet_without_fixed_column_counts() {
         render(fixtureItems(), ThemeMode.Dark)
@@ -436,6 +461,34 @@ class GalleryUiTest {
         compose.onNode(hasText("Summer") and hasClickAction()).performClick()
         compose.onNodeWithContentDescription("Stop backing up into Pixel 6").performClick()
         assertEquals(listOf("camera:Summer:true:true", "null:Pixel 6:false:false"), changes)
+    }
+
+    @Test fun adding_to_an_album_can_unlock_hidden_albums_and_hide_into_one() {
+        val items = fixtureItems().map { it.copy(inProton = true) }
+        val summer = FolderAlbum("album-1", "album-1", null, "Summer", 3uL, 0uL)
+        val secret = FolderAlbum("album-3", "album-3", null, "Private", 2uL, 0uL, hidden = true)
+        val hidden = mutableListOf<String>()
+        val added = mutableListOf<String>()
+        var asked = 0
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
+            albumActions = AlbumActions(choices = listOf(summer, secret),
+                add = { album, chosen -> added += "${chosen.size}:${album.name}" },
+                hide = { chosen, album, name -> hidden += "${chosen.size}:${album?.name ?: "new $name"}" }),
+            privacy = PrivacyLock(available = { true }, unlock = { asked++; it(true) }))
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: Coast 1.jpg").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithContentDescription("Photo: Coast 1.jpg").performTouchInput { longClick() }
+        compose.onNodeWithContentDescription("Add to album").performClick()
+        compose.onNodeWithText("Private").assertDoesNotExist()
+        compose.onNodeWithText("Unlock to add to one of them").performClick()
+        assertEquals(1, asked)
+
+        // Into a hidden album is hiding, not adding.
+        compose.onNode(hasText("Private") and hasClickAction()).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("1:Private"), hidden)
+        assertEquals(emptyList<String>(), added)
     }
 
     @Test fun selected_photos_hide_into_the_hidden_album() {

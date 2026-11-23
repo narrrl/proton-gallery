@@ -95,7 +95,8 @@ public links can still be revoked from an unlocked hidden folder.
   or screen lock (`BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`).
   They lock when the app leaves the screen. Their photos leave Gallery's
   timeline and cloud picker after sync. **Hide** asks which hidden album to use
-  or creates one. Originals remain accessible in Proton Photos or Drive and
+  or creates one. **Add to album** leaves locked hidden albums out but offers
+  to unlock them; choosing one then hides the photos there, as **Hide** does. Originals remain accessible in Proton Photos or Drive and
   through existing shares. Local phone copies remain subject to Android's own
   gallery and picker rules.
 
@@ -124,6 +125,22 @@ app (`proton-gallery-rs` clustering and label placement) and show the newest
 photo of each place through the grid's thumbnail loader. Without the basemap
 the map draws coarse land outlines.
 
+The map fits the photos into view when the first ones are found and once more
+when the first scan is done; after that only Fit moves it. The library changes
+for many reasons that move no photo (a sync, a backup, the phone's media), so a
+later scan runs out of sight behind the map that is showing and swaps in its
+result only if a photo moved, appeared or went. The view model keeps the last
+result per account, so coming back to Places shows the map at once and scans
+again only if the library changed meanwhile. Locations themselves are cached in
+the core, so a scan of photos already checked costs no network.
+
+The viewer's **Details** show where a Proton photo was taken: the nearest town
+from the same offline gazetteer, the country, and the coordinates
+(`photo_location` in `pg-mobile`, which reads the cached location or checks
+that one photo). **Show on map** opens Places centred on it at a town's scale.
+A photo in a hidden album shows its place but not the link, since Places
+leaves hidden albums out.
+
 ## Visual direction and icon
 
 The theme is the suite's, shared with Proton Stream, Proton Drive for Linux and their websites: violet actions, lavender surfaces, plum text and plum-black dark chrome, with copper as a small highlight. It is inspired by [Proton's visual identity](https://proton.me/blog/new-visual-universe); the custom gallery mark is related to the user's Proton Stream icon, not an official Proton logo. Proton Stream's `docs/DESIGN-TOKENS.md` holds the full token table.
@@ -138,7 +155,7 @@ The theme is the suite's, shared with Proton Stream, Proton Drive for Linux and 
 | Muted text | `#615970` | `#AAA4BD` |
 | Copper | `#B47456` | `#D69B77` |
 
-Dark mode's accent is violet 400 rather than 500, because Material also writes text in `primary`. Type is Inter (`res/font`, under the OFL), with Inter Display for the largest sizes; a script Inter does not draw falls back to the system font glyph by glyph, so native language coverage is unchanged. Font scaling remains enabled. Corners follow the suite's scale (`GalleryShapes.kt`): 6 for a badge, 8 for a small control, 12 for album cards, 16 for sheets and floating panels, 24 for what floats over a photo, and pills for buttons and the section switch. Photo tiles have square corners and 2dp gutters, so the grid reads as one sheet of photographs. Row heights adapt to photo shapes, width and zoom.
+Dark mode's accent is violet 400 rather than 500, because Material also writes text in `primary`. Type is Inter (`res/font`, under the OFL), with Inter Display for the largest sizes; a script Inter does not draw falls back to the system font glyph by glyph, so native language coverage is unchanged. Font scaling remains enabled. Corners follow the suite's scale (`GalleryShapes.kt`): 6 for a badge, 8 for a small control, 12 for album cards, 16 for sheets and floating panels, 24 for what floats over a photo, and pills for buttons and the section switch. Photo tiles have square corners and 2dp gutters, so the grid reads as one sheet of photographs. A photo on the phone that is not backed up carries a small crossed-out cloud in pale copper on a faint shade, scaled down with the tile, so it marks the photo without covering it when the grid is zoomed out. Row heights adapt to photo shapes, width and zoom.
 
 The violet-to-orchid gradient of the icons' faces appears in three places only: the chosen section, the sign-in button, and the activity bar under the top bar. Everything else is solid, so the photographs stay the brightest thing on screen. Copper marks a photo that is only on this phone. The app menu opens with the mark and the name.
 

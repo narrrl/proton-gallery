@@ -42,6 +42,10 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -173,6 +177,8 @@ fun GalleryApp(
     var addingToAlbum by remember { mutableStateOf<List<GalleryItem>?>(null) }
     // Items waiting for a hidden album to go into.
     var hiding by remember { mutableStateOf<List<GalleryItem>?>(null) }
+    // A photo's place, for Places to open at.
+    var mapFocus by remember { mutableStateOf<io.narl.protongallery.bridge.PhotoLocation?>(null) }
     var naming by rememberSaveable { mutableStateOf(false) }
     // Hidden albums are shown only after the phone's lock confirms the user,
     // and lock again whenever the app leaves the screen. Never saved.
@@ -254,8 +260,12 @@ fun GalleryApp(
     LaunchedEffect(location, barPinned) { if (barPinned || barOffset != 0f) barOffset = 0f }
     val hideOnScroll = remember {
         object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                barOffset = if (currentPinned) 0f else (barOffset + available.y).coerceIn(-barHeight.toFloat(), 0f)
+            // What the page actually scrolled moves the bar, so a page too
+            // short to scroll never hides it; a pull past the top still
+            // brings it back.
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                val moved = consumed.y + available.y.coerceAtLeast(0f)
+                barOffset = if (currentPinned) 0f else (barOffset + moved).coerceIn(-barHeight.toFloat(), 0f)
                 return Offset.Zero
             }
         }
@@ -288,7 +298,8 @@ fun GalleryApp(
                     val placeScope = rememberCoroutineScope()
                     val mapDark = MaterialTheme.colorScheme.background.luminance() < .5f
                     PlacesScreen(placesActions, state.revision, PaddingValues(top = top, bottom = bottom), mapDark,
-                        thumbnail = { photo -> placesActions.item(photo.id)?.let { thumbnails.load(it) }?.asImageBitmap() }) { photo ->
+                        thumbnail = { photo -> placesActions.item(photo.id)?.let { thumbnails.load(it) }?.asImageBitmap() },
+                        focus = mapFocus, onFocused = { mapFocus = null }) { photo ->
                         placeScope.launch {
                             val current = try { placesActions.open(photo.id) }
                             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
@@ -424,10 +435,19 @@ fun GalleryApp(
     }
     addingToAlbum?.let { items ->
         // Hidden albums keep their names to themselves while locked.
+        // A row offers to unlock them, the way hiding does, and lists them after.
+        val lockedHidden = !hiddenUnlocked && albumActions.choices?.any { it.hidden } == true
         AlbumChooserSheet(items, albumActions.choices?.filter { hiddenUnlocked || !it.hidden }, thumbnails,
-            onChoose = { album -> albumActions.add(album, items); addingToAlbum = null; selection = emptyMap() },
+            onChoose = { album ->
+                // Into a hidden album is hiding: this phone's photos not yet
+                // backed up are queued too, as Hide does.
+                if (album.hidden) albumActions.hide(items, album, album.name) else albumActions.add(album, items)
+                addingToAlbum = null
+                selection = emptyMap()
+            },
             onCreate = { name -> albumActions.create(name, items); addingToAlbum = null; selection = emptyMap() },
-            onDismiss = { addingToAlbum = null })
+            onDismiss = { addingToAlbum = null },
+            onUnlockHidden = if (lockedHidden) toggleHidden else null)
     }
     if (lockMissing) AlertDialog(
         onDismissRequest = { lockMissing = false },
@@ -447,6 +467,13 @@ fun GalleryApp(
             addToAlbum = if (canAddToAlbum) { { addingToAlbum = listOf(it); albumActions.loadChoices() } } else null,
             favorite = { item -> media.favorite(listOf(item), !item.favorite) },
             hide = if (canAddToAlbum && !location.private) { { hiding = listOf(it); albumActions.loadChoices() } } else null,
+            location = placesActions.location,
+            // Not from a hidden album: Places shows none of them.
+            showOnMap = if (!location.private && account.connected) { { spot ->
+                mapFocus = spot
+                selected = null
+                if (!places) onNavigate(GalleryLocation(GallerySection.Places))
+            } } else null,
         ), private = location.private, latestOutline = if (places) items else outline) }
     confirmDelete?.let { items ->
         DeleteDialog(items, onConfirm = { media.delete(items); confirmDelete = null; selection = emptyMap(); selected = null },
@@ -657,7 +684,23 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
         value = loader.peek(item, private) ?: loader.load(item, private)
     }
     val phoneOnly = item.phoneId != null && !item.backedUp
+    val cloudOff = rememberVectorPainter(Icons.Outlined.CloudOff)
     Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        // Like other phone galleries, a crossed-out cloud marks what isn't
+        // backed up: pale copper on a faint shade, sized to the tile, so it
+        // reads on any photo without covering it when the grid is zoomed out.
+        .drawWithContent {
+            drawContent()
+            if (!phoneOnly) return@drawWithContent
+            val side = minOf(14.dp.toPx(), size.minDimension * .18f)
+            val margin = minOf(6.dp.toPx(), size.minDimension * .06f)
+            val halo = side * .75f
+            val center = Offset(size.width - margin - halo, size.height - margin - halo)
+            drawCircle(Color.Black.copy(alpha = .28f), halo, center)
+            translate(center.x - side / 2, center.y - side / 2) {
+                with(cloudOff) { draw(Size(side, side), colorFilter = ColorFilter.tint(NOT_BACKED_UP)) }
+            }
+        }
         .combinedClickable(onLongClickLabel = "Select", onLongClick = onLongClick, onClick = onClick)
         .semantics {
             contentDescription = "${if (item.isVideo) "Video" else "Photo"}: ${item.name}" + (if (item.favorite) ", favorite" else "") + if (phoneOnly) ", not backed up" else ""
@@ -671,10 +714,6 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp))
         if (item.favorite) Icon(Icons.Filled.Favorite, null, tint = Color.White,
             modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).size(16.dp))
-        // Like other phone galleries: a crossed-out cloud marks what isn't backed up.
-        // In the suite's copper, the one warm mark on a photo.
-        if (phoneOnly) Icon(Icons.Outlined.CloudOff, null, tint = LocalBrand.current.onCopper,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).background(LocalBrand.current.copper, CircleShape).padding(3.dp).size(14.dp))
         if (selected != null) Box(Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp).clip(CircleShape)
             .background(if (selected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.25f))
             .border(2.dp, if (selected) MaterialTheme.colorScheme.primary else Color.White, CircleShape),
@@ -723,3 +762,6 @@ private fun EmptyIllustration() {
 
 fun galleryDate(time: Long): String = Instant.ofEpochSecond(time).atZone(ZoneId.systemDefault()).toLocalDate()
     .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+
+/** The suite's copper 200: the one warm mark on a photo, light enough for any of them. */
+private val NOT_BACKED_UP = Color(0xFFF2C9AA)

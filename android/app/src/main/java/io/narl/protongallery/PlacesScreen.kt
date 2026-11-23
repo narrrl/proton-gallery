@@ -86,6 +86,7 @@ import io.narl.protongallery.bridge.PlaceMarker
 import io.narl.protongallery.bridge.PlacePhoto
 import io.narl.protongallery.bridge.PlacesLayout
 import io.narl.protongallery.bridge.PlacesMap
+import io.narl.protongallery.bridge.PhotoLocation
 import io.narl.protongallery.bridge.mapAttribution
 import io.narl.protongallery.bridge.mapScaleBar
 import io.narl.protongallery.bridge.placesGeometry
@@ -116,6 +117,12 @@ data class PlacesActions(
     val item: suspend (String) -> GalleryItem? = { null },
     /** The offline basemap; null draws coarse outlines. The caller closes it. */
     val basemap: suspend () -> PlacesMap? = { null },
+    /** The last scan's photos for this account, and whether it saw this revision. */
+    val cached: (Int) -> Pair<Boolean, List<PlacePhoto>>? = { null },
+    /** Keep a finished scan for next time. */
+    val remember: (Int, List<PlacePhoto>) -> Unit = { _, _ -> },
+    /** Where a photo was taken, for the viewer's details. */
+    val location: suspend (GalleryItem) -> PhotoLocation? = { null },
 )
 
 /** A minus sign, matching the outlined plus. */
@@ -137,6 +144,8 @@ private val FitIcon = materialIcon("Outlined.FitPhotos") {
 /** Deepest zoom a fit goes to, so one place doesn't zoom to street level. */
 private const val FIT_ZOOM = 64.0
 private const val MAX_ZOOM = 8192.0
+/** Where "Show on map" opens: a town and what is around it. */
+private const val FOCUS_ZOOM = 1024.0
 /** A marker picture's side as a share of its bubble's diameter, and its corner. */
 private const val MARKER_SIDE = .9f
 private const val CORNER = .24f
@@ -196,19 +205,37 @@ private fun outlinePaths(rings: List<List<Float>>, close: Boolean): List<Path> =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, dark: Boolean,
-    thumbnail: suspend (PlacePhoto) -> ImageBitmap?, onOpen: (PlacePhoto) -> Unit) {
-    val photos = remember { mutableStateListOf<PlacePhoto>() }
-    val layout = remember { PlacesLayout() }
+    thumbnail: suspend (PlacePhoto) -> ImageBitmap?, focus: PhotoLocation? = null, onFocused: () -> Unit = {},
+    onOpen: (PlacePhoto) -> Unit) {
+    // What the last visit found, shown at once; a scan then only replaces it
+    // when the library changed.
+    val cache = remember { actions.cached(revision) }
+    val photos = remember { mutableStateListOf<PlacePhoto>().apply { cache?.second?.let(::addAll) } }
+    val layout = remember { PlacesLayout().apply { cache?.second?.takeIf { it.isNotEmpty() }?.let(::add) } }
     DisposableEffect(layout) { onDispose { layout.close() } }
-    var progress by remember { mutableStateOf(PlacesProgress()) }
+    var progress by remember {
+        mutableStateOf(if (cache != null) PlacesProgress(scanning = false) else PlacesProgress())
+    }
     var retry by remember { mutableIntStateOf(0) }
     var failed by remember { mutableStateOf(false) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    // Where the viewer moved the map; null until they do, which shows [fitted].
     var camera by remember { mutableStateOf<MapCamera?>(null) }
+    // The photos fitted into view: on the first photos found, once more when
+    // the first scan is done, and on Fit. Never on a later scan, which would
+    // move the map under the viewer whenever the library changed.
+    var fitted by remember { mutableStateOf<MapCamera?>(null) }
+    var fitRequest by remember { mutableIntStateOf(if (cache != null) 1 else 0) }
+    // "Show on map" from a photo's details: that spot, at a town's scale.
+    LaunchedEffect(focus) {
+        val spot = focus ?: return@LaunchedEffect
+        camera = MapCamera(spot.x, spot.y, FOCUS_ZOOM)
+        onFocused()
+    }
     var selected by remember { mutableStateOf<List<PlacePhoto>?>(null) }
     var markers by remember { mutableStateOf<MarkerView?>(null) }
     var layoutVersion by remember { mutableIntStateOf(0) }
-    val covers = remember(revision, retry) { mutableStateMapOf<String, ImageBitmap>() }
+    val covers = remember(retry) { mutableStateMapOf<String, ImageBitmap>() }
 
     // The basemap, or the coarse outlines when there is none.
     var tiles by remember { mutableStateOf<MapTiles?>(null) }
@@ -228,34 +255,73 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
             mapReady = true
         }
     }
+    var scanned by remember { mutableIntStateOf(if (cache?.first == true) 0 else -1) }
     LaunchedEffect(revision, retry) {
-        photos.clear()
-        layout.clear()
-        layoutVersion++
-        markers = null
-        selected = null
-        progress = PlacesProgress()
+        // Already scanned for this revision on an earlier visit.
+        if (retry == 0 && scanned == 0) {
+            scanned = 1
+            return@LaunchedEffect
+        }
+        scanned = 1
+        // A later scan, with the map already showing, runs out of sight and
+        // swaps in what it found only if that differs: the library changes for
+        // many reasons that move no photo.
+        val quiet = photos.isNotEmpty() && retry == 0
+        val found = ArrayList<PlacePhoto>()
+        var unchecked = 0
+        if (!quiet) {
+            photos.clear()
+            layout.clear()
+            layoutVersion++
+            markers = null
+            selected = null
+            progress = PlacesProgress()
+        }
         failed = false
         try {
             actions.scan { batch ->
+                found += batch.newPhotos
+                unchecked = batch.failed
+                if (quiet) return@scan
                 if (batch.newPhotos.isNotEmpty()) {
+                    val first = photos.isEmpty()
                     layout.add(batch.newPhotos)
                     photos += batch.newPhotos
                     layoutVersion++
+                    if (first) fitRequest++
                 }
                 progress = batch
             }
+            if (quiet) {
+                if (found.map { it.id to it.index } != photos.map { it.id to it.index } ||
+                    found.map { it.x to it.y } != photos.map { it.x to it.y }
+                ) {
+                    photos.clear()
+                    photos += found
+                    layout.clear()
+                    if (found.isNotEmpty()) layout.add(found)
+                    layoutVersion++
+                    selected = selected?.filter { picked -> found.any { it.id == picked.id } }?.takeIf { it.isNotEmpty() }
+                }
+            } else {
+                fitRequest++
+            }
+            progress = PlacesProgress(checked = found.size, total = found.size, failed = unchecked, scanning = false)
+            actions.remember(revision, found)
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (_: Exception) {
-            failed = true
+            if (!quiet) failed = true
             progress = progress.copy(scanning = false)
         }
+    }
+    LaunchedEffect(fitRequest, canvasSize) {
+        if (fitRequest > 0 && camera == null && canvasSize != IntSize.Zero) fitted = fit(photos.toList(), canvasSize, FIT_ZOOM)
     }
 
     val palette = MaterialTheme.colorScheme
     val density = LocalDensity.current.density
-    val current = camera ?: remember(photos.size, canvasSize) { fit(photos.toList(), canvasSize, FIT_ZOOM) }
+    val current = camera ?: fitted ?: MapCamera(.5, .5, 1.0)
     val latestCamera by rememberUpdatedState(current)
     // Markers are laid out in the background on the newest camera once the
     // previous layout is done; the last markers stay on the map meanwhile.
@@ -287,7 +353,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
         }
     }
     // Marker pictures: the newest photo of each marker, most photos first.
-    LaunchedEffect(revision, retry) {
+    LaunchedEffect(retry) {
         snapshotFlow { markers?.markers?.sortedByDescending { it.photos }?.mapNotNull { photos.getOrNull(it.cover.toInt()) } ?: emptyList() }
             .distinctUntilChanged().collectLatest { wanted ->
                 val slots = Semaphore(COVERS_AT_ONCE)
@@ -438,7 +504,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
                 HorizontalDivider(Modifier.width(24.dp))
                 IconButton(onClick = { camera = current.zoomed(.5) }) { Icon(ZoomOutIcon, "Zoom out") }
                 HorizontalDivider(Modifier.width(24.dp))
-                IconButton(onClick = { camera = null; selected = null }) { Icon(FitIcon, "Fit photos") }
+                IconButton(onClick = { camera = null; selected = null; fitRequest++ }) { Icon(FitIcon, "Fit photos") }
             }
         }
 

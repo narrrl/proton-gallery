@@ -89,6 +89,8 @@ class GalleryRepository private constructor(private val context: Context) {
     }
     suspend fun galleryVisibilityReady() = withContext(Native) { engine.galleryVisibilityReady() }
     suspend fun placesScan() = withContext(Native) { engine.startPlaces() }
+    suspend fun photoLocation(item: io.narl.protongallery.bridge.GalleryItem) =
+        withContext(Native) { engine.photoLocation(item.assetKey, item.revision) }
     suspend fun placesBatch(scan: io.narl.protongallery.bridge.PhotoPlaces, start: UInt) =
         withContext(Native) { engine.placesBatch(scan, start) }
 

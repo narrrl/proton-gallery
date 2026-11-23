@@ -17,6 +17,7 @@ import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.narl.protongallery.bridge.GalleryItem
+import io.narl.protongallery.bridge.PlacePhoto
 import io.narl.protongallery.bridge.BackupAlbumTarget
 import io.narl.protongallery.bridge.FolderAlbum
 import io.narl.protongallery.bridge.AlbumOptions
@@ -680,6 +681,29 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 update(PlacesProgress(batch.photos, next.toInt(), total, failed, next.toInt() < total))
             }
         }
+    }
+
+    /**
+     * Places as last scanned, for the account it was scanned for: coming back
+     * to Places shows the map at once, and scans again only when the library
+     * changed since.
+     */
+    private var placesCache: Triple<Int, Int, List<PlacePhoto>>? = null
+
+    /** Where a Proton photo was taken, for its details; null without one, or for anything else. */
+    suspend fun photoLocation(item: GalleryItem): io.narl.protongallery.bridge.PhotoLocation? {
+        if (!item.inProton || item.isVideo) return null
+        val repo = repository.value ?: return null
+        return try { repo.photoLocation(item) }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { null }
+    }
+
+    fun cachedPlaces(revision: Int): Pair<Boolean, List<PlacePhoto>>? =
+        placesCache?.takeIf { it.first == account.value.generation }?.let { (_, scanned, photos) -> (scanned == revision) to photos }
+
+    fun rememberPlaces(revision: Int, photos: List<PlacePhoto>) {
+        placesCache = Triple(account.value.generation, revision, photos)
     }
 
     // The timeline Places reads located photos from; made once per scan.
