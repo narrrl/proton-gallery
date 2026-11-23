@@ -23,14 +23,15 @@ pub struct Colors {
 
 pub fn colors(theme: &Theme) -> Colors {
     if theme.extended_palette().is_dark {
+        // The suite's plum-black (Proton Stream's `docs/DESIGN-TOKENS.md`).
         Colors {
-            surface: color!(0x171324),
-            sidebar: color!(0x211B31),
-            muted: color!(0xBFB5D1),
-            line: color!(0x433850),
+            surface: color!(0x100E17),
+            sidebar: color!(0x17141F),
+            muted: color!(0xAAA4BD),
+            line: color!(0x2E283D),
             selected: color!(0x372580),
             accent: color!(0xEFE9FF),
-            placeholder: color!(0x30283F),
+            placeholder: color!(0x1E1A29),
         }
     } else {
         Colors {
@@ -63,9 +64,9 @@ pub fn theme(mode: iced::theme::Mode) -> Theme {
         Theme::custom(
             "Gallery dark",
             iced::theme::Palette {
-                background: color!(0x171324),
-                text: color!(0xF4F0FF),
-                primary: color!(0xBDA9FF),
+                background: color!(0x100E17),
+                text: color!(0xF4F2FA),
+                primary: color!(0x8A6DFF),
                 success: color!(0x6EC9A8),
                 warning: color!(0xEAC078),
                 danger: color!(0xFF93A8),

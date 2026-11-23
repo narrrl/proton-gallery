@@ -2,19 +2,22 @@ package io.narl.protongallery
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 
 enum class ThemeMode { System, Light, Dark }
 
-// Proton-style violet and neutral plum; gradients are reserved for the app mark.
+/*
+ * The suite's colours (docs/ANDROID.md, "Visual direction"): the same violet,
+ * plum neutrals and copper as Proton Stream, Proton Drive for Linux and the
+ * websites. Light is the suite's pale lavender page; dark is its plum-black.
+ */
 private val LightColors = lightColorScheme(
     primary = Color(0xFF6D4AFF), onPrimary = Color.White,
     primaryContainer = Color(0xFFECE7FF), onPrimaryContainer = Color(0xFF382380),
@@ -29,39 +32,68 @@ private val LightColors = lightColorScheme(
     surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFF7F5FC),
     surfaceContainer = Color(0xFFF1EEF8), surfaceContainerHigh = Color(0xFFEAE6F2),
     surfaceContainerHighest = Color(0xFFE3DEED), surfaceDim = Color(0xFFE3DEED), surfaceBright = Color.White,
-    inverseSurface = Color(0xFF30283F), inverseOnSurface = Color(0xFFF6F1FF), inversePrimary = Color(0xFFBDA9FF),
+    inverseSurface = Color(0xFF2E283D), inverseOnSurface = Color(0xFFF4F2FA), inversePrimary = Color(0xFFA48BFF),
     error = Color(0xFFB42339), onError = Color.White,
     errorContainer = Color(0xFFFDE9EE), onErrorContainer = Color(0xFF740F24),
-    surfaceTint = Color(0xFF6D4AFF), scrim = Color.Black,
+    surfaceTint = Color.Transparent, scrim = Color.Black,
 )
+
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFBDA9FF), onPrimary = Color(0xFF28135F),
+    // Violet 400 rather than 500: Material also writes text and icons in
+    // `primary`, and 500 on the plum-black page is under 4:1. White stays
+    // above 3.5:1 on it as a fill.
+    primary = Color(0xFF8A6DFF), onPrimary = Color.White,
     primaryContainer = Color(0xFF372580), onPrimaryContainer = Color(0xFFEFE9FF),
-    secondary = Color(0xFFBDB3D2), onSecondary = Color(0xFF302840),
+    secondary = Color(0xFFBDB3D2), onSecondary = Color(0xFF2E283D),
     secondaryContainer = Color(0xFF372580), onSecondaryContainer = Color(0xFFEFE9FF),
     tertiary = Color(0xFFD6B4EB), onTertiary = Color(0xFF412450),
     tertiaryContainer = Color(0xFF5B3A6A), onTertiaryContainer = Color(0xFFF0DFFC),
-    background = Color(0xFF171324), onBackground = Color(0xFFF4F0FF),
-    surface = Color(0xFF1C182B), onSurface = Color(0xFFF4F0FF),
-    surfaceVariant = Color(0xFF30283F), onSurfaceVariant = Color(0xFFBFB5D1),
-    outline = Color(0xFF91849F), outlineVariant = Color(0xFF433850),
-    surfaceContainerLowest = Color(0xFF120F1C), surfaceContainerLow = Color(0xFF211B31),
-    surfaceContainer = Color(0xFF272036), surfaceContainerHigh = Color(0xFF30283F),
-    surfaceContainerHighest = Color(0xFF392F49), surfaceDim = Color(0xFF171324), surfaceBright = Color(0xFF3C334B),
-    inverseSurface = Color(0xFFEAE2F5), inverseOnSurface = Color(0xFF30283F), inversePrimary = Color(0xFF6D4AFF),
+    background = Color(0xFF100E17), onBackground = Color(0xFFF4F2FA),
+    surface = Color(0xFF17141F), onSurface = Color(0xFFF4F2FA),
+    surfaceVariant = Color(0xFF1E1A29), onSurfaceVariant = Color(0xFFAAA4BD),
+    outline = Color(0xFF7D7791), outlineVariant = Color(0xFF2E283D),
+    surfaceContainerLowest = Color(0xFF0B0910), surfaceContainerLow = Color(0xFF17141F),
+    surfaceContainer = Color(0xFF1E1A29), surfaceContainerHigh = Color(0xFF262133),
+    surfaceContainerHighest = Color(0xFF2E283D), surfaceDim = Color(0xFF100E17), surfaceBright = Color(0xFF3A324B),
+    inverseSurface = Color(0xFFF4F2FA), inverseOnSurface = Color(0xFF1E1A29), inversePrimary = Color(0xFF6D4AFF),
     error = Color(0xFFFFB2C0), onError = Color(0xFF650E24),
     errorContainer = Color(0xFF8C1931), onErrorContainer = Color(0xFFFFD9E1),
-    surfaceTint = Color(0xFFBDA9FF), scrim = Color.Black,
+    surfaceTint = Color.Transparent, scrim = Color.Black,
 )
-private val GalleryType = Typography(
-    headlineLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 32.sp, letterSpacing = (-1).sp),
-    headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 27.sp, letterSpacing = (-0.6).sp),
-    titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 21.sp, letterSpacing = (-0.3).sp),
-    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp),
+
+/**
+ * The suite's colours that Material has no role for.
+ *
+ * [gradient] is the icons' face, violet into orchid: the selected section, the
+ * sign-in button and the activity bar wear it, and nothing else does, so the
+ * photographs stay the brightest thing on screen. [copper] is the metal behind
+ * the icons, for small things only — a badge, the sun on the map.
+ */
+@Immutable
+data class Brand(val gradient: Brush, val copper: Color, val onCopper: Color)
+
+private val LightBrand = Brand(
+    gradient = Brush.horizontalGradient(listOf(Color(0xFF6D4AFF), Color(0xFFB65BD6))),
+    copper = Color(0xFFB47456),
+    onCopper = Color.White,
 )
+private val DarkBrand = Brand(
+    gradient = Brush.horizontalGradient(listOf(Color(0xFF6D4AFF), Color(0xFFB65BD6))),
+    copper = Color(0xFFD69B77),
+    onCopper = Color(0xFF100E17),
+)
+
+val LocalBrand = staticCompositionLocalOf { DarkBrand }
 
 @Composable
 fun GalleryTheme(mode: ThemeMode = ThemeMode.System, content: @Composable () -> Unit) {
     val dark = mode == ThemeMode.Dark || (mode == ThemeMode.System && isSystemInDarkTheme())
-    MaterialTheme(colorScheme = if (dark) DarkColors else LightColors, typography = GalleryType, content = content)
+    CompositionLocalProvider(LocalBrand provides if (dark) DarkBrand else LightBrand) {
+        MaterialTheme(
+            colorScheme = if (dark) DarkColors else LightColors,
+            typography = GalleryType,
+            shapes = GalleryShapes,
+            content = content,
+        )
+    }
 }

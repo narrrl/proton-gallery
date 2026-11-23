@@ -32,7 +32,8 @@ by the `basemap` tool in [proton-rs](https://github.com/narrrl/proton-rs) and
 downloaded by `scripts/fetch-basemap.sh`) from Natural Earth 10m data (public
 domain) and GeoNames towns (CC BY 4.0). Its labels use Inter, bundled with
 `proton-map-rs` under the SIL Open Font License.
-Desktop uses [Inter](https://rsms.me/inter/) under the bundled
-[SIL Open Font License](crates/pg-desktop/fonts/Inter-OFL.txt).
+Desktop and Android use [Inter](https://rsms.me/inter/) under the bundled
+[SIL Open Font License](crates/pg-desktop/fonts/Inter-OFL.txt); the Android
+copies are in `android/app/src/main/res/font`.
 
 This is an unofficial project and is not affiliated with Proton AG.

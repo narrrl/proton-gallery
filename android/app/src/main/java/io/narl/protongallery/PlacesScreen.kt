@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.materialIcon
@@ -419,7 +418,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
 
         // Progress, and a retry after failures, as a chip over the map.
         Surface(Modifier.align(Alignment.TopCenter).padding(padding).padding(top = 8.dp, start = 16.dp, end = 16.dp),
-            shape = RoundedCornerShape(16.dp), color = palette.surface.copy(alpha = .94f), shadowElevation = 2.dp) {
+            shape = MaterialTheme.shapes.large, color = palette.surface.copy(alpha = .94f), shadowElevation = 2.dp) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(status, style = MaterialTheme.typography.labelLarge)
@@ -433,7 +432,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
 
         // Zoom and fit in a floating pill.
         Surface(Modifier.align(Alignment.BottomEnd).padding(padding).padding(16.dp),
-            shape = RoundedCornerShape(24.dp), color = palette.surface.copy(alpha = .94f), shadowElevation = 3.dp) {
+            shape = MaterialTheme.shapes.extraLarge, color = palette.surface.copy(alpha = .94f), shadowElevation = 3.dp) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 IconButton(onClick = { camera = current.zoomed(2.0) }) { Icon(Icons.Outlined.Add, "Zoom in") }
                 HorizontalDivider(Modifier.width(24.dp))
@@ -447,7 +446,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
         Column(Modifier.align(Alignment.BottomStart).padding(padding).padding(start = 16.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             val bar = if (canvasSize.width > 0) mapScaleBar(current, canvasSize.width / density, canvasSize.height / density, 110f) else null
-            if (bar != null) Surface(shape = RoundedCornerShape(6.dp), color = palette.surface.copy(alpha = .8f)) {
+            if (bar != null) Surface(shape = MaterialTheme.shapes.extraSmall, color = palette.surface.copy(alpha = .8f)) {
                 Column(Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) {
                     Text(bar.label, style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.semantics { contentDescription = "Scale ${bar.label}" })
@@ -458,7 +457,7 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
                     }
                 }
             }
-            Surface(shape = RoundedCornerShape(6.dp), color = palette.surface.copy(alpha = .8f)) {
+            Surface(shape = MaterialTheme.shapes.extraSmall, color = palette.surface.copy(alpha = .8f)) {
                 Text(if (tiles != null) mapAttribution() else "Map data from Natural Earth and GeoNames (CC BY 4.0)",
                     Modifier.padding(horizontal = 6.dp, vertical = 2.dp).fillMaxWidth(.62f),
                     style = MaterialTheme.typography.labelSmall, color = palette.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -494,7 +493,7 @@ private fun PlaceTile(photo: PlacePhoto, known: ImageBitmap?, thumbnail: suspend
     val picture by produceState(known, photo.id) {
         if (value == null) value = try { thumbnail(photo) } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
     }
-    Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+    Box(Modifier.aspectRatio(1f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh)
         .clickable(onClickLabel = "Open") { onOpen() }.semantics { contentDescription = "Photo: ${photo.name}" }) {
         picture?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
     }

@@ -160,15 +160,15 @@ fun MediaViewer(initialOutline: GalleryOutline, initial: Int, thumbnails: Thumbn
                 Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).navigationBarsPadding().padding(24.dp)) {
                     Text(shown.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (shown.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = Color(0xFFBDA9FF))
+                        Icon(if (shown.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = if (shown.backedUp) VIEWER_ACCENT else VIEWER_COPPER)
                         Text(when {
                             shown.phoneId != null && shown.backedUp -> "On this phone and in Proton Photos"
                             shown.phoneId != null -> "Only on this phone, not backed up yet"
                             shown.localPath.isNotEmpty() -> "Available on this device"
                             else -> "In Proton Photos"
-                        }, color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
+                        }, color = VIEWER_INK, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 7.dp))
                     }
-                    if (info) Text("${Formatter.formatFileSize(LocalContext.current, shown.sizeBytes.toLong())}\nAdded ${galleryDate(shown.sortTime)}", color = Color(0xFFE2D9F3), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
+                    if (info) Text("${Formatter.formatFileSize(LocalContext.current, shown.sizeBytes.toLong())}\nAdded ${galleryDate(shown.sortTime)}", color = VIEWER_INK, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 12.dp))
                 }
             }
         }
@@ -315,3 +315,12 @@ private fun VideoPlayer(item: GalleryItem, media: MediaActions, private: Boolean
         if (failed) Text("This video couldn’t be played", color = Color.White, modifier = Modifier.background(Color.Black).padding(20.dp))
     }
 }
+
+/*
+ * The viewer is black whatever the theme, so it keeps colours of its own: the
+ * suite's lighter violet, its lit copper for a photo that is only on this
+ * phone, and white taken down a little for the text under a photo.
+ */
+private val VIEWER_ACCENT = Color(0xFFA48BFF)
+private val VIEWER_COPPER = Color(0xFFD69B77)
+private val VIEWER_INK = Color.White.copy(alpha = 0.82f)

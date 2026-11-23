@@ -1,5 +1,7 @@
 package io.narl.protongallery
 
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.MaterialTheme
 import android.content.ClipData
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -15,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -497,7 +498,8 @@ private fun SectionSwitch(current: GallerySection, onSelect: (GallerySection) ->
                 val chosen = current == section
                 Row(
                     Modifier.clip(CircleShape)
-                        .background(if (chosen) MaterialTheme.colorScheme.primary else Color.Transparent)
+                        // The chosen section wears the icons' violet-to-orchid face.
+                        .then(if (chosen) Modifier.background(LocalBrand.current.gradient) else Modifier)
                         .selectable(chosen, role = Role.Tab) { onSelect(section) }
                         .semantics { contentDescription = label }
                         .heightIn(min = 40.dp).padding(horizontal = if (chosen) 16.dp else 12.dp),
@@ -567,6 +569,10 @@ private fun AppMenu(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(R.drawable.ic_gallery), null, Modifier.size(28.dp))
+                Text("Proton Gallery", Modifier.padding(start = 10.dp), style = MaterialTheme.typography.titleMedium)
+            }
             val activity = liveActivity()
             ListItem(
                 headlineContent = { Text(if (account.connected) account.status.username else "Not signed in", maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -627,7 +633,7 @@ private fun CrashReportDialog(report: String, onDismiss: () -> Unit) {
         text = {
             Column {
                 Text("Copy this report and send it to the developer. It has no photos or passwords.", style = MaterialTheme.typography.bodyMedium)
-                Surface(Modifier.padding(top = 12.dp).heightIn(max = 280.dp), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
+                Surface(Modifier.padding(top = 12.dp).heightIn(max = 280.dp), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
                     SelectionContainer {
                         Text(report, Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
                             style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
@@ -666,8 +672,9 @@ fun MediaTile(item: GalleryItem, loader: ThumbnailLoader, onClick: () -> Unit, m
         if (item.favorite) Icon(Icons.Filled.Favorite, null, tint = Color.White,
             modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).size(16.dp))
         // Like other phone galleries: a crossed-out cloud marks what isn't backed up.
-        if (phoneOnly) Icon(Icons.Outlined.CloudOff, null, tint = Color.White,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape).padding(3.dp).size(14.dp))
+        // In the suite's copper, the one warm mark on a photo.
+        if (phoneOnly) Icon(Icons.Outlined.CloudOff, null, tint = LocalBrand.current.onCopper,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).background(LocalBrand.current.copper, CircleShape).padding(3.dp).size(14.dp))
         if (selected != null) Box(Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp).clip(CircleShape)
             .background(if (selected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.25f))
             .border(2.dp, if (selected) MaterialTheme.colorScheme.primary else Color.White, CircleShape),
