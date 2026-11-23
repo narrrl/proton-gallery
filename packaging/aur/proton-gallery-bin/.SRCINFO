@@ -1,6 +1,6 @@
 pkgbase = proton-gallery-bin
 	pkgdesc = Unofficial Proton Photos and Drive gallery with a native photo and video viewer (binaries)
-	pkgver = 0.4.0
+	pkgver = 0.5.0
 	pkgrel = 1
 	url = https://github.com/narrrl/proton-gallery
 	arch = x86_64
@@ -32,12 +32,12 @@ pkgbase = proton-gallery-bin
 	optdepends = ttf-dejavu: fallback fonts for the desktop interface
 	optdepends = gst-plugin-va: hardware video decoding
 	optdepends = gst-plugins-ugly: older video formats
-	provides = proton-gallery=0.4.0
+	provides = proton-gallery=0.5.0
 	conflicts = proton-gallery
 	conflicts = proton-gallery-git
 	options = !strip
 	options = !debug
-	source = proton-gallery_0.4.0-1_amd64.deb::https://github.com/narrrl/proton-gallery/releases/download/v0.4.0/proton-gallery_0.4.0-1_amd64.deb
-	sha256sums = 2d4d88ab609b49e550ec49fb418d8eaea281bfcfda8029e198e331eb19ed92ce
+	source = proton-gallery_0.5.0-1_amd64.deb::https://github.com/narrrl/proton-gallery/releases/download/v0.5.0/proton-gallery_0.5.0-1_amd64.deb
+	sha256sums = 4857c3e6505ed2c69a58b175246211c2a867542a653da05b73b0564e1508cd95
 
 pkgname = proton-gallery-bin
