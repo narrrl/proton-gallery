@@ -254,8 +254,12 @@ fun GalleryApp(
     LaunchedEffect(location, barPinned) { if (barPinned || barOffset != 0f) barOffset = 0f }
     val hideOnScroll = remember {
         object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                barOffset = if (currentPinned) 0f else (barOffset + available.y).coerceIn(-barHeight.toFloat(), 0f)
+            // What the page actually scrolled moves the bar, so a page too
+            // short to scroll never hides it; a pull past the top still
+            // brings it back.
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                val moved = consumed.y + available.y.coerceAtLeast(0f)
+                barOffset = if (currentPinned) 0f else (barOffset + moved).coerceIn(-barHeight.toFloat(), 0f)
                 return Offset.Zero
             }
         }
