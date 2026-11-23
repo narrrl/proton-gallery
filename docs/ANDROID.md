@@ -126,18 +126,21 @@ the map draws coarse land outlines.
 
 ## Visual direction and icon
 
-The Proton-style theme uses violet actions, lavender surfaces, plum text/dark chrome, and quiet photo gutters. It is inspired by [Proton's visual identity](https://proton.me/blog/new-visual-universe); the custom gallery mark is related to the user's Proton Stream icon, not an official Proton logo.
+The theme is the suite's, shared with Proton Stream, Proton Drive for Linux and their websites: violet actions, lavender surfaces, plum text and plum-black dark chrome, with copper as a small highlight. It is inspired by [Proton's visual identity](https://proton.me/blog/new-visual-universe); the custom gallery mark is related to the user's Proton Stream icon, not an official Proton logo. Proton Stream's `docs/DESIGN-TOKENS.md` holds the full token table.
 
 | Token | Light | Dark |
 | --- | --- | --- |
-| Canvas | `#FAF9FC` | `#171324` |
-| Text | `#1B1340` | `#F4F0FF` |
-| Accent | `#6D4AFF` | `#BDA9FF` |
+| Canvas | `#FAF9FC` | `#100E17` |
+| Surface / card | `#FFFFFF` / `#F1EEF8` | `#17141F` / `#1E1A29` |
+| Text | `#1B1340` | `#F4F2FA` |
+| Accent | `#6D4AFF` | `#8A6DFF` |
 | Accent surface | `#ECE7FF` | `#372580` |
-| Muted text | `#615970` | `#BFB5D1` |
-| Placeholder | `#F0EDF7` | `#30283F` |
+| Muted text | `#615970` | `#AAA4BD` |
+| Copper | `#B47456` | `#D69B77` |
 
-Android's sans-serif family supplies native language coverage. Font scaling remains enabled. Photo tiles have square corners and 2dp gutters, so the grid reads as one sheet of photographs; album cards keep 12dp corners. Row heights adapt to photo shapes, width and zoom. Solid action colors keep photographs prominent; gradients are reserved for the app mark.
+Dark mode's accent is violet 400 rather than 500, because Material also writes text in `primary`. Type is Inter (`res/font`, under the OFL), with Inter Display for the largest sizes; a script Inter does not draw falls back to the system font glyph by glyph, so native language coverage is unchanged. Font scaling remains enabled. Corners follow the suite's scale (`GalleryShapes.kt`): 6 for a badge, 8 for a small control, 12 for album cards, 16 for sheets and floating panels, 24 for what floats over a photo, and pills for buttons and the section switch. Photo tiles have square corners and 2dp gutters, so the grid reads as one sheet of photographs. Row heights adapt to photo shapes, width and zoom.
+
+The violet-to-orchid gradient of the icons' faces appears in three places only: the chosen section, the sign-in button, and the activity bar under the top bar. Everything else is solid, so the photographs stay the brightest thing on screen. Copper marks a photo that is only on this phone. The app menu opens with the mark and the name.
 
 The icon uses frontal violet–pink photo plates with shallow metallic copper depth, simple mountains, and a copper sun. Its canonical [SVG](../images/logo.svg) and [512px PNG](../images/icon-512.png) share the same vector artwork as the Android account-screen logo, adaptive foreground, and themed monochrome layer. Run `python scripts/render-branding.py` to regenerate them together, or add `--check` to verify the outputs. Earlier artwork is preserved in `images/branding-archive/`; the [branding guide](../images/BRANDING.md) describes platform sizing. Attribution is in [NOTICE](../NOTICE.md).
 

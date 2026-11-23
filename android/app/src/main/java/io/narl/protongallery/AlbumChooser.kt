@@ -1,12 +1,12 @@
 package io.narl.protongallery
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -104,7 +104,7 @@ fun AlbumThumb(album: FolderAlbum, loader: ThumbnailLoader, modifier: Modifier =
         // The state outlives its keys: replace it, or a slot keeps the previous album's cover.
         value = cover?.let { loader.peek(it, album.hidden) ?: loader.load(it, album.hidden) }
     }
-    Box(modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
+    Box(modifier.clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
         val shown = bitmap
         if (shown != null) Image(shown.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Icon(Icons.Outlined.PhotoLibrary, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)

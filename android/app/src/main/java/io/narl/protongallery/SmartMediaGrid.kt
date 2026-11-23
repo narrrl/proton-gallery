@@ -1,5 +1,6 @@
 package io.narl.protongallery
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,7 +12,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Lock
@@ -398,16 +398,16 @@ private fun AlbumCard(album: FolderAlbum, loader: ThumbnailLoader, private: Bool
         // The state outlives its keys: replace it, or a slot keeps the previous album's cover.
         value = cover?.let { loader.peek(it, private) ?: loader.load(it, private) }
     }
-    Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
+    Column(modifier.clip(MaterialTheme.shapes.medium).clickable(onClick = onClick)
         .semantics(mergeDescendants = true) { contentDescription = "Album ${album.name}, ${albumCaption(album)}" }) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
             if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Icon(if (album.gallery.startsWith("album-")) Icons.Outlined.PhotoLibrary else Icons.Outlined.FolderOpen, null,
                 Modifier.align(Alignment.Center).size(40.dp), tint = MaterialTheme.colorScheme.primary)
-            if (album.hidden) Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.5f)) {
+            if (album.hidden) Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = Pill, color = Color.Black.copy(alpha = 0.5f)) {
                 Icon(Icons.Outlined.VisibilityOff, "Hidden", Modifier.padding(4.dp).size(16.dp), tint = Color.White)
             }
-            if (album.pinned) Surface(Modifier.align(Alignment.TopEnd).padding(8.dp), shape = RoundedCornerShape(50), color = Color.Black.copy(alpha = 0.5f)) {
+            if (album.pinned) Surface(Modifier.align(Alignment.TopEnd).padding(8.dp), shape = Pill, color = Color.Black.copy(alpha = 0.5f)) {
                 Icon(Icons.Outlined.Star, "Pinned", Modifier.padding(4.dp).size(16.dp), tint = Color.White)
             }
         }
@@ -431,13 +431,13 @@ private fun HiddenAlbumsRow(count: Int, unlocked: Boolean, onToggle: () -> Unit)
             })
         },
         leadingContent = {
-            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
                 Icon(if (unlocked) Icons.Outlined.VisibilityOff else Icons.Outlined.Lock, null,
                     Modifier.padding(10.dp).size(20.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
             }
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.padding(horizontal = 4.dp).clip(RoundedCornerShape(16.dp))
+        modifier = Modifier.padding(horizontal = 4.dp).clip(MaterialTheme.shapes.large)
             .clickable(onClickLabel = if (unlocked) "Lock hidden albums" else "Unlock hidden albums", onClick = onToggle),
     )
 }
@@ -445,8 +445,8 @@ private fun HiddenAlbumsRow(count: Int, unlocked: Boolean, onToggle: () -> Unit)
 /** The first card of the album row: start a new album. */
 @Composable
 private fun NewAlbumCard(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClickLabel = "Create an album", onClick = onClick)) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+    Column(modifier.clip(MaterialTheme.shapes.medium).clickable(onClickLabel = "Create an album", onClick = onClick)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center) {
             Icon(Icons.Outlined.Add, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
         }

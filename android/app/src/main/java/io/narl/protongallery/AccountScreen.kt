@@ -1,10 +1,13 @@
 package io.narl.protongallery
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -99,7 +102,7 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                         if (stage == SignInStage.SIGNED_OUT) {
                             OutlinedTextField(username, { username = it.take(512) }, label = { Text("Email or username") },
                                 modifier = Modifier.fillMaxWidth(), enabled = !state.busy, singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next), shape = RoundedCornerShape(14.dp))
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next), shape = MaterialTheme.shapes.medium)
                             Spacer(Modifier.height(12.dp))
                         }
                         val code = stage == SignInStage.SECOND_FACTOR
@@ -109,10 +112,15 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                             visualTransformation = if (reveal || code) VisualTransformation.None else PasswordVisualTransformation(),
                             trailingIcon = if (code) null else { { TextButton(onClick = { reveal = !reveal }) { Text(if (reveal) "Hide" else "Show") } } },
                             keyboardOptions = KeyboardOptions(keyboardType = if (code) KeyboardType.NumberPassword else KeyboardType.Password, imeAction = ImeAction.Go),
-                            keyboardActions = KeyboardActions(onGo = { submit() }), shape = RoundedCornerShape(14.dp))
+                            keyboardActions = KeyboardActions(onGo = { submit() }), shape = MaterialTheme.shapes.medium)
                         Spacer(Modifier.height(20.dp))
-                        Button(onClick = { submit() }, enabled = !state.busy && secret.isNotEmpty() && (!code || secret.length == 6) && (stage != SignInStage.SIGNED_OUT || username.isNotBlank()),
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(16.dp)) {
+                        val ready = !state.busy && secret.isNotEmpty() && (!code || secret.length == 6) && (stage != SignInStage.SIGNED_OUT || username.isNotBlank())
+                        // The one gradient button: the way in wears the icons' face.
+                        Button(onClick = { submit() }, enabled = ready,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                                .then(if (ready) Modifier.background(LocalBrand.current.gradient, Pill) else Modifier),
+                            shape = Pill,
+                            colors = if (ready) ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(when {
                                 state.busy && stage == SignInStage.SIGNED_OUT -> "Signing in…"
                                 state.busy -> "Checking…"
@@ -126,7 +134,7 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                             Button(onClick = onSignOut, enabled = !state.busy) { Text("Sign in again") }
                         } else {
                             FilledTonalButton(onClick = onRefresh, enabled = !state.syncing && !state.busy,
-                                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(14.dp)) {
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = Pill) {
                                 Text(if (state.syncing) "Refreshing Photos…" else "Refresh Proton Photos")
                             }
                             state.lastPhotosSync?.let { lastSync ->
@@ -149,7 +157,7 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                     if (state.status.persistenceFailed) Text("Your latest session couldn’t be saved. Free some device storage and refresh before closing the app.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp))
                     if (state.busy) ActivityBar(Activity("Talking to Proton"), Modifier.padding(top = 16.dp))
                     Spacer(Modifier.height(28.dp))
-                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.large) {
                         Text("Your password is never saved. Your session is protected by Android Keystore on this device.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
                     }
@@ -197,7 +205,7 @@ private fun ConnectionCheck(state: AccountState, onTest: () -> Unit) {
         }
         if (state.checking) ActivityBar(Activity("Checking the connection"), Modifier.padding(bottom = 8.dp))
         state.report?.let { report ->
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
                 SelectionContainer {
                     Text(report, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -229,7 +237,7 @@ private fun PhotoPickerSection(modifier: Modifier = Modifier) {
     if (current == PhotoPicker.Status.Unavailable) return
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
+    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.large) {
         Column(Modifier.padding(16.dp)) {
             Text("Android photo picker", style = MaterialTheme.typography.titleSmall)
             Text(when (current) {
@@ -239,7 +247,7 @@ private fun PhotoPickerSection(modifier: Modifier = Modifier) {
             }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
             if (current == PhotoPicker.Status.NotAllowed) {
                 val command = PhotoPicker.command(context.packageName)
-                Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(top = 12.dp)) {
+                Surface(color = MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.medium, modifier = Modifier.padding(top = 12.dp)) {
                     SelectionContainer {
                         Text(command, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
