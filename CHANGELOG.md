@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Android
+
+- Places no longer jumps and rescans whenever the library changes. The map
+  fits your photos once, keeps the view you chose after that, and comes back
+  at once when you return to it.
+- The top bar stays in place when there is nothing to scroll.
+- Add to album can unlock hidden albums, and adding to one hides the photos.
+- A photo's details show where it was taken, with a link to it on the map.
+- The mark on photos that are not backed up is smaller and lighter, so it no
+  longer covers the grid when zoomed out.
+
 ## 0.6.0
 
 ### Install
