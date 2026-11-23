@@ -95,7 +95,8 @@ public links can still be revoked from an unlocked hidden folder.
   or screen lock (`BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`).
   They lock when the app leaves the screen. Their photos leave Gallery's
   timeline and cloud picker after sync. **Hide** asks which hidden album to use
-  or creates one. Originals remain accessible in Proton Photos or Drive and
+  or creates one. **Add to album** leaves locked hidden albums out but offers
+  to unlock them; choosing one then hides the photos there, as **Hide** does. Originals remain accessible in Proton Photos or Drive and
   through existing shares. Local phone copies remain subject to Android's own
   gallery and picker rules.
 

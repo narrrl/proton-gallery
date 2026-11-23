@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,12 +47,29 @@ class AlbumActions(
 fun AlbumChooserSheet(
     items: List<GalleryItem>, albums: List<FolderAlbum>?, thumbnails: ThumbnailLoader,
     onChoose: (FolderAlbum) -> Unit, onCreate: (String) -> Unit, onDismiss: () -> Unit,
+    /** Hidden albums exist but are locked: offer to unlock them here. */
+    onUnlockHidden: (() -> Unit)? = null,
 ) {
     val waiting = items.count { !it.inProton }
     AlbumChooserSheet("Add to album", buildString {
         append(if (items.size == 1) "1 item" else "${items.size} items")
         if (waiting > 0) append(if (waiting == 1) " · 1 isn’t backed up yet and stays out" else " · $waiting aren’t backed up yet and stay out")
-    }, albums, thumbnails, onChoose, onCreate, onDismiss)
+    }, albums, thumbnails, onChoose, onCreate, onDismiss, footer = onUnlockHidden?.let { unlock ->
+        {
+            ListItem(
+                headlineContent = { Text("Hidden albums") },
+                supportingContent = { Text("Unlock to add to one of them") },
+                leadingContent = {
+                    Box(Modifier.size(48.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                        contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Lock, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.clickable(onClick = unlock).padding(horizontal = 8.dp),
+            )
+        }
+    })
 }
 
 /** Choose an album, or name a new one: `suggestion` fills the name field. */
@@ -61,6 +79,8 @@ fun AlbumChooserSheet(
     title: String, caption: String, albums: List<FolderAlbum>?, thumbnails: ThumbnailLoader,
     onChoose: (FolderAlbum) -> Unit, onCreate: (String) -> Unit, onDismiss: () -> Unit,
     suggestion: String = "", extra: (@Composable () -> Unit)? = null,
+    /** Below the albums, such as the way into locked hidden albums. */
+    footer: (@Composable () -> Unit)? = null,
 ) {
     var name by rememberSaveable { mutableStateOf(suggestion) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -92,6 +112,7 @@ fun AlbumChooserSheet(
                     }
                 }
             }
+            footer?.invoke()
         }
     }
 }

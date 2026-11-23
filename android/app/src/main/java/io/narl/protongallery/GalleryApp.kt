@@ -428,10 +428,19 @@ fun GalleryApp(
     }
     addingToAlbum?.let { items ->
         // Hidden albums keep their names to themselves while locked.
+        // A row offers to unlock them, the way hiding does, and lists them after.
+        val lockedHidden = !hiddenUnlocked && albumActions.choices?.any { it.hidden } == true
         AlbumChooserSheet(items, albumActions.choices?.filter { hiddenUnlocked || !it.hidden }, thumbnails,
-            onChoose = { album -> albumActions.add(album, items); addingToAlbum = null; selection = emptyMap() },
+            onChoose = { album ->
+                // Into a hidden album is hiding: this phone's photos not yet
+                // backed up are queued too, as Hide does.
+                if (album.hidden) albumActions.hide(items, album, album.name) else albumActions.add(album, items)
+                addingToAlbum = null
+                selection = emptyMap()
+            },
             onCreate = { name -> albumActions.create(name, items); addingToAlbum = null; selection = emptyMap() },
-            onDismiss = { addingToAlbum = null })
+            onDismiss = { addingToAlbum = null },
+            onUnlockHidden = if (lockedHidden) toggleHidden else null)
     }
     if (lockMissing) AlertDialog(
         onDismissRequest = { lockMissing = false },
