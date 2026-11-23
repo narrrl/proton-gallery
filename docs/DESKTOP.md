@@ -7,7 +7,9 @@ Windows. The older Compose desktop prototype lives in `desktop/`.
 
 ## Build and run
 
-On Arch Linux, the local package builds this checkout in release mode and installs
+On Arch Linux, the AUR has `proton-gallery` (the latest release, built from
+source), `proton-gallery-bin` (the release binaries) and `proton-gallery-git`
+(the newest commit on `main`). To build a checkout of your own, the local package builds this checkout in release mode and installs
 the executable, launcher and icons:
 
 ```sh
