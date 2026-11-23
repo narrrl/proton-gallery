@@ -1,7 +1,7 @@
 # In-tree build, or pass --define 'prebuilt 1' after a locked release build.
 %global debug_package %{nil}
 %global _lto_cflags %{nil}
-%{!?version: %global version 0.6.0}
+%{!?version: %global version 0.6.1}
 %{!?package_release: %global package_release 1}
 %{!?git_dir: %global git_dir %{getenv:PWD}}
 %{!?binary: %global binary %{git_dir}/target/release/proton-gallery}
