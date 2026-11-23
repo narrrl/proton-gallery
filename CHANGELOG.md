@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.6.0
+
+### Install
+
+- Android 12 or later. Download the signed `proton-gallery-v0.6.0.apk` for
+  arm64 or x86_64. It updates the regular Proton Gallery app in place.
+- Windows 10 and 11 (x86_64). Download `proton-gallery-0.6.0-x64.msi`, or the
+  portable `proton-gallery-0.6.0-x86_64-windows.zip`.
+- Ubuntu 24.04 and Debian 13. Download the x86_64 `.deb`.
+- Fedora. Download the signed x86_64 `.rpm` and the accompanying public key.
+- Arch Linux. Check out this tag and run `cd packaging && makepkg -fi`.
+
+### The suite's look
+
+- Proton Gallery now looks like Proton Stream and Proton Drive for Linux. The
+  dark theme moves to their plum-black, on Android and on the desktop, and the
+  light theme stays as it was.
+- Android is set in Inter. Scripts Inter does not cover still use the system
+  font.
+- Corners follow one set of sizes everywhere, and buttons and the section
+  switch are pills.
+- The icon's violet-to-orchid gradient marks the chosen section, the sign-in
+  button and the activity bar.
+- A copper badge marks a photo that is only on this phone.
+- The app menu opens with the mark and the name.
+
 ## 0.5.0
 
 ### Install
