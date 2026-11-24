@@ -525,8 +525,8 @@ private fun SectionSwitch(current: GallerySection, onSelect: (GallerySection) ->
                 val chosen = current == section
                 Row(
                     Modifier.clip(CircleShape)
-                        // The chosen section wears the icons' violet-to-orchid face.
-                        .then(if (chosen) Modifier.background(LocalBrand.current.gradient) else Modifier)
+                        // The chosen section wears the suite's violet.
+                        .then(if (chosen) Modifier.background(LocalBrand.current.accent) else Modifier)
                         .selectable(chosen, role = Role.Tab) { onSelect(section) }
                         .semantics { contentDescription = label }
                         .heightIn(min = 40.dp).padding(horizontal = if (chosen) 16.dp else 12.dp),

@@ -115,10 +115,10 @@ fun AccountScreen(state: AccountState, onClose: () -> Unit, onSignIn: (String, S
                             keyboardActions = KeyboardActions(onGo = { submit() }), shape = MaterialTheme.shapes.medium)
                         Spacer(Modifier.height(20.dp))
                         val ready = !state.busy && secret.isNotEmpty() && (!code || secret.length == 6) && (stage != SignInStage.SIGNED_OUT || username.isNotBlank())
-                        // The one gradient button: the way in wears the icons' face.
+                        // The way in wears the suite's violet.
                         Button(onClick = { submit() }, enabled = ready,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                                .then(if (ready) Modifier.background(LocalBrand.current.gradient, Pill) else Modifier),
+                                .then(if (ready) Modifier.background(LocalBrand.current.accent, Pill) else Modifier),
                             shape = Pill,
                             colors = if (ready) ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Color.White) else ButtonDefaults.buttonColors()) {
                             Text(when {

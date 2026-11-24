@@ -44,18 +44,18 @@ fun currentActivity(state: LibraryState, account: AccountState, backup: BackupSt
 /**
  * The thin bar under a top bar. It keeps its 2 dp so nothing shifts when work starts.
  *
- * Known progress is drawn in the suite's violet-to-orchid gradient unless a [color]
- * is asked for — the viewer asks for white, over a photo.
+ * Known progress is drawn in the suite's violet unless a [color] is asked for —
+ * the viewer asks for white, over a photo.
  */
 @Composable
 fun ActivityBar(activity: Activity?, modifier: Modifier = Modifier, color: Color? = null) {
-    val brush = LocalBrand.current.gradient
+    val accent = LocalBrand.current.accent
     Box(modifier.fillMaxWidth().height(2.dp)) {
         when {
             activity == null -> Unit
             // The same semantics Material's bar reports, so TalkBack still reads a percentage.
             activity.fraction != null && color == null -> Canvas(Modifier.fillMaxSize().progressSemantics(activity.fraction.coerceIn(0f, 1f))) {
-                drawRect(brush, size = Size(size.width * activity.fraction.coerceIn(0f, 1f), size.height))
+                drawRect(accent, size = Size(size.width * activity.fraction.coerceIn(0f, 1f), size.height))
             }
             activity.fraction != null -> LinearProgressIndicator({ activity.fraction }, Modifier.fillMaxSize(), color = color ?: MaterialTheme.colorScheme.primary,
                 trackColor = Color.Transparent, gapSize = 0.dp, drawStopIndicator = {})

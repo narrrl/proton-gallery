@@ -8,7 +8,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 
 enum class ThemeMode { System, Light, Dark }
@@ -64,22 +63,37 @@ private val DarkColors = darkColorScheme(
 /**
  * The suite's colours that Material has no role for.
  *
- * [gradient] is the icons' face, violet into orchid: the selected section, the
- * sign-in button and the activity bar wear it, and nothing else does, so the
- * photographs stay the brightest thing on screen. [copper] is the metal behind
- * the icons, for small things only — a badge, the sun on the map.
+ * [accent] is violet 500, flat: the selected section, the sign-in button and
+ * the activity bar wear it. It is 500 in both modes, where Material's dark
+ * `primary` is the lighter 400, because white text sits on it. The
+ * violet-to-orchid ramp belongs to the icons' faces and nowhere else: across
+ * buttons and bars it read as decoration rather than a decision. [copper] is
+ * the metal behind the icons, for small things only — a badge, the sun on the
+ * map — and [Copper] is its scale, so a tint or a border takes a step of it
+ * rather than a mix of its own.
  */
 @Immutable
-data class Brand(val gradient: Brush, val copper: Color, val onCopper: Color)
+data class Brand(val accent: Color, val copper: Color, val onCopper: Color)
+
+/** The suite's copper scale, the same steps as Proton Stream's `appearance::copper`. */
+object Copper {
+    val C100 = Color(0xFFFBEBDD)
+    val C200 = Color(0xFFF2C9AA)
+    val C300 = Color(0xFFE5B08D)
+    val C400 = Color(0xFFD69B77)
+    val C500 = Color(0xFFB47456)
+    val C600 = Color(0xFF8F5940)
+    val C700 = Color(0xFF703E30)
+}
 
 private val LightBrand = Brand(
-    gradient = Brush.horizontalGradient(listOf(Color(0xFF6D4AFF), Color(0xFFB65BD6))),
-    copper = Color(0xFFB47456),
+    accent = Color(0xFF6D4AFF),
+    copper = Copper.C500,
     onCopper = Color.White,
 )
 private val DarkBrand = Brand(
-    gradient = Brush.horizontalGradient(listOf(Color(0xFF6D4AFF), Color(0xFFB65BD6))),
-    copper = Color(0xFFD69B77),
+    accent = Color(0xFF6D4AFF),
+    copper = Copper.C400,
     onCopper = Color(0xFF100E17),
 )
 
