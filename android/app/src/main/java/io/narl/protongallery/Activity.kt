@@ -21,7 +21,9 @@ import java.text.NumberFormat
  * account button, and this line beside it. `fraction` is set when the share
  * done is known; otherwise the bar and ring keep moving.
  */
-data class Activity(val label: String, val fraction: Float? = null)
+data class Activity(val label: String, val fraction: Float? = null,
+    /** The label for the top bar, where it shares a row with the sections: one short line. */
+    val brief: String = label)
 
 /** The most important thing going on, or null when the app is idle. */
 fun currentActivity(state: LibraryState, account: AccountState, backup: BackupState, section: GallerySection,
@@ -34,9 +36,11 @@ fun currentActivity(state: LibraryState, account: AccountState, backup: BackupSt
         progress.uploading && backup.request?.running == true -> Activity("Backing up ${minOf(progress.done + 1, progress.total)} of ${number.format(progress.total)}", progress.fraction)
         state.importing && section == GallerySection.Device -> Activity(state.progress ?: "Saving on this device")
         account.driveSync != null && section == GallerySection.Drive -> Activity("Reading ${account.driveSync}" +
-            if (sync.driveIndexed > 0) ": ${number.format(sync.driveIndexed)} found" else "")
+            if (sync.driveIndexed > 0) ": ${number.format(sync.driveIndexed)} found" else "",
+            brief = if (sync.driveIndexed > 0) "${number.format(sync.driveIndexed)} found" else "Reading…")
         account.syncing && section in listOf(GallerySection.Photos, GallerySection.Albums) ->
-            Activity("Updating Proton Photos" + if (sync.indexed > 0) ": ${number.format(sync.indexed)} found" else "")
+            Activity("Updating Proton Photos" + if (sync.indexed > 0) ": ${number.format(sync.indexed)} found" else "",
+                brief = if (sync.indexed > 0) "${number.format(sync.indexed)} found" else "Updating…")
         else -> null
     }
 }

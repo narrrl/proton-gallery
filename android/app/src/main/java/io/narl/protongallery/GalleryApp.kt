@@ -391,7 +391,7 @@ fun GalleryApp(
                     }
                     else -> Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         SectionSwitch(location.section) { onNavigate(GalleryLocation(it)) }
-                        Text(liveActivity()?.label ?: if (!device && account.visibilityStale && account.visibilityReady) "Visibility may be out of date" else "",
+                        Text(liveActivity()?.brief ?: if (!device && account.visibilityStale && account.visibilityReady) "Visibility may be out of date" else "",
                             Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (driveRoot && account.connected) IconButton(onClick = chooserActions.open) { Icon(Icons.Outlined.Add, "Add gallery") }
