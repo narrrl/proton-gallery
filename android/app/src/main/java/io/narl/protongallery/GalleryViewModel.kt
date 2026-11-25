@@ -60,6 +60,8 @@ data class LibraryState(
     val message: String? = null,
     val error: Boolean = false,
     val revision: Int = 0,
+    /** Changes only when the Proton photos Places shows may have: a sync, a sign-in, album work. */
+    val placesRevision: Int = 0,
     /** Work the user just asked for, such as getting photos ready to share. */
     val preparing: String? = null,
 )
@@ -209,7 +211,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     generation = it.generation + if (status.stage == SignInStage.CONNECTED) 1 else 0) }
                 if (status.stage == SignInStage.CONNECTED) {
                     navigate(GalleryLocation())
-                    mutableState.update { it.copy(revision = it.revision + 1) }
+                    mutableState.update { it.copy(revision = it.revision + 1, placesRevision = it.placesRevision + 1) }
                     syncPhotos()
                     refreshPhone(scan = false)
                 }
@@ -247,7 +249,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     File(getApplication<Application>().cacheDir, "picker").deleteRecursively()
                     Originals.directory(getApplication()).deleteRecursively()
                     File(getApplication<Application>().cacheDir, "thumbnail-sources").deleteRecursively()
+                    placesWrite.withLock { PlacesStore.clear(getApplication()) }
                 }
+                placesCache = null
+                placesSnapshot = null
                 mutableSyncProgress.value = SyncProgress()
                 mutableAccount.update { AccountState(generation = it.generation + 1, visible = expired,
                     error = if (expired) "Your Proton session expired. Sign in again to sync your library." else null) }
@@ -312,7 +317,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 File(app.cacheDir, "picker").deleteRecursively()
                 Originals.directory(app).deleteRecursively()
                 File(app.cacheDir, "thumbnail-sources").deleteRecursively()
+                // A place found for a photo that is hidden now must not show.
+                placesWrite.withLock { PlacesStore.clear(app) }
             }
+            placesCache = null
+            placesSnapshot = null
         }
         PhotoPicker.changed(getApplication())
         refreshDetails(repo)
@@ -469,7 +478,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 refreshDetails(repo)
                 refreshGallerySettings()
                 mutableAlbumChoices.value = null
-                mutableState.update { it.copy(revision = it.revision + 1, message = message ?: it.message, error = false) }
+                mutableState.update { it.copy(revision = it.revision + 1, placesRevision = it.placesRevision + 1,
+                    message = message ?: it.message, error = false) }
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
                 android.util.Log.w("ProtonGallery", "$failure ${error.javaClass.simpleName}")
@@ -669,6 +679,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     suspend fun scanPlaces(update: (PlacesProgress) -> Unit) {
         val repo = repository.value ?: return
         placesOutlineLock.withLock { placesOutline = null }
+        placesScanRevision = PhotosSync.state.value.revision
         repo.placesScan().use { scan ->
             val total = scan.count().toInt()
             var next = 0u
@@ -690,6 +701,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      */
     private var placesCache: Triple<Int, Int, List<PlacePhoto>>? = null
 
+    private val placesWrite = kotlinx.coroutines.sync.Mutex()
+
+    /** The sync revision the running or last Places scan started from. */
+    private var placesScanRevision: ULong? = null
+
+    /** The last launch's Places, read from disk at start; null once used or when there is none. */
+    @Volatile private var placesSnapshot: PlacesSnapshot? = null
+
     /** Where a Proton photo was taken, for its details; null without one, or for anything else. */
     suspend fun photoLocation(item: GalleryItem): io.narl.protongallery.bridge.PhotoLocation? {
         if (!item.inProton || item.isVideo) return null
@@ -699,11 +718,25 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         catch (_: Exception) { null }
     }
 
-    fun cachedPlaces(revision: Int): Pair<Boolean, List<PlacePhoto>>? =
-        placesCache?.takeIf { it.first == account.value.generation }?.let { (_, scanned, photos) -> (scanned == revision) to photos }
+    fun cachedPlaces(revision: Int): Pair<Boolean, List<PlacePhoto>>? {
+        placesCache?.takeIf { it.first == account.value.generation }?.let { (_, scanned, photos) -> return (scanned == revision) to photos }
+        // The last launch's: current while the library is still at the sync revision it was scanned at.
+        val stored = placesSnapshot?.takeIf { account.value.connected } ?: return null
+        val current = PhotosSync.state.value.revision
+        return (current != null && stored.syncRevision == current) to stored.photos
+    }
 
     fun rememberPlaces(revision: Int, photos: List<PlacePhoto>) {
-        placesCache = Triple(account.value.generation, revision, photos)
+        val generation = account.value.generation
+        placesCache = Triple(generation, revision, photos)
+        placesSnapshot = null
+        val snapshot = PlacesSnapshot(placesScanRevision, photos)
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            placesWrite.withLock {
+                if (account.value.generation == generation && account.value.connected) PlacesStore.write(app, snapshot)
+            }
+        }
     }
 
     // The timeline Places reads located photos from; made once per scan.
@@ -852,6 +885,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         runCatching { application.contentResolver.registerContentObserver(PhoneLibrary.observed, true, mediaChanged) }
+        viewModelScope.launch(Dispatchers.IO) { placesSnapshot = PlacesStore.read(application) }
         viewModelScope.launch(guard) {
             var revision: ULong? = null
             var message: String? = null
@@ -868,10 +902,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
                 message = sync.message
                 if (revision != sync.revision) {
+                    // The first revision seen is where the app starts, not a change.
+                    val changed = revision != null
                     revision = sync.revision
                     checkBackup = true
                     val repo = repository.value ?: return@collect
-                    mutableState.update { it.copy(revision = it.revision + 1) }
+                    mutableState.update { it.copy(revision = it.revision + 1,
+                        placesRevision = it.placesRevision + if (changed) 1 else 0) }
                     try {
                         val place = location.value
                         if (place.protonAlbum && !repo.photoAlbumExists(requireNotNull(place.album))) {

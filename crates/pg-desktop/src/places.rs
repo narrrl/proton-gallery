@@ -289,6 +289,15 @@ impl MapLayer {
     }
 }
 
+/// A scan of Places run out of sight, over the photos already shown.
+#[derive(Default)]
+pub struct Rescan {
+    pub scan: Option<Arc<PlacesScan>>,
+    pub next: usize,
+    pub failed: usize,
+    pub photos: Vec<LocatedPhoto>,
+}
+
 pub struct Places {
     pub request: u64,
     pub scan: Option<Arc<PlacesScan>>,
@@ -301,8 +310,21 @@ pub struct Places {
     pub selected: Vec<usize>,
     pub list_limit: usize,
     all: bool,
-    /// The camera the user moved to; `None` fits the photos.
+    /// The camera the user moved to; `None` shows `fitted`.
     pub camera: Option<Camera>,
+    /// The photos fitted into view: on the first photos found, when the scan
+    /// is done and on Fit, each time only if the view would leave photos out.
+    /// Never on a rescan, which would move the map under the viewer whenever
+    /// the library changed.
+    fitted: Option<Camera>,
+    /// A scan run out of sight over a finished one, swapped in when done.
+    pub rescan: Option<Rescan>,
+    /// The library changed again while `rescan` ran: scan once more after it.
+    pub rescan_again: bool,
+    /// The sync revision the photos on the map were scanned at.
+    pub scanned_revision: Option<u64>,
+    /// The sync revision the running scan started at.
+    pub scan_revision: u64,
     pub viewport: Option<Viewport>,
     bubbles: Vec<Bubble>,
     labels: Vec<bool>,
@@ -327,6 +349,11 @@ impl Default for Places {
             list_limit: PANEL_PAGE,
             all: false,
             camera: None,
+            fitted: None,
+            rescan: None,
+            rescan_again: false,
+            scanned_revision: None,
+            scan_revision: 0,
             viewport: None,
             bubbles: Vec::new(),
             labels: Vec::new(),
@@ -347,6 +374,135 @@ impl Places {
             map: std::mem::take(&mut self.map),
             ..Self::default()
         };
+    }
+
+    /// Leaving Places: stop its work, but keep a finished scan to show
+    /// again on return.
+    pub fn leave(&mut self) {
+        if !self.complete() {
+            self.reset();
+            return;
+        }
+        self.request += 1;
+        self.work = None;
+        self.rescan = None;
+        self.rescan_again = false;
+        self.thumbs_loading.clear();
+    }
+
+    /// Whether the photos on the map are a finished scan.
+    pub fn complete(&self) -> bool {
+        self.error.is_none()
+            && self
+                .scan
+                .as_ref()
+                .is_some_and(|scan| self.next >= scan.outline.len())
+    }
+
+    /// Fit the photos into view, unless the fitted view already shows them
+    /// all at a useful scale: each refit is a jump under the viewer's eyes.
+    pub fn refit(&mut self) {
+        let Some(view) = self.viewport else { return };
+        if self.photos.is_empty() {
+            self.fitted = None;
+            return;
+        }
+        let all = Camera::fit(
+            self.photos
+                .iter()
+                .map(|photo| photo.coordinates.projected()),
+            view,
+            FIT_ZOOM,
+        );
+        if let Some(shown) = self.fitted
+            && self.shows(shown, view)
+            && all.zoom <= shown.zoom * 4.0
+        {
+            return;
+        }
+        self.fitted = Some(all);
+    }
+
+    /// Fit the photos into view again, whatever is shown now.
+    pub fn fit(&mut self) {
+        self.camera = None;
+        self.fitted = None;
+        self.refit();
+    }
+
+    /// Whether every photo is inside `camera`'s view, clear of its edges.
+    fn shows(&self, camera: Camera, view: Viewport) -> bool {
+        self.photos.iter().all(|photo| {
+            let (x, y) = camera.to_screen(photo.coordinates.projected(), view);
+            (view.width * 0.1..=view.width * 0.9).contains(&x)
+                && (view.height * 0.1..=view.height * 0.9).contains(&y)
+        })
+    }
+
+    /// Whether the rescan has checked every photo.
+    pub fn rescan_done(&self) -> bool {
+        self.rescan.as_ref().is_some_and(|rescan| {
+            rescan
+                .scan
+                .as_ref()
+                .is_some_and(|scan| rescan.next >= scan.outline.len())
+        })
+    }
+
+    /// Swap in a finished rescan; true when the map changed. The camera
+    /// stays where it is, and the selection follows its photos.
+    pub fn finish_rescan(&mut self) -> bool {
+        let Some(Rescan {
+            scan: Some(scan),
+            next,
+            failed,
+            photos,
+        }) = self.rescan.take()
+        else {
+            return false;
+        };
+        self.scanned_revision = Some(self.scan_revision);
+        let same_outline = self
+            .scan
+            .as_ref()
+            .is_some_and(|old| old.outline.ids == scan.outline.ids);
+        let same_photos = self.photos.len() == photos.len()
+            && self.photos.iter().zip(&photos).all(|(a, b)| {
+                a.index == b.index && a.coordinates == b.coordinates && a.place == b.place
+            });
+        if same_outline && same_photos && self.failed == failed {
+            return false;
+        }
+        let id =
+            |scan: &PlacesScan, photo: &LocatedPhoto| scan.outline.ids.get(photo.index).cloned();
+        let chosen: HashSet<String> = match &self.scan {
+            Some(old) => self
+                .selected
+                .iter()
+                .filter_map(|&i| self.photos.get(i).and_then(|photo| id(old, photo)))
+                .collect(),
+            None => HashSet::new(),
+        };
+        self.selected = photos
+            .iter()
+            .enumerate()
+            .filter(|(_, photo)| id(&scan, photo).is_some_and(|id| chosen.contains(&id)))
+            .map(|(i, _)| i)
+            .collect();
+        if self.selected.is_empty() {
+            self.all = false;
+        }
+        if !same_outline {
+            // Pictures are kept by outline position, which may have moved.
+            self.thumbs = Images::new(THUMB_BUDGET);
+            self.thumbs_loading.clear();
+            self.thumbs_failed.clear();
+        }
+        self.scan = Some(scan);
+        self.next = next;
+        self.failed = failed;
+        self.photos = photos;
+        true
     }
 
     pub fn select(&mut self, photos: Vec<usize>, all: bool) {
@@ -381,7 +537,7 @@ impl Places {
 
     /// The camera for `view`: the user's, or one fitting the photos.
     fn camera_for(&self, view: Viewport) -> Camera {
-        self.camera.unwrap_or_else(|| {
+        self.camera.or(self.fitted).unwrap_or_else(|| {
             Camera::fit(
                 self.photos
                     .iter()
@@ -1405,6 +1561,25 @@ mod tests {
         assert_eq!(places.request, 1);
         assert!(places.map.opened && places.map.tiles.contains(&places.map.key(0, 0, 0, TILE_PX)));
         assert_eq!(places.viewport, Some(Viewport::new(800.0, 600.0)));
+    }
+
+    #[test]
+    fn a_refit_keeps_the_view_while_it_still_shows_every_photo() {
+        let mut places = Places {
+            photos: crate::bench::located_photos(50),
+            viewport: Some(Viewport::new(1000.0, 700.0)),
+            ..Places::default()
+        };
+        places.refit();
+        let first = places.current_camera().unwrap();
+        // Fewer photos, all inside the view: the map stays where it is.
+        places.photos.truncate(40);
+        places.refit();
+        assert_eq!(places.current_camera(), Some(first));
+        // Fit always fits again.
+        places.fit();
+        assert!(places.current_camera().is_some());
+        assert!(places.camera.is_none());
     }
 
     #[test]
