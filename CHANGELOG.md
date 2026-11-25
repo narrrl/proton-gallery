@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 0.7.0
+
+### Install
+
+- Android 12 or later. Download the signed `proton-gallery-v0.7.0.apk` for
+  arm64 or x86_64. It updates the regular Proton Gallery app in place.
+- Windows 10 and 11 (x86_64). Download `proton-gallery-0.7.0-x64.msi`, or the
+  portable `proton-gallery-0.7.0-x86_64-windows.zip`.
+- Ubuntu 24.04 and Debian 13. Download the x86_64 `.deb`.
+- Fedora. Download the signed x86_64 `.rpm` and the accompanying public key.
+- Arch Linux. Check out this tag and run `cd packaging && makepkg -fi`.
+
+### The suite's look
+
+- The accent is a flat violet instead of a gradient, and copper marks what is
+  only on this phone, matching Proton Stream.
+- In the photo viewer, the controls and details fade into the photo instead of
+  sitting on flat black bands.
+- The status in the top bar is short ("12,345 found", "Updating…") instead of
+  wrapping into two cut-off lines.
+
+### Places
+
+- The map no longer starts over when backup, Drive indexing or a cover change
+  touches the library. It scans again only after a Proton Photos sync, a
+  sign-in or an album change, and a change during a scan queues one quiet
+  rescan instead of restarting it.
+- Android keeps the map's results between launches, so it shows them at once
+  and checks again only when the library changed.
+- On the desktop, returning to the map shows the last results, and a sync
+  re-checks in the background without moving the view or the selection.
+- The map fits the first photos it finds and afterwards moves only when the
+  view would leave photos out.
+
 ## 0.6.1
 
 ### Install

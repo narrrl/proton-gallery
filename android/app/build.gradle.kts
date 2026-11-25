@@ -23,8 +23,8 @@ android {
         minSdk = 31
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 601
-        versionName = "0.6.1"
+        versionCode = 700
+        versionName = "0.7.0"
         ndk { abiFilters += nativeAbis }
     }
     testBuildType = "device"
