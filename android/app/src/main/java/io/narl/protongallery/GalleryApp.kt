@@ -297,7 +297,7 @@ fun GalleryApp(
                 places -> key(account.generation, account.visibilityRevision) {
                     val placeScope = rememberCoroutineScope()
                     val mapDark = MaterialTheme.colorScheme.background.luminance() < .5f
-                    PlacesScreen(placesActions, state.revision, PaddingValues(top = top, bottom = bottom), mapDark,
+                    PlacesScreen(placesActions, state.placesRevision, PaddingValues(top = top, bottom = bottom), mapDark,
                         thumbnail = { photo -> placesActions.item(photo.id)?.let { thumbnails.load(it) }?.asImageBitmap() },
                         focus = mapFocus, onFocused = { mapFocus = null }) { photo ->
                         placeScope.launch {

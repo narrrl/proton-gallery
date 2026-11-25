@@ -93,6 +93,7 @@ import io.narl.protongallery.bridge.placesGeometry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -149,6 +150,8 @@ private const val FOCUS_ZOOM = 1024.0
 /** A marker picture's side as a share of its bubble's diameter, and its corner. */
 private const val MARKER_SIDE = .9f
 private const val CORNER = .24f
+/** How long a later scan waits for the library to stop changing. */
+private const val RESCAN_SETTLE_MS = 2_000L
 /** Marker pictures loaded at once; the thumbnail loader limits the network. */
 private const val COVERS_AT_ONCE = 8
 
@@ -177,6 +180,16 @@ private fun fit(photos: List<PlacePhoto>, size: IntSize, maxZoom: Double): MapCa
     val edge = min(size.width, size.height).toDouble()
     val span = maxOf((east - west) * edge / size.width, (south - north) * edge / size.height)
     return MapCamera((west + east) / 2, (north + south) / 2, (.72 / span).coerceIn(1.0, maxZoom))
+}
+
+/** Whether every photo is inside the view `camera` gives a view of `size` px, clear of its edges. */
+private fun MapCamera.shows(photos: List<PlacePhoto>, size: IntSize): Boolean {
+    if (size.width == 0 || size.height == 0) return false
+    val scale = min(size.width, size.height) * zoom
+    // A tenth of the view on each side, where markers would sit under the controls.
+    val halfWidth = size.width / scale * .4
+    val halfHeight = size.height / scale * .4
+    return photos.all { kotlin.math.abs(it.x - x) <= halfWidth && kotlin.math.abs(it.y - y) <= halfHeight }
 }
 
 /** Markers as laid out for `camera`; drawn against a newer camera until the next ones are ready. */
@@ -221,9 +234,10 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     // Where the viewer moved the map; null until they do, which shows [fitted].
     var camera by remember { mutableStateOf<MapCamera?>(null) }
-    // The photos fitted into view: on the first photos found, once more when
-    // the first scan is done, and on Fit. Never on a later scan, which would
-    // move the map under the viewer whenever the library changed.
+    // The photos fitted into view: on the first photos found, when the first
+    // scan is done and on Fit, each time only if the view would leave photos
+    // out. Never on a later scan, which would move the map under the viewer
+    // whenever the library changed.
     var fitted by remember { mutableStateOf<MapCamera?>(null) }
     var fitRequest by remember { mutableIntStateOf(if (cache != null) 1 else 0) }
     // "Show on map" from a photo's details: that spot, at a town's scale.
@@ -255,68 +269,84 @@ fun PlacesScreen(actions: PlacesActions, revision: Int, padding: PaddingValues, 
             mapReady = true
         }
     }
-    var scanned by remember { mutableIntStateOf(if (cache?.first == true) 0 else -1) }
-    LaunchedEffect(revision, retry) {
-        // Already scanned for this revision on an earlier visit.
-        if (retry == 0 && scanned == 0) {
-            scanned = 1
-            return@LaunchedEffect
-        }
-        scanned = 1
-        // A later scan, with the map already showing, runs out of sight and
-        // swaps in what it found only if that differs: the library changes for
-        // many reasons that move no photo.
-        val quiet = photos.isNotEmpty() && retry == 0
-        val found = ArrayList<PlacePhoto>()
-        var unchecked = 0
-        if (!quiet) {
-            photos.clear()
-            layout.clear()
-            layoutVersion++
-            markers = null
-            selected = null
-            progress = PlacesProgress()
-        }
-        failed = false
-        try {
-            actions.scan { batch ->
-                found += batch.newPhotos
-                unchecked = batch.failed
-                if (quiet) return@scan
-                if (batch.newPhotos.isNotEmpty()) {
-                    val first = photos.isEmpty()
-                    layout.add(batch.newPhotos)
-                    photos += batch.newPhotos
-                    layoutVersion++
-                    if (first) fitRequest++
-                }
-                progress = batch
+    // The revision the photos on the map were scanned for; null before any scan.
+    var scannedFor by remember { mutableStateOf(if (cache?.first == true) revision else null) }
+    val latestRevision by rememberUpdatedState(revision)
+    LaunchedEffect(retry) {
+        var forced = retry > 0
+        // One scan at a time: a revision that changes while a scan runs queues
+        // one more scan after it, rather than restarting it from nothing.
+        snapshotFlow { latestRevision }.conflate().collect { wanted ->
+            if (!forced && wanted == scannedFor) return@collect
+            // A later scan, with the map already showing, runs out of sight and
+            // swaps in what it found only if that differs: the library changes
+            // for many reasons that move no photo.
+            val quiet = photos.isNotEmpty() && !forced
+            // Let a burst of changes, such as a sync's, settle first.
+            if (quiet && scannedFor != null) delay(RESCAN_SETTLE_MS)
+            forced = false
+            val found = ArrayList<PlacePhoto>()
+            var unchecked = 0
+            if (!quiet) {
+                photos.clear()
+                layout.clear()
+                layoutVersion++
+                markers = null
+                selected = null
+                fitted = null
+                progress = PlacesProgress()
             }
-            if (quiet) {
-                if (found.map { it.id to it.index } != photos.map { it.id to it.index } ||
-                    found.map { it.x to it.y } != photos.map { it.x to it.y }
-                ) {
-                    photos.clear()
-                    photos += found
-                    layout.clear()
-                    if (found.isNotEmpty()) layout.add(found)
-                    layoutVersion++
-                    selected = selected?.filter { picked -> found.any { it.id == picked.id } }?.takeIf { it.isNotEmpty() }
+            failed = false
+            try {
+                actions.scan { batch ->
+                    found += batch.newPhotos
+                    unchecked = batch.failed
+                    if (quiet) return@scan
+                    if (batch.newPhotos.isNotEmpty()) {
+                        val first = photos.isEmpty()
+                        layout.add(batch.newPhotos)
+                        photos += batch.newPhotos
+                        layoutVersion++
+                        if (first) fitRequest++
+                    }
+                    progress = batch
                 }
-            } else {
-                fitRequest++
+                if (quiet) {
+                    if (found.map { it.id to it.index } != photos.map { it.id to it.index } ||
+                        found.map { it.x to it.y } != photos.map { it.x to it.y }
+                    ) {
+                        photos.clear()
+                        photos += found
+                        layout.clear()
+                        if (found.isNotEmpty()) layout.add(found)
+                        layoutVersion++
+                        selected = selected?.filter { picked -> found.any { it.id == picked.id } }?.takeIf { it.isNotEmpty() }
+                    }
+                } else {
+                    // Once more with every photo, which moves the map only if
+                    // the first fit left some of them out.
+                    fitRequest++
+                }
+                progress = PlacesProgress(checked = found.size, total = found.size, failed = unchecked, scanning = false)
+                scannedFor = wanted
+                actions.remember(wanted, found)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                if (!quiet) failed = true
+                progress = progress.copy(scanning = false)
             }
-            progress = PlacesProgress(checked = found.size, total = found.size, failed = unchecked, scanning = false)
-            actions.remember(revision, found)
-        } catch (cancel: CancellationException) {
-            throw cancel
-        } catch (_: Exception) {
-            if (!quiet) failed = true
-            progress = progress.copy(scanning = false)
         }
     }
     LaunchedEffect(fitRequest, canvasSize) {
-        if (fitRequest > 0 && camera == null && canvasSize != IntSize.Zero) fitted = fit(photos.toList(), canvasSize, FIT_ZOOM)
+        if (fitRequest == 0 || camera != null || canvasSize == IntSize.Zero) return@LaunchedEffect
+        val all = photos.toList()
+        val shown = fitted
+        // Keep the view while it still shows every photo at a useful scale:
+        // each refit is a jump under the viewer's eyes.
+        if (shown == null || !shown.shows(all, canvasSize) || fit(all, canvasSize, FIT_ZOOM).zoom > shown.zoom * 4) {
+            fitted = fit(all, canvasSize, FIT_ZOOM)
+        }
     }
 
     val palette = MaterialTheme.colorScheme

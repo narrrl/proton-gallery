@@ -268,6 +268,18 @@ struct SyncState {
     reload_pending: bool,
 }
 
+/// How much of Places to scan again on the way in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlacesRefresh {
+    /// Show what the last scan found; scan again out of sight only if the
+    /// library changed since.
+    Reuse,
+    /// Scan again out of sight, keeping the map until the new scan is done.
+    Quiet,
+    /// Start over, with progress: a retry, or hidden albums changed.
+    Full,
+}
+
 /// The photo open in the viewer.
 struct Viewer {
     index: usize,
@@ -1109,7 +1121,7 @@ impl Gallery {
                 self.thumbs_retry.clear();
                 let visible = self.request_visible();
                 let refresh = if self.section == Section::Places {
-                    self.start_places()
+                    self.start_places(PlacesRefresh::Quiet)
                 } else if self.section == Section::Hidden {
                     self.load_albums()
                 } else if self.section == Section::Drive {
@@ -1169,7 +1181,7 @@ impl Gallery {
                             self.sync.visibility_stale && self.section == Section::Places;
                         self.sync.visibility_stale = false;
                         if retry_places {
-                            self.start_places()
+                            self.start_places(PlacesRefresh::Full)
                         } else {
                             Task::none()
                         }
@@ -1201,7 +1213,10 @@ impl Gallery {
                         }
                         if self.section == Section::Places {
                             if visibility_changed || self.places.error.is_some() {
-                                return Task::batch([self.start_places(), drop_cached]);
+                                return Task::batch([
+                                    self.start_places(PlacesRefresh::Full),
+                                    drop_cached,
+                                ]);
                             }
                             return drop_cached;
                         }
@@ -1522,7 +1537,7 @@ impl Gallery {
                 }
                 self.reset_drive_navigation();
                 self.close_hidden_access();
-                self.places.reset();
+                self.places.leave();
                 self.clear_media();
                 self.section = section;
                 self.album_open = false;
@@ -1532,7 +1547,7 @@ impl Gallery {
                     View::Photos
                 };
                 if section == Section::Places {
-                    self.start_places()
+                    self.start_places(PlacesRefresh::Reuse)
                 } else if matches!(section, Section::Albums | Section::Drive) {
                     self.load_albums()
                 } else {
@@ -1679,7 +1694,7 @@ impl Gallery {
                 self.view = View::Photos;
                 self.load_albums()
             }
-            Message::StartPlaces => self.start_places(),
+            Message::StartPlaces => self.start_places(PlacesRefresh::Full),
             Message::PlacesReady(request, generation, result) => {
                 if request != self.places.request || !self.current(generation) {
                     return Task::none();
@@ -1687,9 +1702,14 @@ impl Gallery {
                 self.places.work = None;
                 match result {
                     Ok(scan) => {
+                        if let Some(rescan) = self.places.rescan.as_mut() {
+                            rescan.scan = Some(scan);
+                            return self.rescan_places_step();
+                        }
                         self.places.scan = Some(scan);
-                        self.scan_places_batch()
+                        self.places_batch_done()
                     }
+                    Err(_) if self.places.rescan.is_some() => self.rescan_places_failed(),
                     Err(error) => {
                         self.places.error = Some(error);
                         Task::none()
@@ -1703,11 +1723,22 @@ impl Gallery {
                 self.places.work = None;
                 match result {
                     Ok(batch) => {
+                        if let Some(rescan) = self.places.rescan.as_mut() {
+                            rescan.next = batch.next;
+                            rescan.failed += batch.failed;
+                            rescan.photos.extend(batch.photos);
+                            return self.rescan_places_step();
+                        }
+                        let first = self.places.photos.is_empty() && !batch.photos.is_empty();
                         self.places.next = batch.next;
                         self.places.failed += batch.failed;
                         self.places.photos.extend(batch.photos);
-                        Task::batch([self.scan_places_batch(), self.places_changed()])
+                        if first {
+                            self.places.refit();
+                        }
+                        self.places_batch_done()
                     }
+                    Err(_) if self.places.rescan.is_some() => self.rescan_places_failed(),
                     Err(error) => {
                         self.places.error = Some(error);
                         Task::none()
@@ -1733,7 +1764,7 @@ impl Gallery {
                 self.request_place_thumbs()
             }
             Message::PlacesFit => {
-                self.places.camera = None;
+                self.places.fit();
                 self.places_changed()
             }
             Message::PlacesZoom(factor) => {
@@ -1745,6 +1776,7 @@ impl Gallery {
             }
             Message::PlacesViewport(view) => {
                 self.places.viewport = Some(view);
+                self.places.refit();
                 self.places_changed()
             }
             Message::PlacesBasemap(basemap) => {
@@ -1784,7 +1816,7 @@ impl Gallery {
                     self.outline = Some(outline);
                     self.open(index)
                 } else {
-                    self.start_places()
+                    self.start_places(PlacesRefresh::Quiet)
                 }
             }
             Message::OpenDriveLink => {
@@ -2118,7 +2150,7 @@ impl Gallery {
             return Task::none();
         }
         if self.section == Section::Places {
-            return self.start_places();
+            return self.start_places(PlacesRefresh::Quiet);
         }
         Task::batch([self.load_outline(), self.load_albums()])
     }
@@ -2130,11 +2162,20 @@ impl Gallery {
         self.sync.retry_at = Some(std::time::Instant::now() + Duration::from_secs(seconds));
     }
 
-    fn start_places(&mut self) -> Task<Message> {
+    fn start_places(&mut self, refresh: PlacesRefresh) -> Task<Message> {
         if self.section != Section::Places || !self.browsing() {
             return Task::none();
         }
+        if self.places.complete() && refresh != PlacesRefresh::Full {
+            if refresh == PlacesRefresh::Reuse
+                && self.places.scanned_revision == Some(self.sync.revision)
+            {
+                return self.places_changed();
+            }
+            return Task::batch([self.rescan_places(), self.places_changed()]);
+        }
         self.places.reset();
+        self.places.scan_revision = self.sync.revision;
         self.clear_media();
         let Some(app) = self.app().cloned() else {
             return Task::none();
@@ -2173,6 +2214,69 @@ impl Gallery {
             );
         }
         Task::batch(tasks)
+    }
+
+    /// Scan again out of sight, keeping the map as it is until the new scan
+    /// is done; one rescan at a time, and one more if asked meanwhile.
+    fn rescan_places(&mut self) -> Task<Message> {
+        if self.places.rescan.is_some() {
+            self.places.rescan_again = true;
+            return Task::none();
+        }
+        let Some(app) = self.app().cloned() else {
+            return Task::none();
+        };
+        self.places.rescan = Some(crate::places::Rescan::default());
+        self.places.scan_revision = self.sync.revision;
+        let request = self.places.request;
+        let generation = app.generation();
+        let demo = self.demo();
+        let (task, handle) = spawn(
+            &app,
+            move |app| async move {
+                if demo {
+                    return app.demo_places().await.map(Arc::new).map_err(shown);
+                }
+                app.places_scan().await.map(Arc::new).map_err(shown)
+            },
+            move |result| Message::PlacesReady(request, generation, result),
+        )
+        .abortable();
+        self.places.work = Some(handle.abort_on_drop());
+        task
+    }
+
+    /// The next batch of a rescan, or its result when it is done.
+    fn rescan_places_step(&mut self) -> Task<Message> {
+        if !self.places.rescan_done() {
+            return self.scan_places_batch();
+        }
+        let changed = self.places.finish_rescan();
+        let again = std::mem::take(&mut self.places.rescan_again);
+        let mut tasks = Vec::new();
+        if changed {
+            tasks.push(self.places_changed());
+        }
+        if again {
+            tasks.push(self.rescan_places());
+        }
+        Task::batch(tasks)
+    }
+
+    /// A rescan that fails leaves the map as it was.
+    fn rescan_places_failed(&mut self) -> Task<Message> {
+        self.places.rescan = None;
+        self.places.rescan_again = false;
+        Task::none()
+    }
+
+    /// After a batch of the first scan: the next one, or the last fit.
+    fn places_batch_done(&mut self) -> Task<Message> {
+        if self.places.complete() {
+            self.places.scanned_revision = Some(self.places.scan_revision);
+            self.places.refit();
+        }
+        Task::batch([self.scan_places_batch(), self.places_changed()])
     }
 
     /// The camera, view, photos or theme of Places changed: cluster again
@@ -2262,12 +2366,11 @@ impl Gallery {
     }
 
     fn scan_places_batch(&mut self) -> Task<Message> {
-        let Some(scan) = self
-            .places
-            .scan
-            .clone()
-            .filter(|scan| self.places.next < scan.outline.len())
-        else {
+        let (scan, start) = match &self.places.rescan {
+            Some(rescan) => (rescan.scan.clone(), rescan.next),
+            None => (self.places.scan.clone(), self.places.next),
+        };
+        let Some(scan) = scan.filter(|scan| start < scan.outline.len()) else {
             return Task::none();
         };
         let Some(app) = self.app().cloned() else {
@@ -2275,7 +2378,6 @@ impl Gallery {
         };
         let request = self.places.request;
         let generation = app.generation();
-        let start = self.places.next;
         let (task, handle) = spawn(
             &app,
             move |app| async move { app.places_batch(&scan, start).await.map_err(shown) },
