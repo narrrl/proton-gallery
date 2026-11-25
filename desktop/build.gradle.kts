@@ -59,7 +59,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Rpm, TargetFormat.Msi)
             packageName = "proton-gallery"
-            packageVersion = "0.6.1"
+            packageVersion = "0.7.0"
             description = "Your photos in Proton Drive"
             vendor = "Proton Gallery contributors"
             linux { iconFile.set(workspace.resolve("images/icon-512.png")) }
