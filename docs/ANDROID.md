@@ -159,6 +159,8 @@ Dark mode's accent is violet 400 rather than 500, because Material also writes t
 
 The chosen section, the sign-in button and the activity bar under the top bar are flat violet 500 (`Brand.accent`), in both modes, because white text sits on them. The violet-to-orchid ramp belongs to the icons' faces and appears nowhere in the app, so the photographs stay the brightest thing on screen. Copper has a scale (`Copper`, 100 to 700, the same steps as Proton Stream's); a tint or a border takes a step of it. Copper marks a photo that is only on this phone. The app menu opens with the mark and the name.
 
+The one gradient on purpose is a scrim: the viewer's controls and details fade into the photo along the suite's eased curve (`Scrim.kt`, Proton Stream's `SCRIM_STOPS`) instead of sitting on a flat black band, so neither edge shows as a line.
+
 The icon uses frontal violet–pink photo plates with shallow metallic copper depth, simple mountains, and a copper sun. Its canonical [SVG](../images/logo.svg) and [512px PNG](../images/icon-512.png) share the same vector artwork as the Android account-screen logo, adaptive foreground, and themed monochrome layer. Run `python scripts/render-branding.py` to regenerate them together, or add `--check` to verify the outputs. Earlier artwork is preserved in `images/branding-archive/`; the [branding guide](../images/BRANDING.md) describes platform sizing. Attribution is in [NOTICE](../NOTICE.md).
 
 ```text

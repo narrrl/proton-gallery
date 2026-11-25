@@ -122,7 +122,9 @@ fun MediaViewer(initialOutline: GalleryOutline, initial: Int, thumbnails: Thumbn
                     onLoading = { if (active) loading = it })
             }
             AnimatedVisibility(chrome, Modifier.align(Alignment.TopCenter), enter = fadeIn(), exit = fadeOut()) {
-                Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.7f)).statusBarsPadding()) {
+                // A fade, not a band: the photo shows through below the controls.
+                Column(Modifier.fillMaxWidth().background(verticalScrim(VIEWER_SCRIM, from = .4f, solidAtTop = true)).statusBarsPadding()
+                    .padding(bottom = 32.dp)) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to gallery", tint = Color.White) }
                         Text("${pager.currentPage + 1} / ${outline.count}", color = Color.White, style = MaterialTheme.typography.labelLarge,
@@ -163,7 +165,8 @@ fun MediaViewer(initialOutline: GalleryOutline, initial: Int, thumbnails: Thumbn
             }
             AnimatedVisibility(current != null && chrome && (!current.isVideo || info), Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
                 val shown = current ?: return@AnimatedVisibility
-                Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.75f)).navigationBarsPadding().padding(24.dp)) {
+                Column(Modifier.fillMaxWidth().background(verticalScrim(VIEWER_SCRIM, to = .5f)).navigationBarsPadding()
+                    .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 24.dp)) {
                     Text(shown.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (shown.backedUp) Icons.Outlined.OfflinePin else Icons.Outlined.CloudOff, null, Modifier.size(16.dp), tint = if (shown.backedUp) VIEWER_ACCENT else VIEWER_COPPER)
@@ -331,6 +334,8 @@ private fun VideoPlayer(item: GalleryItem, media: MediaActions, private: Boolean
 private val VIEWER_ACCENT = Color(0xFFA48BFF)
 private val VIEWER_COPPER = Color(0xFFD69B77)
 private val VIEWER_INK = Color.White.copy(alpha = 0.82f)
+/** The viewer's scrims: dark enough at their solid end for white text on any photo. */
+private val VIEWER_SCRIM = Color.Black.copy(alpha = 0.72f)
 
 /** Where the shown photo was taken: the town and the coordinates, and the way to it on the map. */
 @Composable
