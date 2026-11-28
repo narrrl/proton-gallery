@@ -241,18 +241,19 @@ The limits above describe the implementation, not Android device measurements.
 
 ## Website screenshots
 
-The website and README use the same public demo photographs as Drive’s photo captures,
-with synthetic Gallery metadata. No private account is opened. Ordinary UI tests retain
+The README capture uses fixed public Picsum photos and synthetic Gallery metadata,
+following the same approach as Drive. No private account is opened. Ordinary UI tests retain
 procedural images; the screenshot job opts into the photo fixtures explicitly.
 
 After a development build has produced the host native library and generated bindings:
 
 ```sh
-JAVA_HOME=/path/to/jdk-21 scripts/screenshots.sh --photos ~/.cache/pdfs-screenshots
+JAVA_HOME=/path/to/jdk-21 scripts/screenshots.sh
 ```
 
-The photo directory is the cache populated by Drive’s `scripts/screenshots.sh`, or any
-explicitly supplied directory of demo JPEGs. The helper runs the relevant Compose UI tests
+The first run downloads the curated set to `~/.cache/pg-screenshot-photos`. To
+use Drive’s cached selection or your own demo JPEGs, pass `--photos DIR`.
+The helper runs the relevant Compose UI tests
 and snapshots the photo captures to `android/app/build/photo-screenshots/`, separately
 from ordinary test output. The websites’ sync scripts then
 copy those captures and regenerate their social previews. The photographs are test inputs

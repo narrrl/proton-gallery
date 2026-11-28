@@ -84,7 +84,7 @@ integration is available with an additional device setup step; see the
   <tr>
     <td align="center"><a href="images/photos.png"><img src="images/photos.png" alt="Photos timeline with backup indicators" width="200"></a><br><sub>Photos</sub></td>
     <td align="center"><a href="images/albums.png"><img src="images/albums.png" alt="Proton Photos albums" width="200"></a><br><sub>Albums</sub></td>
-    <td align="center"><a href="images/drive.png"><img src="images/drive.png" alt="A nested Drive folder album" width="200"></a><br><sub>Drive galleries</sub></td>
+    <td align="center"><a href="images/drive.png"><img src="images/drive.png" alt="Drive galleries with photographic folder covers" width="200"></a><br><sub>Drive galleries</sub></td>
     <td align="center"><a href="images/backup.png"><img src="images/backup.png" alt="Phone backup folders and album destinations" width="200"></a><br><sub>Backup</sub></td>
   </tr>
   <tr>

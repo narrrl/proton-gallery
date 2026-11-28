@@ -142,8 +142,8 @@ small windows. The still viewer keeps a dark canvas in either system theme, with
 images, visible navigation labels, and a compact zoom/pan hint. Sync errors appear below the
 toolbar without replacing the library count. The sidebar hides below 760 logical pixels.
 
-The light and dark library previews below use deterministic fixture media, including
-unavailable thumbnails; they do not show a real account.
+The light and dark previews show Gallery’s desktop demo library with the same
+public photographs used for the Android captures.
 
 ![Desktop Photos library in the light theme](images/desktop-gallery-light.png)
 
