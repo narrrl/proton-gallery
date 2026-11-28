@@ -440,7 +440,8 @@ class GalleryUiTest {
         val pixel = FolderAlbum("album-2", "album-2", null, "Pixel 6", 9uL, 0uL)
         val secret = FolderAlbum("album-3", "album-3", null, "Private", 2uL, 0uL, hidden = true)
         val changes = mutableListOf<String>()
-        render(emptyList(), ThemeMode.Light, initialLocation = GalleryLocation(),
+        val photos = if (System.getProperty("pg.screenshot.photos") != null) fixtureItems() else emptyList()
+        render(photos, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
             backup = BackupState(folders = folders, albums = listOf(BackupAlbumTarget(null, pixel), BackupAlbumTarget("camera", secret))),
             account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "tester", null, false)),
             actions = BackupActions(setAlbum = { folder, album, add, existing -> changes += "$folder:${album.name}:$add:$existing" }),
@@ -822,6 +823,63 @@ class GalleryUiTest {
         compose.onNodeWithText("Coast").assertExists()
     }
 
+    @Test fun capture_gallery_screens() {
+        org.junit.Assume.assumeNotNull(System.getProperty("pg.screenshot.photos"))
+        val items = fixtureItems()
+        val albums = listOf("Road trip" to 0, "Underwater" to 1, "Waterfalls" to 2,
+            "Golden hour" to 3, "From the market" to 4, "Fjords" to 5).mapIndexed { index, (name, cover) ->
+            FolderAlbum("album-$index", "album-$index", null, name, (4 + index).toULong(), 0uL, cover = items[cover])
+        }
+        val towns = listOf(Triple("Florence", 0.5313, 0.3645), Triple("Milan", 0.5255, 0.3579),
+            Triple("Venice", 0.5343, 0.3580), Triple("Rome", 0.5347, 0.3715))
+        val places = towns.mapIndexed { i, (town, x, y) -> PlacePhoto(items[i].id, items[i].name, x, y, town, i.toUInt()) }
+        render(items, ThemeMode.Light, initialLocation = GalleryLocation(), photosTab = true,
+            account = AccountState(status = AccountStatus(SignInStage.CONNECTED, "demo", null, false)),
+            photoAlbums = albums, driveRoots = listOf("Wildlife" to 8, "Glaciers" to 9, "City walks" to 16, "Woodland" to 18).map { (name, i) ->
+                FolderAlbum("gallery-$i", "root-$i", null, name, 0uL, 2uL, cover = items[i])
+            },
+            places = PlacesActions(scan = { update -> update(PlacesProgress(places, checked = 4, total = 4, scanning = false)) },
+                item = { id -> items.firstOrNull { it.id == id } },
+                basemap = { io.narl.protongallery.bridge.PlacesMap.openPath(File("build/generated/basemap/$BASEMAP_ASSET").absolutePath) }))
+        compose.onNodeWithContentDescription("Albums").performClick()
+        compose.onNodeWithContentDescription("Album Road trip, 4 items").assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/gallery-albums.png")
+        compose.onNodeWithContentDescription("Drive").performClick()
+        compose.onNodeWithText("Wildlife").assertExists()
+        compose.onRoot().captureRoboImage("build/screenshots/gallery-drive.png")
+        compose.onNodeWithContentDescription("Places").performClick()
+        compose.onNodeWithText("4 photos on the map").assertExists()
+        compose.waitUntil(UI_TIMEOUT_MS) {
+            compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "4 places")).fetchSemanticsNodes().isNotEmpty()
+        }
+        // The Rust tile renderer finishes on a background dispatcher after
+        // the marker semantics are ready. Sample the map away from controls.
+        val capture = File("build/screenshots/gallery-places.png")
+        val background = io.narl.protongallery.bridge.mapSea(false).toInt()
+        compose.waitUntil(UI_TIMEOUT_MS) {
+            compose.onRoot().captureRoboImage(capture.absolutePath)
+            val frame = BitmapFactory.decodeFile(capture.absolutePath, BitmapFactory.Options().apply { inSampleSize = 8 })
+            try {
+                (2..8).all { row ->
+                    (1..9).count { col ->
+                        val pixel = frame.getPixel(frame.width * col / 10, frame.height * row / 10)
+                        pixel != background
+                    } >= 6
+                }
+            } finally { frame.recycle() }
+        }
+    }
+
+    @Test fun capture_gallery_viewer() {
+        org.junit.Assume.assumeNotNull(System.getProperty("pg.screenshot.photos"))
+        val hero = fixtureItems()[2].copy(name = "Waterfall.jpg")
+        render(listOf(hero), ThemeMode.Dark)
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription("Photo: ${hero.name}").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Photo: ${hero.name}").performClick()
+        compose.waitUntil(UI_TIMEOUT_MS) { compose.onAllNodesWithContentDescription(hero.name).fetchSemanticsNodes().isNotEmpty() }
+        compose.onRoot().captureRoboImage("build/screenshots/gallery-viewer.png")
+    }
+
     private fun render(items: List<GalleryItem>, mode: ThemeMode, onImport: () -> Unit = {}, fontScale: Float = 1f, initialLocation: GalleryLocation = GalleryLocation(GallerySection.Device), options: AlbumOptions? = null, onZoom: (Float) -> Unit = {},
         backup: BackupState = BackupState(), actions: BackupActions = BackupActions(), account: AccountState = AccountState(), photosTab: Boolean = false,
         media: MediaActions = MediaActions(), pick: PickRequest? = null, onPick: (List<GalleryItem>) -> Unit = {}, state: LibraryState? = null,
@@ -839,7 +897,7 @@ class GalleryUiTest {
         }
         compose.setContent {
             var location by remember { mutableStateOf(initialLocation) }
-            val root = remember { FolderAlbum("gallery", "root", null, "Trips", 0uL, 1uL) }
+            val root = remember { FolderAlbum("gallery", "root", null, "Trips", 0uL, 1uL, cover = items.getOrNull(6)) }
             val year = remember { FolderAlbum("gallery", "year", "root", "2026", 0uL, 1uL) }
             val coast = remember { FolderAlbum("gallery", "coast", "year", "Coast", items.size.toULong(), 0uL, description = options?.description, tags = options?.tags ?: emptyList()) }
             val albums = when (location.album?.id) {
