@@ -158,6 +158,57 @@ fn upload_failure(error: ProtonError) -> GalleryError {
     GalleryError::Operation { detail }
 }
 
+/// Names one upload may take: the phone's own, then `(1)` to `(19)`.
+const NAME_CANDIDATES: u32 = 20;
+
+/// Where one phone item goes, from what Proton Photos already holds.
+#[derive(Debug, PartialEq, Eq)]
+enum Placement {
+    /// A photo with these bytes is there already, perhaps our own upload
+    /// whose reply was lost.
+    Recover(proton_sdk::ids::NodeUid),
+    /// Upload under this free name.
+    Upload(String),
+    /// Every candidate name holds different bytes.
+    NoFreeName,
+}
+
+/// `occupied[n]` says whether `candidates[n]` is taken, `matches[n]` lists
+/// the photos under that name with the item's bytes. A match wins over a
+/// free name, the lowest number first.
+fn place(
+    candidates: &[String],
+    occupied: &[bool],
+    matches: Vec<Vec<proton_sdk::ids::NodeUid>>,
+) -> Placement {
+    if let Some(uid) = matches.into_iter().find_map(|m| m.into_iter().next()) {
+        return Placement::Recover(uid);
+    }
+    candidates
+        .iter()
+        .zip(occupied.iter().copied().chain(std::iter::repeat(false)))
+        .find(|(_, taken)| !taken)
+        .map_or(Placement::NoFreeName, |(name, _)| {
+            Placement::Upload(name.clone())
+        })
+}
+
+/// Tag `uid` a favorite. Adding a tag twice is harmless, so a recovered
+/// upload gets it too.
+async fn mark_favorite(photos: &ProtonPhotosClient, uid: &proton_sdk::ids::NodeUid) {
+    let favorite = PhotoTagsUpdate {
+        node_uid: uid.clone(),
+        tags_to_add: vec![PhotoTag::Favorite],
+        tags_to_remove: vec![],
+    };
+    if let Err(e) = photos.update_photos(&[favorite]).await {
+        tracing::warn!(
+            "marking an uploaded favorite failed: {}",
+            proton_gallery_drive_rs::auth::cause_chain(&e)
+        );
+    }
+}
+
 /// `IMG_1.jpg`, then `IMG_1 (1).jpg`, `IMG_1 (2).jpg`, …
 fn numbered(name: &str, n: u32) -> String {
     if n == 0 {
@@ -431,29 +482,52 @@ impl GalleryEngine {
             }
             let photos = ProtonPhotosClient::from_drive_client(account.drive.clone());
             let work = async {
-                let found = photos
-                    .find_duplicates_many(&[(entry.name.clone(), sha1.clone())])
+                // One request for which of the names are taken, one for which of
+                // those already hold these bytes. A reply lost after an earlier
+                // upload under `IMG (1).jpg` is found here, not uploaded again.
+                let candidates: Vec<String> = (0..NAME_CANDIDATES)
+                    .map(|n| numbered(&entry.name, n))
+                    .collect();
+                let occupied = photos
+                    .name_collisions(&candidates)
                     .await
-                    .map_err(remote_failure("compare with Proton Photos"))?;
-                if let Some(uid) = found.first().and_then(|m| m.first()).cloned() {
-                    self.after_upload(&photos, &account.id, &id, uid, entry.taken)
-                        .await?;
-                    return Ok(UploadOutcome::AlreadyBackedUp);
-                }
-                // Proton keeps one photo per name. A different photo with this
-                // name is already there (checked above), so pick a free name.
-                let mut name = entry.name.clone();
-                for n in 0..20 {
-                    let candidate = numbered(&entry.name, n);
-                    let taken = photos
-                        .name_collisions(std::slice::from_ref(&candidate))
+                    .map_err(remote_failure("prepare the upload"))?;
+                let taken: Vec<usize> = (0..candidates.len())
+                    .filter(|&n| occupied.get(n).copied().unwrap_or(false))
+                    .collect();
+                let mut matches = vec![Vec::new(); candidates.len()];
+                if !taken.is_empty() {
+                    let lookups: Vec<(String, String)> = taken
+                        .iter()
+                        .map(|&n| (candidates[n].clone(), sha1.clone()))
+                        .collect();
+                    let found = photos
+                        .find_duplicates_many(&lookups)
                         .await
-                        .map_err(remote_failure("prepare the upload"))?;
-                    name = candidate;
-                    if !taken.first().copied().unwrap_or(false) {
-                        break;
+                        .map_err(remote_failure("compare with Proton Photos"))?;
+                    for (&n, uids) in taken.iter().zip(found) {
+                        matches[n] = uids;
                     }
                 }
+                let name = match place(&candidates, &occupied, matches) {
+                    Placement::Recover(uid) => {
+                        if entry.favorite {
+                            mark_favorite(&photos, &uid).await;
+                        }
+                        self.after_upload(&photos, &account.id, &id, uid, entry.taken)
+                            .await?;
+                        return Ok(UploadOutcome::AlreadyBackedUp);
+                    }
+                    Placement::Upload(name) => name,
+                    Placement::NoFreeName => {
+                        return Err(GalleryError::Operation {
+                            detail: format!(
+                                "Proton Photos already has {NAME_CANDIDATES} different photos named like “{}”. Rename it on the phone to back it up.",
+                                entry.name
+                            ),
+                        });
+                    }
+                };
                 let mut tags = Vec::new();
                 if entry.mime.starts_with("video/") {
                     tags.push(PhotoTag::Video);
@@ -500,17 +574,7 @@ impl GalleryEngine {
                         _ => upload_failure(e),
                     })?;
                 if entry.favorite {
-                    let favorite = PhotoTagsUpdate {
-                        node_uid: uid.clone(),
-                        tags_to_add: vec![PhotoTag::Favorite],
-                        tags_to_remove: vec![],
-                    };
-                    if let Err(e) = photos.update_photos(&[favorite]).await {
-                        tracing::warn!(
-                            "marking an uploaded favorite failed: {}",
-                            proton_gallery_drive_rs::auth::cause_chain(&e)
-                        );
-                    }
+                    mark_favorite(&photos, &uid).await;
                 }
                 self.after_upload(&photos, &account.id, &id, uid, entry.taken)
                     .await?;
@@ -548,15 +612,18 @@ impl GalleryEngine {
     ) -> Result<(), GalleryError> {
         let volume = proton_gallery_rs::model::VolumeId::new(uid.volume_id.as_str())?;
         let node = proton_gallery_rs::model::NodeId::new(uid.link_id.as_str())?;
+        // Queued first: the queue waits for the backup, so an interruption
+        // between the two leaves the item unmarked and the next attempt finds
+        // the photo again, instead of a backed-up item that never reaches its
+        // albums.
+        self.catalog
+            .queue_backup_albums(account.clone(), phone.to_owned())
+            .await?;
         self.catalog
             .phone_mark(
                 account.clone(),
                 vec![(phone.to_owned(), BackupState::BackedUp { volume, node })],
             )
-            .await?;
-        // Added to its albums with the next flush, after this backup.
-        self.catalog
-            .queue_backup_albums(account.clone(), phone.to_owned())
             .await?;
         let Some(source) = self.photo_source().await? else {
             return Ok(());
@@ -627,5 +694,41 @@ mod tests {
         assert_eq!(super::numbered("IMG_1.jpg", 2), "IMG_1 (2).jpg");
         assert_eq!(super::numbered("archive.tar.gz", 1), "archive.tar (1).gz");
         assert_eq!(super::numbered(".hidden", 1), ".hidden (1)");
+    }
+
+    fn uid(link: &str) -> proton_sdk::ids::NodeUid {
+        proton_sdk::ids::NodeUid::new(
+            proton_sdk::ids::VolumeId::new("v"),
+            proton_sdk::ids::LinkId::new(link),
+        )
+    }
+
+    fn names() -> Vec<String> {
+        (0..3).map(|n| super::numbered("IMG.jpg", n)).collect()
+    }
+
+    #[test]
+    fn a_lost_reply_is_recovered_under_the_number_it_took() {
+        // Different bytes hold IMG.jpg; the earlier upload landed as IMG (1).jpg.
+        let placed = super::place(
+            &names(),
+            &[true, true, false],
+            vec![vec![], vec![uid("ours")], vec![]],
+        );
+        assert_eq!(placed, super::Placement::Recover(uid("ours")));
+    }
+
+    #[test]
+    fn the_first_free_name_is_used_when_no_copy_matches() {
+        let placed = super::place(&names(), &[true, false, false], vec![vec![]; 3]);
+        assert_eq!(placed, super::Placement::Upload("IMG (1).jpg".into()));
+        let placed = super::place(&names(), &[false, false, false], vec![vec![]; 3]);
+        assert_eq!(placed, super::Placement::Upload("IMG.jpg".into()));
+    }
+
+    #[test]
+    fn no_free_name_is_an_error_not_a_clash() {
+        let placed = super::place(&names(), &[true, true, true], vec![vec![]; 3]);
+        assert_eq!(placed, super::Placement::NoFreeName);
     }
 }
