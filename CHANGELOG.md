@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- Phone backup no longer uploads a second copy when the reply to an earlier
+  upload was lost. If a different photo already had the phone's name, the
+  first copy went up as `IMG (1).jpg`, but the retry only checked `IMG.jpg`
+  and uploaded again as `IMG (2).jpg`. Backup now checks every numbered name
+  for the same bytes before it uploads.
+- A photo that is backed up also always reaches the album its folder backs up
+  into, even if the app is stopped between the two steps.
+- The free-name lookup costs one request instead of up to twenty.
+
 ## 0.7.0
 
 ### Install
